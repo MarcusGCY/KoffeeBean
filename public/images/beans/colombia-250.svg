@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label="Colombia Huila beans">
+  <rect width="320" height="200" fill="#f7efe6"/>
+  <ellipse cx="128" cy="112" rx="54" ry="34" fill="#7a4632" transform="rotate(-30 128 112)"/>
+  <path d="M104 100c20 8 30 16 48 24" fill="none" stroke="#f0d0b4" stroke-width="3" stroke-linecap="round"/>
+  <ellipse cx="206" cy="90" rx="46" ry="30" fill="#5c3426" transform="rotate(-18 206 90)"/>
+  <path d="M186 80c16 8 24 14 38 20" fill="none" stroke="#e7c2a4" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="250" cy="64" r="12" fill="#c4483a"/>
+</svg>

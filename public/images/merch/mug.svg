@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label="Ceramic mug">
+  <rect width="320" height="200" fill="#f3efe8"/>
+  <path d="M214 78h16a28 28 0 0 1 0 56h-16" fill="none" stroke="#44403c" stroke-width="8" stroke-linecap="round"/>
+  <rect x="108" y="58" width="108" height="96" rx="12" fill="#fbfaf7" stroke="#44403c" stroke-width="6"/>
+  <rect x="120" y="84" width="84" height="36" rx="4" fill="#6f3f2b"/>
+  <rect x="120" y="84" width="84" height="10" fill="#c4a574"/>
+</svg>

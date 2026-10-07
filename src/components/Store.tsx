@@ -4,6 +4,7 @@ import { useState } from "react";
 import products from "@/data/products.json";
 import type { CartItem, Product, Shopper } from "@/lib/types";
 import { addItem, removeItem, total, getProduct, itemCount } from "@/lib/cart";
+import { productImageUrl } from "@/lib/images";
 import { FeedbackWidget } from "./FeedbackWidget";
 import { SiteHeader } from "./SiteHeader";
 
@@ -28,17 +29,28 @@ export function Store({ shopper }: { shopper: Shopper }) {
               </h2>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {catalog.filter((p) => p.category === cat).map((p) => (
-                  <article key={p.id} className="flex flex-col rounded-lg border border-stone-200 bg-white p-4">
-                    <h3 className="font-medium">{p.name}</h3>
-                    <p className="mt-1 flex-1 text-sm text-stone-600">{p.blurb}</p>
-                    <div className="mt-4 flex items-center justify-between">
-                      <span className="font-semibold">{money(p.price)}</span>
-                      <button
-                        onClick={() => setCart((c) => addItem(c, p.id))}
-                        className="rounded bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
-                      >
-                        Add to cart
-                      </button>
+                  <article key={p.id} className="flex flex-col overflow-hidden rounded-lg border border-stone-200 bg-white">
+                    {/* Native img so a missing bean src shows the browser broken-image icon. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={productImageUrl(p.id)}
+                      alt={p.name}
+                      width={320}
+                      height={200}
+                      className="h-44 w-full border-b border-stone-200 bg-stone-100 object-cover"
+                    />
+                    <div className="flex flex-1 flex-col p-4">
+                      <h3 className="font-medium">{p.name}</h3>
+                      <p className="mt-1 flex-1 text-sm text-stone-600">{p.blurb}</p>
+                      <div className="mt-4 flex items-center justify-between">
+                        <span className="font-semibold">{money(p.price)}</span>
+                        <button
+                          onClick={() => setCart((c) => addItem(c, p.id))}
+                          className="rounded bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
+                        >
+                          Add to cart
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}

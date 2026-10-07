@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label="Ethiopia Yirgacheffe beans">
+  <rect width="320" height="200" fill="#f4efe4"/>
+  <ellipse cx="118" cy="108" rx="52" ry="34" fill="#a56a45" transform="rotate(-32 118 108)"/>
+  <path d="M96 96c18 8 28 16 46 24" fill="none" stroke="#f3d7b0" stroke-width="3" stroke-linecap="round"/>
+  <ellipse cx="196" cy="92" rx="48" ry="31" fill="#8d5638" transform="rotate(-24 196 92)"/>
+  <path d="M176 82c16 7 26 14 40 20" fill="none" stroke="#f6e2c4" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="246" cy="58" r="10" fill="#e2b340"/>
+</svg>
