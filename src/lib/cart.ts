@@ -20,16 +20,16 @@ export function addItem(cart: CartItem[], productId: string): CartItem[] {
 }
 
 export function removeItem(cart: CartItem[], productId: string): CartItem[] {
-  return cart.map((i) =>
-    i.productId === productId ? { ...i, quantity: i.quantity - 1 } : i,
-  );
+  return cart
+    .map((i) => (i.productId === productId ? { ...i, quantity: i.quantity - 1 } : i))
+    .filter((i) => i.quantity > 0);
 }
 
 export function subtotal(cart: CartItem[]): number {
   return cart.reduce((sum, i) => {
     const p = getProduct(i.productId);
     if (!p) return sum;
-    return sum + p.price * Math.max(i.quantity, 1);
+    return sum + p.price * i.quantity;
   }, 0);
 }
 
