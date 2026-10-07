@@ -2,6 +2,7 @@ import { Agent, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
+import { reconcileRunResult } from "./run-status";
 
 const Decision = z.object({
   action: z.enum(["create", "merge"]),
@@ -11,46 +12,36 @@ const Decision = z.object({
 });
 export type Decision = z.infer<typeof Decision>;
 
-const ATTEMPTS = 2;
 const PREVIEW_MAX = 160;
 
 /**
  * Ask a Cursor agent (read-only "plan" mode) to decide whether a feedback
  * report duplicates an open issue, and to draft the issue text if it doesn't.
  *
- * A plan run sometimes ends with status "error" and an empty message when
- * launched from Next.js after(). Retry once on a new agent before giving up.
+ * wait() can report a false error or hang when the run is launched from
+ * Next.js after(). reconcileRunResult confirms the terminal status first.
  */
 export async function triageFeedback(
   feedback: string,
   open: OpenIssue[],
 ): Promise<Decision> {
-  let lastError: Error | undefined;
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    const agent = await Agent.create({
-      apiKey: env("CURSOR_API_KEY"),
-      // Parallel reports must not share one cloud agent name.
-      name: `beanbox-triage-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
-      mode: "plan",
-      cloud: { repos: [{ url: repo().url }], autoCreatePR: false },
-    });
-    try {
-      const run = await agent.send(prompt(feedback, open));
-      const result = await run.wait();
-      if (result.status !== "finished") {
-        const err = triageRunError(result);
-        if (result.status === "error" && attempt < ATTEMPTS) {
-          lastError = err;
-          continue;
-        }
-        throw err;
-      }
-      return parseDecision(result.result, open);
-    } finally {
-      agent.close();
-    }
+  const apiKey = env("CURSOR_API_KEY");
+  const agent = await Agent.create({
+    apiKey,
+    // Parallel reports must not share one cloud agent name.
+    name: `beanbox-triage-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+    mode: "plan",
+    cloud: { repos: [{ url: repo().url }], autoCreatePR: false },
+  });
+  try {
+    const run = await agent.send(prompt(feedback, open));
+    console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
+    const result = await reconcileRunResult(run, apiKey);
+    if (result.status !== "finished") throw triageRunError(result);
+    return parseDecision(result.result, open);
+  } finally {
+    agent.close();
   }
-  throw lastError ?? new Error("Triage run error");
 }
 
 function prompt(feedback: string, open: OpenIssue[]): string {
@@ -84,11 +75,14 @@ function triageRunError(result: RunResult): Error {
   const requestId = result.requestId || result.id || "unknown";
   const duration = result.durationMs ?? "unknown";
   const preview = previewResult(result.result);
+  const errorPreview = previewResult(result.error?.message);
   const parts = [
     `Triage run ${result.status}`,
     `durationMs=${duration}`,
     `requestId=${requestId}`,
   ];
+  if (errorPreview) parts.push(`error=${JSON.stringify(errorPreview)}`);
+  if (result.error?.code) parts.push(`code=${result.error.code}`);
   if (preview) parts.push(`result=${JSON.stringify(preview)}`);
   return new Error(parts.join(" "));
 }

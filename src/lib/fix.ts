@@ -1,15 +1,17 @@
-import { Agent } from "@cursor/sdk";
+import { Agent, type RunResult } from "@cursor/sdk";
 import { env, repo } from "./env";
 import * as gh from "./github";
 import { notifyFixCompleted } from "./notify";
+import { describeRunError, reconcileRunResult } from "./run-status";
 
 /** Launch a Cursor cloud agent that fixes the issue and opens a PR. */
 export async function fixIssue(number: number) {
   const issue = await gh.getIssue(number);
   await gh.setLabels(number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED, gh.LABEL_FIXING]);
 
+  const apiKey = env("CURSOR_API_KEY");
   const agent = await Agent.create({
-    apiKey: env("CURSOR_API_KEY"),
+    apiKey,
     name: `beanbox-fix-#${number}`,
     cloud: { repos: [{ url: repo().url }], autoCreatePR: true },
   });
@@ -24,12 +26,10 @@ export async function fixIssue(number: number) {
         `Reference "Fixes #${number}" in the PR description.`,
       ].join("\n"),
     );
-    const result = await run.wait();
+    console.log(`[fix] agent=${agent.agentId} run=${run.id}`);
+    const result = await reconcileRunResult(run, apiKey);
     const pr = result.git?.branches.find((b) => b.prUrl)?.prUrl;
-    const summary =
-      result.status === "finished" && pr
-        ? `Cursor opened a fix: ${pr}`
-        : `Cursor run ended with status \`${result.status}\`. ${pr ?? "No PR was created."}`;
+    const summary = fixSummary(result, pr);
     await gh.comment(number, summary);
     await notifyFixCompleted({
       number,
@@ -44,4 +44,10 @@ export async function fixIssue(number: number) {
   } finally {
     agent.close();
   }
+}
+
+function fixSummary(result: RunResult, pr: string | undefined): string {
+  if (result.status === "finished" && pr) return `Cursor opened a fix: ${pr}`;
+  const detail = result.status === "finished" ? undefined : describeRunError(result.error);
+  return `Cursor run ended with status \`${result.status}\`.${detail ? ` ${detail}.` : ""} ${pr ?? "No PR was created."}`;
 }
