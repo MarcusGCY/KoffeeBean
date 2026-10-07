@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const create = vi.hoisted(() => vi.fn());
+const getRun = vi.hoisted(() => vi.fn());
 
 vi.mock("@cursor/sdk", () => ({
-  Agent: { create },
+  Agent: { create, getRun },
 }));
 
 import { triageFeedback } from "@/lib/triage";
 import type { OpenIssue } from "@/lib/github";
 
 const API_KEY = "test-cursor-key-do-not-log";
+const AGENT = "bc-00000000-0000-4000-8000-000000000001";
 const open: OpenIssue[] = [{ number: 7, title: "Coupon ignored", body: "SAVE10 does nothing when typed in lowercase." }];
 
 type Status = "finished" | "error" | "cancelled";
@@ -20,46 +22,69 @@ function fakeAgent(result: {
   durationMs?: number;
   requestId?: string;
   id?: string;
+  error?: { message: string; code?: string };
 }) {
   const close = vi.fn();
+  const runId = result.id ?? "run-id";
   const wait = vi.fn(async () => ({
-    id: result.id ?? "run-id",
+    id: runId,
     requestId: result.requestId,
     durationMs: result.durationMs,
     status: result.status,
     result: result.result,
+    error: result.error,
   }));
-  const send = vi.fn(async (_prompt: string) => ({ wait }));
-  return { close, send, agent: { send, close } };
+  const send = vi.fn(async (_prompt: string) => ({ id: runId, agentId: AGENT, wait }));
+  return { close, send, agent: { agentId: AGENT, send, close } };
+}
+
+function confirmed(result: {
+  status: Status;
+  result?: string;
+  durationMs?: number;
+  requestId?: string;
+  id?: string;
+  error?: { message: string; code?: string };
+}) {
+  return {
+    id: result.id ?? "run-id",
+    agentId: AGENT,
+    requestId: result.requestId,
+    durationMs: result.durationMs,
+    status: result.status,
+    result: result.result,
+    error: result.error,
+  };
 }
 
 beforeEach(() => {
   create.mockReset();
+  getRun.mockReset();
   process.env.CURSOR_API_KEY = API_KEY;
   process.env.GITHUB_REPO = "acme/beanbox";
 });
 
 describe("triageFeedback", () => {
-  it("retries once after status error and parses a json fence", async () => {
-    const failed = fakeAgent({
-      status: "error",
-      durationMs: 800,
-      requestId: "req-first",
-      result: "partial",
-    });
+  it("keeps a finished plan when wait() reports a false error", async () => {
     const fenced = [
       "Different wording, same coupon bug.",
       "```json",
       '{"action":"merge","issueNumber":7,"title":"Coupon case","body":"Trim and lowercase codes."}',
       "```",
     ].join("\n");
-    const ok = fakeAgent({
+    const attempt = fakeAgent({
+      status: "error",
+      durationMs: 4000,
+      requestId: "req-stream",
+      error: { message: "not found", code: "not_found" },
+    });
+    create.mockResolvedValueOnce(attempt.agent);
+    getRun.mockResolvedValueOnce(confirmed({
       status: "finished",
       durationMs: 50000,
-      requestId: "req-second",
+      requestId: "req-real",
       result: fenced,
-    });
-    create.mockResolvedValueOnce(failed.agent).mockResolvedValueOnce(ok.agent);
+    }));
 
     const decision = await triageFeedback("promo code does nothing", open);
 
@@ -69,38 +94,37 @@ describe("triageFeedback", () => {
       title: "Coupon case",
       body: "Trim and lowercase codes.",
     });
-    expect(create).toHaveBeenCalledTimes(2);
-    expect(failed.close).toHaveBeenCalledOnce();
-    expect(ok.close).toHaveBeenCalledOnce();
-    const names = create.mock.calls.map((call) => call[0].name as string);
-    expect(names[0]).toMatch(/^beanbox-triage-\d+-/);
-    expect(names[1]).toMatch(/^beanbox-triage-\d+-/);
-    expect(names[0]).not.toBe(names[1]);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(getRun).toHaveBeenCalledWith("run-id", {
+      runtime: "cloud",
+      agentId: AGENT,
+      apiKey: API_KEY,
+    });
+    expect(attempt.close).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].name).toMatch(/^beanbox-triage-\d+-/);
     expect(create.mock.calls[0][0]).toMatchObject({
       apiKey: API_KEY,
       mode: "plan",
       cloud: { repos: [{ url: "https://github.com/acme/beanbox" }], autoCreatePR: false },
     });
-    expect(ok.send.mock.calls[0][0]).toContain("```json");
-    expect(ok.send.mock.calls[0][0]).toContain("promo code does nothing");
+    expect(attempt.send.mock.calls[0][0]).toContain("```json");
+    expect(attempt.send.mock.calls[0][0]).toContain("promo code does nothing");
   });
 
-  it("throws status, duration, request id, and a short preview after the second error", async () => {
+  it("throws the confirmed error message, code, duration, request id, and a short preview", async () => {
     const tail = "TAIL-MARKER-SHOULD-BE-CUT";
     const long = `${"x".repeat(200)}${tail}`;
-    create
-      .mockResolvedValueOnce(
-        fakeAgent({ status: "error", durationMs: 10, requestId: "req-first", result: "first" }).agent,
-      )
-      .mockResolvedValueOnce(
-        fakeAgent({
-          status: "error",
-          durationMs: 4321,
-          requestId: "req-second",
-          id: "run-second",
-          result: `failed near ${API_KEY}\n${long}`,
-        }).agent,
-      );
+    create.mockResolvedValueOnce(
+      fakeAgent({ status: "error", durationMs: 10, requestId: "req-first", result: "first" }).agent,
+    );
+    getRun.mockResolvedValueOnce(confirmed({
+      status: "error",
+      durationMs: 4321,
+      requestId: "req-second",
+      id: "run-second",
+      error: { message: `failed near ${API_KEY}`, code: "boom" },
+      result: `failed near ${API_KEY}\n${long}`,
+    }));
 
     const err = await triageFeedback("cart total is wrong", open).catch((e: unknown) => e);
 
@@ -109,18 +133,26 @@ describe("triageFeedback", () => {
     expect(message).toContain("Triage run error");
     expect(message).toContain("durationMs=4321");
     expect(message).toContain("requestId=req-second");
+    expect(message).toContain('error="failed near [redacted]"');
+    expect(message).toContain("code=boom");
     expect(message).not.toContain("req-first");
     expect(message).toContain("[redacted]");
     expect(message).not.toContain(API_KEY);
     expect(message).not.toContain(tail);
     expect(message.length).toBeLessThan(400);
-    expect(create).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the run id when requestId is missing and does not retry a cancel", async () => {
+  it("uses the run id when requestId is missing and does not launch another agent after a confirmed cancel", async () => {
     create.mockResolvedValueOnce(
       fakeAgent({ status: "cancelled", durationMs: 90, id: "run-only", result: "stopped early" }).agent,
     );
+    getRun.mockResolvedValueOnce(confirmed({
+      status: "cancelled",
+      durationMs: 90,
+      id: "run-only",
+      result: "stopped early",
+    }));
 
     await expect(triageFeedback("something broke", [])).rejects.toThrow(
       /Triage run cancelled durationMs=90 requestId=run-only result="stopped early"/,
@@ -143,5 +175,6 @@ describe("triageFeedback", () => {
       body: "Not a duplicate.",
     });
     expect(create).toHaveBeenCalledTimes(1);
+    expect(getRun).not.toHaveBeenCalled();
   });
 });
