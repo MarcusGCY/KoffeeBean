@@ -97,6 +97,6 @@ The bot shows the summary with Approve and Reject buttons. Each button calls tha
 | Variable | Purpose |
 |---|---|
 | `GROK_WEBHOOK_URL` | Feedback Bot webhook URL. If empty, BeanBox logs the `/review/<n>` page and does not POST. |
-| `GROK_WEBHOOK_AUTH` | Optional. The full `Authorization` header value from the routine panel, sent unchanged (for example `Bearer …`). Leave unset for an open webhook. |
+| `GROK_WEBHOOK_AUTH` | Optional. Value may be `Bearer …` or the full `Authorization: Bearer …` line from the panel. Leave unset for an open webhook. |
 
 In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` and the Authorization header field into `GROK_WEBHOOK_AUTH` in `.env.local`. Include the `Bearer ` prefix when the panel shows it. Restart `npm run dev` after changing either value.
