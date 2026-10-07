@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BeanBox: SDLC automation demo (Cursor SDK)
 
-## Getting Started
+A small coffee and merch store with **planted bugs**. Users report problems from the
+store, and a pipeline triages them, asks a human to approve, then has Cursor fix them.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+Report a problem widget
+  -> POST /api/feedback
+  -> Cursor agent (plan mode) triages: duplicate of an open issue?
+       yes -> comment on the existing issue (merged)
+       no  -> create a GitHub issue (labels: user-feedback, awaiting-review)
+  -> review request sent to the Grok bot (GROK_WEBHOOK_URL)
+  -> human taps Approve  -> GET /api/review (signed link)
+       -> Cursor cloud agent fixes the bug and opens a PR (autoCreatePR)
+       -> issue gets a comment with the PR link
+  -> human taps Reject   -> issue closed as wontfix
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Planted bugs (`npm test` fails on these until fixed)
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Bug | Where | Test |
+|---|---|---|
+| Coupon codes are case-sensitive and not trimmed | `src/lib/coupons.ts` | `coupons` |
+| Removing an item leaves a 0-quantity line, and `subtotal` counts it as 1 | `src/lib/cart.ts` | `removing items` |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Add more by editing `src/lib`, for example a tax or rounding bug. Keep each fix small and
+covered by a test.
 
-## Learn More
+## Setup
 
-To learn more about Next.js, take a look at the following resources:
+1. Push this project to a **new GitHub repo** and install the Cursor GitHub app on it.
+2. `cp .env.example .env.local` and fill in the values.
+3. `npm run dev`. To let the Grok bot call back to your machine, expose it with ngrok and
+   set `APP_URL`.
+4. If the bot is not ready yet, open `/review/<issue number>` to approve or reject by hand.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Demo script
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+1. Open the store and add a mug, then enter `save10`. The discount is missing (bug).
+2. Click **Report a problem** and type "my promo code does nothing".
+3. Show the new GitHub issue and the review request in Grok.
+4. Report it again in different words ("discount code ignored"). It merges into the same issue.
+5. Approve in Grok, then show the Cursor agent and the PR. Merge it and re-run `npm test`.
 
-## Deploy on Vercel
+## Grok webhook contract (assumed, adjust to the bot's real API)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`POST GROK_WEBHOOK_URL` with `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }`.
+The bot shows the summary with Approve and Reject buttons. Each button calls that action's `url`.
