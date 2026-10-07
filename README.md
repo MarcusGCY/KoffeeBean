@@ -18,13 +18,17 @@ Report a problem widget
   -> human taps Reject   -> issue closed as wontfix
 ```
 
-## Planted bugs (`npm test` fails on these until fixed)
+## Shop issues a customer can report
 
-| Bug | Where | Test |
-|---|---|---|
-| Bean images request `/imges/beans/…` instead of `/images/beans/…` | `src/lib/images.ts` | `product images` |
-| Coupon codes are case-sensitive and not trimmed | `src/lib/coupons.ts` | `coupons` |
-| Removing an item leaves a 0-quantity line, and `subtotal` counts it as 1 | `src/lib/cart.ts` | `removing items` |
+These show up in the store for a signed-in shopper. Report them separately so each one
+becomes its own issue. `npm test` fails `product images` until the bean photos load;
+cart and checkout tests still pass.
+
+| What the shopper sees | Suggested feedback |
+|---|---|
+| Coffee bean photos are broken (Ethiopia Yirgacheffe, Colombia Huila, House Espresso). Merch photos load. | The coffee bean pictures are broken. The mug, tote, and shirt photos look fine. |
+| Add to cart does nothing for the Canvas Tote Bag. The mug, the shirt, and the coffees still get added. | Add to cart doesn't work for the Canvas Tote Bag. I can add the mug and the coffees. |
+| Roast Day T-Shirt is listed at $250.00. Adding it makes the cart total $270.00 with tax. | The Roast Day T-Shirt shows $250. That should be about $25, like the other merch. |
 
 Add more by editing `src/lib`, for example a tax or rounding bug. Keep each fix small and
 covered by a test.
@@ -86,13 +90,11 @@ dev server is restarted.
 
 ## Demo script
 
-1. Log in and open the store. Coffee bean photos are broken. Merch photos load.
-2. Click **Report a problem** and type "bean images not loading".
+1. Log in and open the store.
+2. Click **Report a problem** and send one of the feedback lines in the table above.
 3. Triage opens a GitHub issue, then the Feedback Bot asks for review. Tap **Approve**.
 4. Watch the bot for fix status (`fix_started`, then `fix_completed` with the PR). The GitHub issue gets a comment too.
-5. Merge the PR, refresh the store, and the bean images load.
-
-Coupon codes and cart removal are still planted (see the table above) if you want a second report.
+5. Merge the PR and refresh the store. Repeat with the other two reports; each one is a separate fix.
 
 ## Grok webhook
 
