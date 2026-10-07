@@ -4,6 +4,7 @@ import { useState } from "react";
 import products from "@/data/products.json";
 import type { CartItem, Product, Shopper } from "@/lib/types";
 import { addItem, removeItem, total, getProduct, itemCount } from "@/lib/cart";
+import { checkout, type Order } from "@/lib/checkout";
 import { productImageUrl } from "@/lib/images";
 import { FeedbackWidget } from "./FeedbackWidget";
 import { SiteHeader } from "./SiteHeader";
@@ -14,7 +15,16 @@ const catalog = products as Product[];
 export function Store({ shopper }: { shopper: Shopper }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [code, setCode] = useState("");
+  const [order, setOrder] = useState<Order | null>(null);
   const t = total(cart, code);
+
+  function onCheckout() {
+    const placed = checkout(cart, code);
+    if (!placed) return;
+    setOrder(placed);
+    setCart([]);
+    setCode("");
+  }
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900">
@@ -61,6 +71,11 @@ export function Store({ shopper }: { shopper: Shopper }) {
 
         <aside className="h-fit rounded-lg border border-stone-200 bg-white p-5 lg:sticky lg:top-6">
           <h2 className="mb-3 font-semibold">Your cart</h2>
+          {order && (
+            <p role="status" className="mb-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-900">
+              Order {order.id} placed. Total {money(order.total)}.
+            </p>
+          )}
           {cart.length === 0 && <p className="text-sm text-stone-500">Your cart is empty.</p>}
           <ul className="space-y-3">
             {cart.map((i) => (
@@ -89,7 +104,14 @@ export function Store({ shopper }: { shopper: Shopper }) {
             <div className="flex justify-between"><dt>Tax (8%)</dt><dd>{money(t.tax)}</dd></div>
             <div className="flex justify-between border-t border-stone-200 pt-2 text-base font-semibold"><dt>Total</dt><dd>{money(t.total)}</dd></div>
           </dl>
-          <button className="mt-4 w-full rounded bg-stone-900 py-2 text-sm font-medium text-white hover:bg-stone-700">Checkout</button>
+          <button
+            type="button"
+            onClick={onCheckout}
+            disabled={itemCount(cart) <= 0}
+            className="mt-4 w-full rounded bg-stone-900 py-2 text-sm font-medium text-white hover:bg-stone-700 disabled:cursor-not-allowed disabled:bg-stone-400"
+          >
+            Checkout
+          </button>
         </aside>
       </main>
       <FeedbackWidget />

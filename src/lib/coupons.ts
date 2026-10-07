@@ -6,5 +6,6 @@ export const COUPONS: Coupon[] = [
 ];
 
 export function findCoupon(input: string): Coupon | undefined {
-  return COUPONS.find((c) => c.code === input);
+  const code = input.trim().toUpperCase();
+  return COUPONS.find((c) => c.code === code);
 }
