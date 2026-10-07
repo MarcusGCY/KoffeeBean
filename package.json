@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@auth0/nextjs-auth0": "^4.31.1",
     "@cursor/sdk": "^1.0.18",
     "@octokit/rest": "^22.0.1",
     "next": "16.4.0",

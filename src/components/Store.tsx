@@ -2,26 +2,22 @@
 
 import { useState } from "react";
 import products from "@/data/products.json";
-import type { CartItem, Product } from "@/lib/types";
+import type { CartItem, Product, Shopper } from "@/lib/types";
 import { addItem, removeItem, total, getProduct, itemCount } from "@/lib/cart";
 import { FeedbackWidget } from "./FeedbackWidget";
+import { SiteHeader } from "./SiteHeader";
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const catalog = products as Product[];
 
-export function Store() {
+export function Store({ shopper }: { shopper: Shopper }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [code, setCode] = useState("");
   const t = total(cart, code);
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900">
-      <header className="border-b border-stone-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <h1 className="text-xl font-bold tracking-tight">BeanBox <span className="text-amber-700">Coffee Co.</span></h1>
-          <span className="text-sm text-stone-600">{itemCount(cart)} items</span>
-        </div>
-      </header>
+      <SiteHeader shopper={shopper} itemCount={itemCount(cart)} />
 
       <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 lg:grid-cols-[1fr_340px]">
         <section>

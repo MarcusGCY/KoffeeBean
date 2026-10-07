@@ -6,6 +6,7 @@ export function FeedbackWidget() {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
+  const [error, setError] = useState("Something went wrong. Try again.");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -15,7 +16,14 @@ export function FeedbackWidget() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message }),
     });
-    if (res.ok) { setState("sent"); setMessage(""); } else setState("error");
+    if (res.ok) {
+      setState("sent");
+      setMessage("");
+      return;
+    }
+    if (res.status === 401) setError("Sign in to send feedback.");
+    else setError("Something went wrong. Try again.");
+    setState("error");
   }
 
   return (
@@ -38,7 +46,7 @@ export function FeedbackWidget() {
                 placeholder="What went wrong?"
                 className="w-full rounded border border-stone-300 p-2 text-sm"
               />
-              {state === "error" && <p className="mt-1 text-xs text-red-600">Something went wrong. Try again.</p>}
+              {state === "error" && <p className="mt-1 text-xs text-red-600">{error}</p>}
               <button disabled={state === "sending"} className="mt-2 w-full rounded bg-amber-700 py-1.5 text-sm font-medium text-white disabled:opacity-50">
                 {state === "sending" ? "Sending…" : "Send feedback"}
               </button>
