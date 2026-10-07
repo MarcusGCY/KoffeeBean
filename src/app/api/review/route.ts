@@ -2,6 +2,7 @@ import { after, NextResponse } from "next/server";
 import { verify } from "@/lib/approval";
 import * as gh from "@/lib/github";
 import { fixIssue } from "@/lib/fix";
+import { notifyFixStarted } from "@/lib/notify";
 
 export const maxDuration = 300;
 
@@ -29,7 +30,12 @@ export async function GET(req: Request) {
 
   await gh.setLabels(issue, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
   after(async () => {
-    try { await fixIssue(issue); } catch (e) { console.error("[review] fix failed", e); }
+    try {
+      await notifyFixStarted({ number: current.number, title: current.title, url: current.url });
+      await fixIssue(issue);
+    } catch (e) {
+      console.error("[review] fix failed", e);
+    }
   });
   return NextResponse.json({ status: "approved-fix-started" });
 }

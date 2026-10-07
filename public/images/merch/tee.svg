@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label="Roast day t-shirt">
+  <rect width="320" height="200" fill="#e7eef2"/>
+  <path d="M92 70l28-18h80l28 18-18 28h-12v70H122V98h-12z" fill="#f7f7f5" stroke="#334155" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M136 70c8 14 40 14 48 0" fill="none" stroke="#334155" stroke-width="4"/>
+  <text x="160" y="128" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#9a3412">ROAST</text>
+</svg>

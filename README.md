@@ -11,7 +11,9 @@ Report a problem widget
        no  -> create a GitHub issue (labels: user-feedback, awaiting-review)
   -> review request sent to the Grok bot (GROK_WEBHOOK_URL, optional GROK_WEBHOOK_AUTH)
   -> human taps Approve  -> GET /api/review (signed link)
+       -> Grok webhook `fix_started` (issue number, title, url)
        -> Cursor cloud agent fixes the bug and opens a PR (autoCreatePR)
+       -> Grok webhook `fix_completed` (status, PR link, GitHub comment)
        -> issue gets a comment with the PR link
   -> human taps Reject   -> issue closed as wontfix
 ```
@@ -20,6 +22,7 @@ Report a problem widget
 
 | Bug | Where | Test |
 |---|---|---|
+| Bean images request `/imges/beans/…` instead of `/images/beans/…` | `src/lib/images.ts` | `product images` |
 | Coupon codes are case-sensitive and not trimmed | `src/lib/coupons.ts` | `coupons` |
 | Removing an item leaves a 0-quantity line, and `subtotal` counts it as 1 | `src/lib/cart.ts` | `removing items` |
 
@@ -83,16 +86,27 @@ dev server is restarted.
 
 ## Demo script
 
-1. Log in, open the store, add a mug, then enter `save10`. The discount is missing (bug).
-2. Click **Report a problem** and type "my promo code does nothing".
-3. Show the new GitHub issue and the review request in Grok.
-4. Report it again in different words ("discount code ignored"). It merges into the same issue.
-5. Approve in Grok, then show the Cursor agent and the PR. Merge it and re-run `npm test`.
+1. Log in and open the store. Coffee bean photos are broken. Merch photos load.
+2. Click **Report a problem** and type "bean images not loading".
+3. Triage opens a GitHub issue, then the Feedback Bot asks for review. Tap **Approve**.
+4. Watch the bot for fix status (`fix_started`, then `fix_completed` with the PR). The GitHub issue gets a comment too.
+5. Merge the PR, refresh the store, and the bean images load.
+
+Coupon codes and cart removal are still planted (see the table above) if you want a second report.
 
 ## Grok webhook
 
-`POST GROK_WEBHOOK_URL` with `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }`.
-The bot shows the summary with Approve and Reject buttons. Each button calls that action's `url`.
+`POST GROK_WEBHOOK_URL` with the same `GROK_WEBHOOK_AUTH` handling on every call.
+
+| `type` | When | Body |
+|---|---|---|
+| `review_request` | A new issue needs a human | `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }` |
+| `fix_started` | Approve kicks off `fixIssue` | `{ type, issue:{number,title,url} }` |
+| `fix_completed` | The Cursor run's `wait()` finishes | `{ type, issue:{number,title,url}, status, prUrl?, summary }` |
+
+`summary` on `fix_completed` is the GitHub issue comment (PR link, or the run status when no PR opened). `prUrl` is omitted when there is no PR. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
+
+The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.
 
 | Variable | Purpose |
 |---|---|
