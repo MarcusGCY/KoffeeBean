@@ -9,7 +9,7 @@ Report a problem widget
   -> Cursor agent (plan mode) triages: duplicate of an open issue?
        yes -> comment on the existing issue (merged)
        no  -> create a GitHub issue (labels: user-feedback, awaiting-review)
-  -> review request sent to the Grok bot (GROK_WEBHOOK_URL)
+  -> review request sent to the Grok bot (GROK_WEBHOOK_URL, optional GROK_WEBHOOK_AUTH)
   -> human taps Approve  -> GET /api/review (signed link)
        -> Cursor cloud agent fixes the bug and opens a PR (autoCreatePR)
        -> issue gets a comment with the PR link
@@ -89,7 +89,14 @@ dev server is restarted.
 4. Report it again in different words ("discount code ignored"). It merges into the same issue.
 5. Approve in Grok, then show the Cursor agent and the PR. Merge it and re-run `npm test`.
 
-## Grok webhook contract (assumed, adjust to the bot's real API)
+## Grok webhook
 
 `POST GROK_WEBHOOK_URL` with `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }`.
 The bot shows the summary with Approve and Reject buttons. Each button calls that action's `url`.
+
+| Variable | Purpose |
+|---|---|
+| `GROK_WEBHOOK_URL` | Feedback Bot webhook URL. If empty, BeanBox logs the `/review/<n>` page and does not POST. |
+| `GROK_WEBHOOK_AUTH` | Optional. The full `Authorization` header value from the routine panel, sent unchanged (for example `Bearer …`). Leave unset for an open webhook. |
+
+In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` and the Authorization header field into `GROK_WEBHOOK_AUTH` in `.env.local`. Include the `Bearer ` prefix when the panel shows it. Restart `npm run dev` after changing either value.
