@@ -23,10 +23,14 @@ export async function requestReview(issue: {
     console.log("[notify] GROK_WEBHOOK_URL not set; review page:", links.page);
     return { delivered: false, reviewPage: links.page };
   }
-  // GROK_WEBHOOK_AUTH is the full Authorization header value from the routine
-  // panel (for example "Bearer …"). Sent unchanged. Omitted when unset.
+  // GROK_WEBHOOK_AUTH may be "Bearer …" or the full "Authorization: Bearer …"
+  // line copied from the routine panel. A leading "Authorization:" is stripped
+  // so the header value is not doubled. Omitted when unset.
   const headers: Record<string, string> = { "content-type": "application/json" };
-  const auth = process.env.GROK_WEBHOOK_AUTH?.trim();
+  let auth = process.env.GROK_WEBHOOK_AUTH?.trim();
+  if (auth?.toLowerCase().startsWith("authorization:")) {
+    auth = auth.slice("authorization:".length).trim();
+  }
   if (auth) headers.authorization = auth;
   const res = await fetch(url, {
     method: "POST",
