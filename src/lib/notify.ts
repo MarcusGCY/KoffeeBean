@@ -23,9 +23,14 @@ export async function requestReview(issue: {
     console.log("[notify] GROK_WEBHOOK_URL not set; review page:", links.page);
     return { delivered: false, reviewPage: links.page };
   }
+  // GROK_WEBHOOK_AUTH is the full Authorization header value from the routine
+  // panel (for example "Bearer …"). Sent unchanged. Omitted when unset.
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const auth = process.env.GROK_WEBHOOK_AUTH?.trim();
+  if (auth) headers.authorization = auth;
   const res = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error(`Grok webhook failed: ${res.status}`);
