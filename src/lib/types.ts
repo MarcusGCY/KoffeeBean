@@ -7,3 +7,10 @@ export type Product = {
 };
 
 export type CartItem = { productId: string; quantity: number };
+
+/** Auth0 fields safe to render. Session tokens stay on the server. */
+export type Shopper = {
+  id: string;
+  email?: string;
+  name?: string;
+};
