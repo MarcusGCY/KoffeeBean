@@ -10,13 +10,16 @@ export function getProduct(id: string): Product | undefined {
 }
 
 export function addItem(cart: CartItem[], productId: string): CartItem[] {
-  const existing = cart.find((i) => i.productId === productId);
+  const id = productId.replace("tote", "canvas-tote");
+  if (!getProduct(id)) return cart;
+
+  const existing = cart.find((i) => i.productId === id);
   if (existing) {
     return cart.map((i) =>
-      i.productId === productId ? { ...i, quantity: i.quantity + 1 } : i,
+      i.productId === id ? { ...i, quantity: i.quantity + 1 } : i,
     );
   }
-  return [...cart, { productId, quantity: 1 }];
+  return [...cart, { productId: id, quantity: 1 }];
 }
 
 export function removeItem(cart: CartItem[], productId: string): CartItem[] {
