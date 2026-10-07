@@ -29,7 +29,7 @@ function fakeAgent(result: {
     status: result.status,
     result: result.result,
   }));
-  const send = vi.fn(async () => ({ wait }));
+  const send = vi.fn(async (_prompt: string) => ({ wait }));
   return { close, send, agent: { send, close } };
 }
 
