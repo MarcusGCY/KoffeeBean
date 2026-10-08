@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { env } from "./env";
+import { appOrigin } from "./origin";
 
 const sign = (issue: number, decision: string) =>
   createHmac("sha256", env("APPROVAL_SECRET")).update(`${issue}:${decision}`).digest("hex");
@@ -15,7 +16,7 @@ export function verify(issue: number, decision: string, t: string) {
 }
 
 export function reviewLinks(issue: number) {
-  const base = env("APP_URL");
+  const base = appOrigin();
   const q = (d: "approve" | "reject") =>
     `${base}/api/review?issue=${issue}&decision=${d}&token=${token(issue, d)}`;
   return { approve: q("approve"), reject: q("reject"), page: `${base}/review/${issue}` };

@@ -16,12 +16,14 @@ export function FeedbackWidget() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message }),
     });
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
     if (res.ok) {
       setState("sent");
       setMessage("");
       return;
     }
     if (res.status === 401) setError("Sign in to send feedback.");
+    else if (typeof body?.error === "string" && body.error) setError(body.error);
     else setError("Something went wrong. Try again.");
     setState("error");
   }
