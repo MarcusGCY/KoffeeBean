@@ -12,6 +12,7 @@ import {
   POLL_INTERVAL_MS,
   WAIT_TIMEOUT_MS,
   followRun,
+  readFinalAssistantText,
   reconcileRunResult,
 } from "@/lib/run-status";
 
@@ -195,6 +196,64 @@ describe("reconcileRunResult", () => {
     expect(result.git?.branches[0]?.prUrl).toBe(PR);
     expect(getRun.mock.calls.length).toBeGreaterThan(10);
     expect(getRun.mock.calls.length).toBeLessThan(200);
+  });
+});
+
+describe("readFinalAssistantText", () => {
+  it("reads the reply conversation() writes onto a getRun handle with an empty result", async () => {
+    const fenced = '{"action":"create","title":"Tote","body":"Cart skips the tote."}';
+    const run = {
+      id: RUN,
+      agentId: AGENT,
+      status: "finished" as const,
+      result: "" as string,
+      supports: () => true,
+      async conversation(this: { result: string }) {
+        this.result = fenced;
+        return [];
+      },
+    };
+
+    await expect(readFinalAssistantText(run as unknown as Run)).resolves.toBe(fenced);
+  });
+
+  it("uses the last assistant step when the snapshot text has no JSON object", async () => {
+    const decision = '{"action":"merge","issueNumber":7,"title":"Coupon","body":"Trim."}';
+    const conversation = vi.fn(async () => [
+      {
+        type: "agentConversationTurn" as const,
+        turn: {
+          steps: [
+            { type: "assistantMessage" as const, message: { text: "Plan saved." } },
+            { type: "assistantMessage" as const, message: { text: decision } },
+          ],
+        },
+      },
+    ]);
+    const run = {
+      id: RUN,
+      agentId: AGENT,
+      status: "finished" as const,
+      result: "Plan saved.",
+      supports: () => true,
+      conversation,
+    };
+
+    await expect(readFinalAssistantText(run as unknown as Run)).resolves.toBe(decision);
+    expect(conversation).toHaveBeenCalledOnce();
+  });
+
+  it("does not stream when the getRun snapshot already contains JSON", async () => {
+    const conversation = vi.fn();
+    const run = {
+      id: RUN,
+      agentId: AGENT,
+      result: '{"action":"create"}',
+      conversation,
+    } as unknown as Run;
+
+    await expect(readFinalAssistantText(run)).resolves.toBe('{"action":"create"}');
+    expect(conversation).not.toHaveBeenCalled();
   });
 });
 

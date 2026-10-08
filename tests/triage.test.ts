@@ -193,16 +193,156 @@ describe("triageFeedback", () => {
     const wait = vi.fn(async () => {
       throw new Error("wait should not run on Vercel");
     });
+    const conversation = vi.fn(async () => {
+      throw new Error("conversation should not run when getRun already has JSON");
+    });
     const attempt = fakeAgent({ status: "finished", result: "ignored" });
     attempt.agent.send.mockResolvedValue({ id: "run-id", agentId: AGENT, wait });
     create.mockResolvedValueOnce(attempt.agent);
-    getRun.mockResolvedValueOnce(confirmed({ status: "finished", result: fenced }));
+    getRun.mockResolvedValueOnce({ ...confirmed({ status: "finished", result: fenced }), conversation });
 
     await expect(triageFeedback("the tote will not add", [])).resolves.toMatchObject({
       action: "create",
       title: "Tote",
     });
     expect(wait).not.toHaveBeenCalled();
+    expect(conversation).not.toHaveBeenCalled();
     expect(getRun).toHaveBeenCalledOnce();
+  });
+
+  it("on Vercel reads the final assistant text from conversation when getRun result is empty", async () => {
+    process.env.VERCEL = "1";
+    const fenced = [
+      "```json",
+      '{"action":"create","title":"Tote","body":"Cart skips the tote."}',
+      "```",
+    ].join("\n");
+    const wait = vi.fn(async () => {
+      throw new Error("wait should not run on Vercel");
+    });
+    const attempt = fakeAgent({ status: "finished", result: "ignored" });
+    attempt.agent.send.mockResolvedValue({ id: "run-sse", agentId: AGENT, wait });
+    create.mockResolvedValueOnce(attempt.agent);
+    const observed = {
+      ...confirmed({ id: "run-sse", status: "finished", result: "" }),
+      async conversation(this: { result?: string }) {
+        this.result = fenced;
+        return [
+          {
+            type: "agentConversationTurn",
+            turn: { steps: [{ type: "assistantMessage", message: { text: "looking" } }] },
+          },
+        ];
+      },
+    };
+    const conversation = vi.spyOn(observed, "conversation");
+    getRun.mockResolvedValueOnce(observed);
+
+    await expect(triageFeedback("the tote will not add", [])).resolves.toEqual({
+      action: "create",
+      title: "Tote",
+      body: "Cart skips the tote.",
+    });
+    expect(wait).not.toHaveBeenCalled();
+    expect(conversation).toHaveBeenCalledOnce();
+  });
+
+  it("on Vercel uses an assistant step when the getRun snapshot text is not JSON", async () => {
+    process.env.VERCEL = "1";
+    const wait = vi.fn(async () => {
+      throw new Error("wait should not run on Vercel");
+    });
+    const attempt = fakeAgent({ status: "finished" });
+    attempt.agent.send.mockResolvedValue({ id: "run-step", agentId: AGENT, wait });
+    create.mockResolvedValueOnce(attempt.agent);
+    getRun.mockResolvedValueOnce({
+      ...confirmed({ id: "run-step", status: "finished", result: "Plan saved." }),
+      conversation: async () => [
+        {
+          type: "agentConversationTurn",
+          turn: {
+            steps: [
+              { type: "assistantMessage", message: { text: "Plan saved." } },
+              {
+                type: "assistantMessage",
+                message: {
+                  text: '{"action":"merge","issueNumber":7,"title":"Coupon case","body":"Trim codes."}',
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await expect(triageFeedback("promo code does nothing", open)).resolves.toEqual({
+      action: "merge",
+      issueNumber: 7,
+      title: "Coupon case",
+      body: "Trim codes.",
+    });
+    expect(wait).not.toHaveBeenCalled();
+  });
+
+  it("logs the run id, status, and a redacted preview when no JSON is found", async () => {
+    process.env.VERCEL = "1";
+    const tail = "TAIL-MARKER-SHOULD-BE-CUT";
+    const received = `model said ${API_KEY} ${"x".repeat(200)}${tail}`;
+    const attempt = fakeAgent({ status: "finished" });
+    const wait = vi.fn(async () => {
+      throw new Error("wait should not run on Vercel");
+    });
+    attempt.agent.send.mockResolvedValue({ id: "run-empty", agentId: AGENT, wait });
+    create.mockResolvedValueOnce(attempt.agent);
+    getRun.mockResolvedValueOnce({
+      ...confirmed({ id: "run-empty", status: "finished", result: received }),
+      conversation: async () => [],
+    });
+
+    const err = await triageFeedback("nothing useful", []).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+    expect(message).toContain("Triage returned no JSON");
+    expect(message).toContain("runId=run-empty");
+    expect(message).toContain("status=finished");
+    expect(message).toContain("[redacted]");
+    expect(message).not.toContain(API_KEY);
+    expect(message).not.toContain(tail);
+  });
+
+  it("names an empty reply in the parse error", async () => {
+    process.env.VERCEL = "1";
+    const attempt = fakeAgent({ status: "finished" });
+    const wait = vi.fn(async () => {
+      throw new Error("wait should not run on Vercel");
+    });
+    attempt.agent.send.mockResolvedValue({ id: "run-blank", agentId: AGENT, wait });
+    create.mockResolvedValueOnce(attempt.agent);
+    getRun.mockResolvedValueOnce({
+      ...confirmed({ id: "run-blank", status: "finished", result: "   " }),
+      conversation: async () => [],
+    });
+
+    await expect(triageFeedback("blank reply", [])).rejects.toThrow(
+      /Triage returned no JSON runId=run-blank status=finished received="\(empty\)"/,
+    );
+  });
+
+  it("parses a fenced decision when an earlier note also contains braces", async () => {
+    const wrapped = [
+      "I checked {the cart}.",
+      "```json",
+      '{"action":"create","title":"Tote","body":"Cart skips the tote."}',
+      "```",
+    ].join("\n");
+    create.mockResolvedValueOnce(fakeAgent({ status: "finished", result: wrapped }).agent);
+
+    await expect(triageFeedback("the tote will not add", [])).resolves.toEqual({
+      action: "create",
+      title: "Tote",
+      body: "Cart skips the tote.",
+    });
+    expect(getRun).not.toHaveBeenCalled();
   });
 });

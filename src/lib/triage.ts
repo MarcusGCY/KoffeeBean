@@ -2,7 +2,7 @@ import { Agent, type Run, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
-import { followRun, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
+import { followRun, readFinalAssistantText, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
 const Decision = z.object({
   action: z.enum(["create", "merge"]),
@@ -36,9 +36,9 @@ export async function triageFeedback(
   try {
     const run = await agent.send(prompt(feedback, open));
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
-    const result = await trackTriageRun(run, apiKey);
+    const result = await trackTriageRun(run, apiKey, open);
     if (result.status !== "finished") throw triageRunError(result);
-    return parseDecision(result.result, open);
+    return parseDecision(result.result, open, result);
   } finally {
     agent.close();
   }
@@ -47,9 +47,11 @@ export async function triageFeedback(
 /**
  * Local dev can wait out a slow plan run. On Vercel, `wait()` can hang for
  * the rest of maxDuration and the platform then kills the isolate, so triage
- * only polls getRun inside the serverless budget.
+ * polls getRun inside the serverless budget. A finished getRun snapshot often
+ * has no assistant reply; `conversation()` replays that one finished run.
  */
-async function trackTriageRun(run: Run, apiKey: string): Promise<RunResult> {
+async function trackTriageRun(run: Run, apiKey: string, open: OpenIssue[]): Promise<RunResult> {
+  const usable = (text: string | undefined) => Boolean(firstDecision(text, open));
   if (process.env.VERCEL === "1") {
     const outcome = await followRun(run, apiKey, serverlessTrackBudgetMs());
     if (!outcome.done) {
@@ -57,9 +59,26 @@ async function trackTriageRun(run: Run, apiKey: string): Promise<RunResult> {
         `Triage run still ${outcome.lastStatus ?? "unconfirmed"} after ${serverlessTrackBudgetMs()}ms`,
       );
     }
-    return outcome.result;
+    return hydrateReply(outcome.run, outcome.result, usable);
   }
-  return reconcileRunResult(run, apiKey);
+  const result = await reconcileRunResult(run, apiKey);
+  return hydrateReply(run, result, usable);
+}
+
+/**
+ * `wait()` already stored the SSE reply on the live handle. `getRun` often
+ * does not: its REST `result` is empty while `conversation()` replays the
+ * stream and surfaces that reply. Skip the replay when the text we have
+ * already parses as a decision, so a finished local run does not stream again.
+ */
+async function hydrateReply(
+  run: Run,
+  snapshot: RunResult,
+  usable: (text: string | undefined) => boolean,
+): Promise<RunResult> {
+  if (snapshot.status !== "finished" || usable(snapshot.result)) return snapshot;
+  const text = await readFinalAssistantText(run, { accept: usable });
+  return text ? { ...snapshot, result: text } : snapshot;
 }
 
 function prompt(feedback: string, open: OpenIssue[]): string {
@@ -79,14 +98,38 @@ function prompt(feedback: string, open: OpenIssue[]): string {
   ].join("\n");
 }
 
-function parseDecision(text: string | undefined, open: OpenIssue[]): Decision {
-  const json = text?.match(/\{[\s\S]*\}/)?.[0];
-  if (!json) throw new Error("Triage returned no JSON");
-  const d = Decision.parse(JSON.parse(json));
-  if (d.action === "merge" && !open.some((i) => i.number === d.issueNumber)) {
-    return { ...d, action: "create", issueNumber: undefined };
+function parseDecision(text: string | undefined, open: OpenIssue[], result: RunResult): Decision {
+  const parsed = firstDecision(text, open);
+  if (parsed) return parsed;
+  const preview = previewResult(text);
+  const received = preview ? JSON.stringify(preview) : '"(empty)"';
+  throw new Error(
+    `Triage returned no JSON runId=${result.id || "unknown"} status=${result.status} received=${received}`,
+  );
+}
+
+/** Fenced JSON first, then the outermost object. A wrapping note can contain braces. */
+function firstDecision(text: string | undefined, open: OpenIssue[]): Decision | undefined {
+  if (!text) return undefined;
+  const candidates: string[] = [];
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    const inner = match[1]?.match(/\{[\s\S]*\}/)?.[0];
+    if (inner) candidates.push(inner);
   }
-  return d;
+  const greedy = text.match(/\{[\s\S]*\}/)?.[0];
+  if (greedy) candidates.push(greedy);
+  for (const json of candidates) {
+    try {
+      const d = Decision.parse(JSON.parse(json));
+      if (d.action === "merge" && !open.some((i) => i.number === d.issueNumber)) {
+        return { ...d, action: "create", issueNumber: undefined };
+      }
+      return d;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
 }
 
 function triageRunError(result: RunResult): Error {

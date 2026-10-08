@@ -187,16 +187,21 @@ describe("fixIssue", () => {
     });
     const handle = agentWith(wait);
     create.mockResolvedValue(handle);
+    const conversation = vi.fn(async () => {
+      throw new Error("fix_completed reads git.prUrl from getRun, not the assistant transcript");
+    });
     getRun.mockResolvedValue({
       id: RUN,
       agentId: AGENT,
       status: "finished",
       git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", prUrl: PR }] },
+      conversation,
     });
 
     const outcome = await fixIssue(14);
 
     expect(wait).not.toHaveBeenCalled();
+    expect(conversation).not.toHaveBeenCalled();
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
     expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       status: "finished",
