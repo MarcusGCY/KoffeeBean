@@ -1,4 +1,4 @@
-import { Agent, type Run, type RunError, type RunResult } from "@cursor/sdk";
+import { Agent, type ConversationTurn, type Run, type RunError, type RunResult } from "@cursor/sdk";
 
 /**
  * Cloud runs launched from Next.js after() can make wait() lie or hang.
@@ -124,6 +124,78 @@ function terminalResult(run: Run): RunResult | undefined {
   };
 }
 
+export function assistantTextHasJson(text: string | undefined): boolean {
+  return Boolean(text && /\{[\s\S]*\}/.test(text));
+}
+
+/**
+ * Assistant reply for a finished run fetched with `Agent.getRun`.
+ *
+ * `wait()` on the live handle reads the SSE `result` event. That payload
+ * carries the reply as `text`, and the SDK copies it onto `result` only
+ * while streaming. `getRun` copies the REST `result` field and, when the
+ * run is already terminal, `wait()` returns that snapshot without opening
+ * the stream — so `result` can be empty even though status is `finished`.
+ * `conversation()` replays the stream: the result event fills `run.result`,
+ * and assistant steps carry the same reply. Call this only after the run
+ * is terminal so the replay ends on that event instead of following a
+ * live stream for the rest of the function budget.
+ */
+export async function readFinalAssistantText(
+  run: Run,
+  opts?: { accept?: (text: string | undefined) => boolean },
+): Promise<string | undefined> {
+  const accept = opts?.accept ?? ((text) => assistantTextHasJson(text));
+  const direct = nonBlank(run.result);
+  if (accept(direct)) return direct;
+  if (typeof run.conversation !== "function") return direct;
+  if (typeof run.supports === "function" && !run.supports("conversation")) return direct;
+
+  console.log(`[cursor] run=${run.id} snapshot has no JSON reply; reading conversation`);
+  let turns: ConversationTurn[] = [];
+  try {
+    turns = await run.conversation();
+  } catch (err) {
+    console.error(`[cursor] conversation failed agent=${run.agentId} run=${run.id}`, err);
+    return nonBlank(run.result) ?? direct;
+  }
+
+  const streamed = nonBlank(run.result);
+  const steps = assistantStepTexts(turns);
+  return firstAccepted(accept, streamed, steps.at(-1), ...steps.slice(0, -1).reverse(), direct);
+}
+
+function assistantStepTexts(turns: ConversationTurn[]): string[] {
+  const texts: string[] = [];
+  for (const turn of turns) {
+    if (turn.type !== "agentConversationTurn") continue;
+    for (const step of turn.turn.steps) {
+      if (step.type !== "assistantMessage") continue;
+      const text = nonBlank(step.message.text);
+      if (text) texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function firstAccepted(
+  accept: (text: string | undefined) => boolean,
+  ...candidates: Array<string | undefined>
+): string | undefined {
+  const present: string[] = [];
+  for (const candidate of candidates) {
+    const text = nonBlank(candidate);
+    if (!text || present.includes(text)) continue;
+    present.push(text);
+  }
+  return present.find((text) => accept(text)) ?? present[0];
+}
+
+function nonBlank(text: string | undefined): string | undefined {
+  if (!text || !text.trim()) return undefined;
+  return text;
+}
+
 type RunSnapshot = {
   id?: string;
   requestId?: string;
@@ -164,7 +236,7 @@ export function trackingTimedOutResult(
 }
 
 export type FollowOutcome =
-  | { done: true; result: RunResult }
+  | { done: true; result: RunResult; run: Run }
   | { done: false; lastStatus?: string; lastFailure?: string; last?: Run };
 
 /**
@@ -195,7 +267,7 @@ export async function followRun(
       lastFailure = undefined;
       console.log(`[cursor] Agent.getRun agent=${run.agentId} run=${run.id} status=${observed.status}`);
       const terminal = terminalResult(observed);
-      if (terminal) return { done: true, result: terminal };
+      if (terminal) return { done: true, result: terminal, run: observed };
     } catch (err) {
       lastFailure = errorText(err);
       console.error(`[cursor] Agent.getRun failed agent=${run.agentId} run=${run.id}`, err);

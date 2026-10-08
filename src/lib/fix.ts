@@ -142,7 +142,7 @@ function onVercel(): boolean {
 
 async function trackFixRun(run: Run, apiKey: string): Promise<FollowOutcome> {
   if (onVercel()) return followRun(run, apiKey, serverlessTrackBudgetMs());
-  return { done: true, result: await reconcileRunResult(run, apiKey) };
+  return { done: true, result: await reconcileRunResult(run, apiKey), run };
 }
 
 async function finishIfExpired(
@@ -199,6 +199,11 @@ async function publishFixResult(
   return { status: result.status, prUrl: pr, skipped: false };
 }
 
+/**
+ * The PR URL is git metadata on the getRun snapshot, not the assistant
+ * transcript. `fix_completed` uses this URL plus the status sentence in
+ * `fixSummary`. A missing `result` string does not change that payload.
+ */
 function prOf(result: RunResult): string | undefined {
   return result.git?.branches.find((b) => b.prUrl)?.prUrl;
 }
