@@ -11,6 +11,18 @@ export const WAIT_TIMEOUT_MS = 2 * 60 * 1000;
 export const POLL_INTERVAL_MS = 15 * 1000;
 export const POLL_CAP_MS = 30 * 60 * 1000;
 
+/**
+ * One in-process slice on Vercel. Hobby Fluid compute caps a function,
+ * including `after()`, at 300s. A slice stops at 240s so launch, GitHub
+ * writes, and the fix_completed POST still fit. Tracking then continues
+ * from a later request. Local `npm run dev` does not use this cap.
+ */
+export const SERVERLESS_TRACK_BUDGET_MS = 240_000;
+
+export function serverlessTrackBudgetMs(): number {
+  return SERVERLESS_TRACK_BUDGET_MS;
+}
+
 const POLL_TIMEOUT_CODE = "status_poll_timeout";
 
 export async function reconcileRunResult(run: Run, apiKey: string): Promise<RunResult> {
@@ -112,7 +124,20 @@ function terminalResult(run: Run): RunResult | undefined {
   };
 }
 
-function timeoutResult(run: Run, last: Run | undefined, lastFailure: string | undefined): RunResult {
+type RunSnapshot = {
+  id?: string;
+  requestId?: string;
+  status?: Run["status"];
+  result?: string;
+  durationMs?: number;
+  git?: Run["git"];
+};
+
+function timeoutResult(
+  run: { id: string; requestId?: string },
+  last: RunSnapshot | undefined,
+  lastFailure: string | undefined,
+): RunResult {
   const lastStatus = last?.status ?? "unavailable";
   const extra = lastFailure ? ` Last lookup error: ${clip(redactSecrets(lastFailure), 180)}.` : "";
   return {
@@ -127,6 +152,59 @@ function timeoutResult(run: Run, last: Run | undefined, lastFailure: string | un
       code: POLL_TIMEOUT_CODE,
     },
   };
+}
+
+/** Same error `reconcileRunResult` reports when the 30 minute cap is hit. */
+export function trackingTimedOutResult(
+  run: { id: string; requestId?: string },
+  last?: RunSnapshot,
+  lastFailure?: string,
+): RunResult {
+  return timeoutResult(run, last, lastFailure);
+}
+
+export type FollowOutcome =
+  | { done: true; result: RunResult }
+  | { done: false; lastStatus?: string; lastFailure?: string; last?: Run };
+
+/**
+ * Poll `Agent.getRun` until the run is terminal or `budgetMs` elapses.
+ * Does not call `run.wait()`: on Vercel a hung stream keeps the isolate
+ * alive until the platform kills it, which drops the completion callback.
+ */
+export async function followRun(
+  run: { id: string; agentId: string },
+  apiKey: string,
+  budgetMs: number,
+): Promise<FollowOutcome> {
+  const deadline = Date.now() + budgetMs;
+  let last: Run | undefined;
+  let lastFailure: string | undefined;
+
+  for (;;) {
+    if (Date.now() >= deadline) {
+      return { done: false, lastStatus: last?.status, lastFailure, last };
+    }
+    try {
+      const observed = await Agent.getRun(run.id, {
+        runtime: "cloud",
+        agentId: run.agentId,
+        apiKey,
+      });
+      last = observed;
+      lastFailure = undefined;
+      console.log(`[cursor] Agent.getRun agent=${run.agentId} run=${run.id} status=${observed.status}`);
+      const terminal = terminalResult(observed);
+      if (terminal) return { done: true, result: terminal };
+    } catch (err) {
+      lastFailure = errorText(err);
+      console.error(`[cursor] Agent.getRun failed agent=${run.agentId} run=${run.id}`, err);
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { done: false, lastStatus: last?.status, lastFailure, last };
+    await sleep(Math.min(POLL_INTERVAL_MS, remaining));
+  }
 }
 
 function sleep(ms: number): Promise<void> {

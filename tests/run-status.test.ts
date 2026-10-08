@@ -11,6 +11,7 @@ import {
   POLL_CAP_MS,
   POLL_INTERVAL_MS,
   WAIT_TIMEOUT_MS,
+  followRun,
   reconcileRunResult,
 } from "@/lib/run-status";
 
@@ -194,5 +195,36 @@ describe("reconcileRunResult", () => {
     expect(result.git?.branches[0]?.prUrl).toBe(PR);
     expect(getRun.mock.calls.length).toBeGreaterThan(10);
     expect(getRun.mock.calls.length).toBeLessThan(200);
+  });
+});
+
+describe("followRun", () => {
+  it("returns a finished getRun without waiting out the budget", async () => {
+    getRun.mockResolvedValue({
+      id: RUN,
+      agentId: AGENT,
+      status: "finished",
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", prUrl: PR }] },
+    });
+
+    const outcome = await followRun({ id: RUN, agentId: AGENT }, API_KEY, 5_000);
+
+    expect(outcome).toMatchObject({ done: true });
+    if (!outcome.done) return;
+    expect(outcome.result.status).toBe("finished");
+    expect(outcome.result.git?.branches[0]?.prUrl).toBe(PR);
+    expect(getRun).toHaveBeenCalledOnce();
+    expect(getRun).toHaveBeenCalledWith(RUN, { runtime: "cloud", agentId: AGENT, apiKey: API_KEY });
+  });
+
+  it("returns pending once the budget passes while the run is still running", async () => {
+    vi.useFakeTimers();
+    getRun.mockResolvedValue({ id: RUN, agentId: AGENT, status: "running" });
+
+    const pending = followRun({ id: RUN, agentId: AGENT }, API_KEY, 1_000);
+    await vi.advanceTimersByTimeAsync(1_000 + POLL_INTERVAL_MS);
+
+    await expect(pending).resolves.toMatchObject({ done: false, lastStatus: "running" });
+    expect(getRun).toHaveBeenCalled();
   });
 });

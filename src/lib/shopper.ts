@@ -24,10 +24,15 @@ export async function getShopper(): Promise<Shopper | null> {
   };
 }
 
+/** Stable needle so rate limiting can count this shopper's reports in GitHub text. */
+export function reporterIdMarker(userId: string): string {
+  return `**Auth0 user id:** \`${userId}\``;
+}
+
 export function reporterBlock(shopper: Shopper): string {
   const who =
     shopper.name && shopper.email
       ? `${shopper.name} (${shopper.email})`
       : shopper.email || shopper.name || "signed-in shopper";
-  return `**Reported by:** ${who}\n**Auth0 user id:** \`${shopper.id}\``;
+  return `**Reported by:** ${who}\n${reporterIdMarker(shopper.id)}`;
 }

@@ -4,6 +4,8 @@ import * as gh from "@/lib/github";
 import { fixIssue } from "@/lib/fix";
 import { notifyFixStarted } from "@/lib/notify";
 
+// Hobby Fluid compute allows 300s, including work scheduled with after().
+// The fix itself can run much longer; fixIssue persists the run and resumes later.
 export const maxDuration = 300;
 
 // Reached via signed links sent to the Grok bot (or the /review page).

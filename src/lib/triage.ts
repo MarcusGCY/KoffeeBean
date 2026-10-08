@@ -1,8 +1,8 @@
-import { Agent, type RunResult } from "@cursor/sdk";
+import { Agent, type Run, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
-import { reconcileRunResult } from "./run-status";
+import { followRun, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
 const Decision = z.object({
   action: z.enum(["create", "merge"]),
@@ -36,12 +36,30 @@ export async function triageFeedback(
   try {
     const run = await agent.send(prompt(feedback, open));
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
-    const result = await reconcileRunResult(run, apiKey);
+    const result = await trackTriageRun(run, apiKey);
     if (result.status !== "finished") throw triageRunError(result);
     return parseDecision(result.result, open);
   } finally {
     agent.close();
   }
+}
+
+/**
+ * Local dev can wait out a slow plan run. On Vercel, `wait()` can hang for
+ * the rest of maxDuration and the platform then kills the isolate, so triage
+ * only polls getRun inside the serverless budget.
+ */
+async function trackTriageRun(run: Run, apiKey: string): Promise<RunResult> {
+  if (process.env.VERCEL === "1") {
+    const outcome = await followRun(run, apiKey, serverlessTrackBudgetMs());
+    if (!outcome.done) {
+      throw new Error(
+        `Triage run still ${outcome.lastStatus ?? "unconfirmed"} after ${serverlessTrackBudgetMs()}ms`,
+      );
+    }
+    return outcome.result;
+  }
+  return reconcileRunResult(run, apiKey);
 }
 
 function prompt(feedback: string, open: OpenIssue[]): string {

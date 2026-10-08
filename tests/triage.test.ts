@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const create = vi.hoisted(() => vi.fn());
 const getRun = vi.hoisted(() => vi.fn());
@@ -62,6 +62,11 @@ beforeEach(() => {
   getRun.mockReset();
   process.env.CURSOR_API_KEY = API_KEY;
   process.env.GITHUB_REPO = "acme/beanbox";
+  delete process.env.VERCEL;
+});
+
+afterEach(() => {
+  delete process.env.VERCEL;
 });
 
 describe("triageFeedback", () => {
@@ -176,5 +181,28 @@ describe("triageFeedback", () => {
     });
     expect(create).toHaveBeenCalledTimes(1);
     expect(getRun).not.toHaveBeenCalled();
+  });
+
+  it("on Vercel polls Agent.getRun and does not call wait()", async () => {
+    process.env.VERCEL = "1";
+    const fenced = [
+      "```json",
+      '{"action":"create","title":"Tote","body":"Cart skips the tote."}',
+      "```",
+    ].join("\n");
+    const wait = vi.fn(async () => {
+      throw new Error("wait should not run on Vercel");
+    });
+    const attempt = fakeAgent({ status: "finished", result: "ignored" });
+    attempt.agent.send.mockResolvedValue({ id: "run-id", agentId: AGENT, wait });
+    create.mockResolvedValueOnce(attempt.agent);
+    getRun.mockResolvedValueOnce(confirmed({ status: "finished", result: fenced }));
+
+    await expect(triageFeedback("the tote will not add", [])).resolves.toMatchObject({
+      action: "create",
+      title: "Tote",
+    });
+    expect(wait).not.toHaveBeenCalled();
+    expect(getRun).toHaveBeenCalledOnce();
   });
 });

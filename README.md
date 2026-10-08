@@ -13,7 +13,10 @@ Report a problem widget
   -> human taps Approve  -> GET /api/review (signed link)
        -> Grok webhook `fix_started` (issue number, title, url)
        -> Cursor cloud agent fixes the bug and opens a PR (autoCreatePR)
-       -> Grok webhook `fix_completed` (status, PR link, GitHub comment)
+       -> the agent id and run id are saved on the GitHub issue
+       -> locally, this process tracks the run until it finishes (up to 30 min)
+       -> on Vercel, later requests finish tracking (see Deploy to Vercel)
+       -> Grok webhook `fix_completed` (status, PR link, summary)
        -> issue gets a comment with the PR link
   -> human taps Reject   -> issue closed as wontfix
 ```
@@ -54,6 +57,8 @@ uses `@auth0/nextjs-auth0` v4. `src/proxy.ts` mounts the SDK routes:
 - `GET /auth/callback` — Auth0 redirects here after login
 
 Feedback issues include the reporter's Auth0 user id and email when a session is present.
+`POST /api/feedback` rejects anonymous callers. Each signed-in shopper can file 5 reports per hour;
+the count is read from recent GitHub issue bodies and comments, so it holds across serverless instances.
 
 ### Create the Auth0 application
 
@@ -82,7 +87,9 @@ Feedback issues include the reporter's Auth0 user id and email when a session is
 | `APP_BASE_URL` | Origin of this Next app, `http://localhost:3000` locally |
 
 `APP_BASE_URL` is the Auth0 SDK v4 name. `APP_URL` is separate: it is the origin baked into
-approve/reject links. Set both to the same origin for local dev. v3 names
+approve/reject links. Set both to the same origin for local dev. On Vercel either may be unset;
+preview deployments then use `https://$VERCEL_URL`, and production uses
+`https://$VERCEL_PROJECT_PRODUCTION_URL` (then `https://$VERCEL_URL`). v3 names
 (`AUTH0_ISSUER_BASE_URL`, `AUTH0_BASE_URL`) are not read by this SDK.
 
 `next build` does not need these values. Login works after `.env.local` is filled and the
@@ -104,9 +111,9 @@ dev server is restarted.
 |---|---|---|
 | `review_request` | A new issue needs a human | `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }` |
 | `fix_started` | Approve kicks off `fixIssue` | `{ type, issue:{number,title,url} }` |
-| `fix_completed` | The Cursor run's `wait()` finishes | `{ type, issue:{number,title,url}, status, prUrl?, summary }` |
+| `fix_completed` | The Cursor run reaches a terminal status | `{ type, issue:{number,title,url}, status, prUrl?, summary }` |
 
-`summary` on `fix_completed` is the GitHub issue comment (PR link, or the run status when no PR opened). `prUrl` is omitted when there is no PR. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
+`summary` on `fix_completed` is the human-readable GitHub issue comment (PR link, or the run status when no PR opened). A hidden HTML marker on that comment is not part of the payload. `prUrl` is omitted when there is no PR. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
 
 The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.
 
@@ -116,3 +123,82 @@ The bot shows the review summary with Approve and Reject buttons. Each button ca
 | `GROK_WEBHOOK_AUTH` | Optional. Value may be `Bearer …` or the full `Authorization: Bearer …` line from the panel. Leave unset for an open webhook. |
 
 In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` and the Authorization header field into `GROK_WEBHOOK_AUTH` in `.env.local`. Include the `Bearer ` prefix when the panel shows it. Restart `npm run dev` after changing either value.
+
+## Deploy to Vercel
+
+Production deploys from `main` through the Vercel GitHub integration. The app is a Next.js App Router
+project (`npm run build`). Set the Node.js version to 22.x (also declared in `package.json` `engines`).
+`@cursor/sdk` stays in `serverExternalPackages` so the server function loads it with Node rather than
+bundling it.
+
+Vercel kills work inside `after()` when the function hits `maxDuration`. These routes export
+`maxDuration = 300`, the Hobby ceiling with Fluid compute. Triage and a fast fix can finish in that
+window. A fix that runs longer does not: the approve handler saves `agentId`, `runId`, and `startedAt`
+on the GitHub issue (HTML comment plus the `cursor-fixing` label) and returns. Tracking then continues
+from whichever of these runs next:
+
+1. When `CRON_SECRET` is set, the deployment calls `POST /api/fix-status?issue=N` for another slice, up to 30 minutes total.
+2. `POST /api/github/webhook` on `pull_request` (`opened`, `synchronize`, `reopened`, `closed`) resumes
+   the issue named in the PR (`Fixes #N`) or linked from the cloud agent's `beanboxIssue` metadata.
+3. Vercel Cron `GET /api/fix-status` once a day (`0 12 * * *` in `vercel.json`) picks up a run whose
+   earlier slice never chained. Hobby cron cannot run more often than that; it is only the backstop.
+
+`fix_started` and `fix_completed` keep the same JSON shapes. `npm run dev` still tracks the run
+in-process and does not need the webhook or cron.
+
+### Environment variables
+
+Set these in the Vercel project. Scope `APP_URL` and `APP_BASE_URL` to **Production** only so preview
+deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`, `VERCEL_ENV`, or
+`VERCEL_PROJECT_PRODUCTION_URL`; Vercel provides them.
+
+| Variable | On Vercel |
+|---|---|
+| `CURSOR_API_KEY` | Same value as local |
+| `GITHUB_REPO` | Same `owner/name` |
+| `GITHUB_TOKEN` | Same token, Issues read/write on that repo |
+| `APPROVAL_SECRET` | Same signing secret (or a new one; old approve links would stop matching) |
+| `APP_URL` | **Change** to the production origin, `https://<production-host>` (no trailing slash) |
+| `APP_BASE_URL` | **Change** to that same production origin |
+| `GROK_WEBHOOK_URL` | Same Feedback Bot URL |
+| `GROK_WEBHOOK_AUTH` | Same value, if the bot requires it |
+| `AUTH0_DOMAIN` | Same tenant domain |
+| `AUTH0_CLIENT_ID` | Same Regular Web Application client id |
+| `AUTH0_CLIENT_SECRET` | Same client secret |
+| `AUTH0_SECRET` | Same session secret (or a newly generated 32-byte hex) |
+| `GITHUB_WEBHOOK_SECRET` | **New.** Random string. The GitHub webhook secret below |
+| `CRON_SECRET` | **New.** Random string. Vercel sends it as `Authorization: Bearer <CRON_SECRET>` on the cron, and the app uses it to chain fix tracking |
+
+`VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
+block the app from calling its own `/api/fix-status`. A public production URL does not need it.
+
+### Auth0 application URLs
+
+Keep the localhost entries. Add the production origin, and preview origins if you use preview deployments.
+Auth0 accepts a wildcard such as `https://*.vercel.app` when the tenant allows wildcards; otherwise add
+each preview host you actually open.
+
+| Field | Values |
+|---|---|
+| Allowed Callback URLs | `http://localhost:3000/auth/callback`, `https://<production-host>/auth/callback`, and for previews `https://*.vercel.app/auth/callback` |
+| Allowed Logout URLs | `http://localhost:3000`, `https://<production-host>`, and for previews `https://*.vercel.app` |
+| Allowed Web Origins | `http://localhost:3000`, `https://<production-host>`, and for previews `https://*.vercel.app` |
+
+### GitHub webhook
+
+On the repo (`GITHUB_REPO`), add one webhook:
+
+| Setting | Value |
+|---|---|
+| Payload URL | `https://<production-host>/api/github/webhook` |
+| Content type | `application/json` |
+| Secret | the `GITHUB_WEBHOOK_SECRET` value |
+| Events | Pull requests |
+
+The route checks `X-Hub-Signature-256` and ignores deliveries for any other repository.
+
+### Plan limits that matter
+
+- **Hobby + Fluid compute:** function duration max is 300 seconds. Do not set `maxDuration` above 300 or the deploy is rejected. Pro can go to 800; this app stays at 300 so Hobby works.
+- **Hobby cron:** at most once per day. Timely `fix_completed` notifications come from the in-request slice and the pull request webhook, not from the cron.
+- Nothing in memory or on the local disk is required between requests. The GitHub issue is the record of an in-flight fix.
