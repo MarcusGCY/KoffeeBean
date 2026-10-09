@@ -3,6 +3,7 @@ import { LoginGate } from "@/components/LoginGate";
 import { SiteHeader } from "@/components/SiteHeader";
 import { Store } from "@/components/Store";
 import { auth0Configured } from "@/lib/auth0";
+import { readAdmin } from "@/lib/demo-session";
 import { getShopper } from "@/lib/shopper";
 
 export default function Home() {
@@ -32,5 +33,6 @@ async function Storefront() {
       </div>
     );
   }
-  return <Store shopper={shopper} />;
+  const admin = await readAdmin();
+  return <Store shopper={shopper} demoHref={admin ? "/admin/demo" : undefined} />;
 }
