@@ -40,7 +40,7 @@ export function verifyMergeToken(
   if (!grant) return "invalid";
   if (!safeEqual(grant.sig, sign(`merge:${issue}:${pr}:${grant.exp}`))) return "invalid";
   if (grant.exp > now + MERGE_LINK_TTL_MS + CLOCK_SKEW_MS) return "invalid";
-  if (grant.exp < now) return "expired";
+  if (grant.exp <= now) return "expired";
   return "ok";
 }
 
