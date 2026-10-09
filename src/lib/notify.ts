@@ -1,4 +1,5 @@
 import { reviewLinks } from "./approval";
+import { mergeLink, prNumberFromUrl } from "./merge-link";
 
 export type GrokIssue = { number: number; title: string; url: string };
 
@@ -76,17 +77,56 @@ export async function notifyFixStarted(issue: GrokIssue): Promise<void> {
   });
 }
 
-/** Ping the bot when the Cursor run finishes, including the GitHub comment text. */
+/**
+ * Ping the bot when the Cursor run finishes, including the GitHub comment text.
+ * `prNumber` and `mergeUrl` are added only for a pull request in GITHUB_REPO.
+ * Older clients can ignore those fields.
+ */
 export async function notifyFixCompleted(event: GrokIssue & {
   status: string;
   prUrl?: string;
   summary: string;
 }): Promise<void> {
+  const pull = completedPull(event.number, event.prUrl);
   await postGrokQuietly({
     type: "fix_completed",
     issue: { number: event.number, title: event.title, url: event.url },
     status: event.status,
     ...(event.prUrl ? { prUrl: event.prUrl } : {}),
+    ...pull,
     summary: event.summary,
   });
+}
+
+/** Ping the bot after the signed link squash-merges the fix. */
+export async function notifyFixMerged(event: GrokIssue & {
+  prNumber: number;
+  prUrl: string;
+  sha: string;
+}): Promise<void> {
+  await postGrokQuietly({
+    type: "fix_merged",
+    issue: { number: event.number, title: event.title, url: event.url },
+    prNumber: event.prNumber,
+    prUrl: event.prUrl,
+    sha: event.sha,
+    summary: `Squash-merged pull request #${event.prNumber}. Vercel will redeploy main shortly.`,
+  });
+}
+
+function completedPull(
+  issueNumber: number,
+  prUrl: string | undefined,
+): { prNumber: number; mergeUrl?: string } | undefined {
+  if (!prUrl) return undefined;
+  const configured = process.env.GITHUB_REPO?.trim();
+  if (!configured?.includes("/")) return undefined;
+  const prNumber = prNumberFromUrl(prUrl, configured);
+  if (!prNumber) return undefined;
+  try {
+    return { prNumber, mergeUrl: mergeLink(issueNumber, prNumber) };
+  } catch (error) {
+    console.error("[notify] could not sign merge link", error);
+    return { prNumber };
+  }
 }

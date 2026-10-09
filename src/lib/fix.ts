@@ -9,6 +9,7 @@ import {
   type FixRunRef,
 } from "./fix-marker";
 import * as gh from "./github";
+import { prNumberFromUrl } from "./merge-link";
 import { notifyFixCompleted } from "./notify";
 import { appOrigin } from "./origin";
 import {
@@ -186,7 +187,11 @@ async function publishFixResult(
     return { status: result.status, prUrl: pr, skipped: true };
   }
   const summary = fixSummary(result, pr);
-  await gh.comment(issue.number, fixResultComment(summary));
+  const fullName = `${repo().owner}/${repo().repo}`;
+  const meta = pr
+    ? { prUrl: pr, prNumber: prNumberFromUrl(pr, fullName), head: headOf(result) }
+    : undefined;
+  await gh.comment(issue.number, fixResultComment(summary, meta));
   await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
   await notifyFixCompleted({
     number: issue.number,
@@ -206,6 +211,15 @@ async function publishFixResult(
  */
 function prOf(result: RunResult): string | undefined {
   return result.git?.branches.find((b) => b.prUrl)?.prUrl;
+}
+
+/** Head branch the Cursor run reported for the pull request, without refs/heads/. */
+function headOf(result: RunResult): string | undefined {
+  const branches = result.git?.branches ?? [];
+  const named = branches.find((b) => b.prUrl && b.branch?.trim()) ?? branches.find((b) => b.branch?.trim());
+  const name = named?.branch?.trim();
+  if (!name) return undefined;
+  return name.replace(/^refs\/heads\//, "");
 }
 
 function attachPr(result: RunResult, prUrl: string | undefined): RunResult {
