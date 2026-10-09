@@ -12,7 +12,7 @@ import { SiteHeader } from "./SiteHeader";
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const catalog = products as Product[];
 
-export function Store({ shopper }: { shopper: Shopper }) {
+export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: string }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [code, setCode] = useState("");
   const [order, setOrder] = useState<Order | null>(null);
@@ -28,7 +28,7 @@ export function Store({ shopper }: { shopper: Shopper }) {
 
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900">
-      <SiteHeader shopper={shopper} itemCount={itemCount(cart)} />
+      <SiteHeader shopper={shopper} itemCount={itemCount(cart)} demoHref={demoHref} />
 
       <main className="mx-auto grid max-w-6xl gap-8 px-6 py-8 lg:grid-cols-[1fr_340px]">
         <section>
