@@ -7,19 +7,53 @@ export const DEMO_GRANT_TTL_MS = 24 * 60 * 60 * 1000;
 
 const CSRF_TTL_MS = 2 * 60 * 60 * 1000;
 
-export function adminEmailAllowlist(): string[] {
-  return (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
+/** Claim written by the Post-Login Action. Override with AUTH0_ROLES_CLAIM. */
+export const DEFAULT_ROLES_CLAIM = "https://beanbox/roles";
+
+export function rolesClaimName(): string {
+  const configured = process.env.AUTH0_ROLES_CLAIM?.trim();
+  return configured || DEFAULT_ROLES_CLAIM;
 }
 
-/** Case-insensitive match against ADMIN_EMAILS. Empty allowlist matches nobody. */
-export function isAdminEmail(email: string | undefined | null): boolean {
-  if (!email) return false;
-  const normalized = email.trim().toLowerCase();
-  if (!normalized) return false;
-  return adminEmailAllowlist().includes(normalized);
+/**
+ * Role names from the ID token claim. Auth0 sends an array. A single string
+ * is one role name, not a comma-separated list.
+ */
+export function roleNames(value: unknown): string[] {
+  if (typeof value === "string") {
+    const role = value.trim();
+    return role ? [role] : [];
+  }
+  if (!Array.isArray(value)) return [];
+  const names: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const role = item.trim();
+    if (role) names.push(role);
+  }
+  return names;
+}
+
+/** True when the session user's roles claim contains the Auth0 role `admin`. */
+export function hasAdminRole(user: object | null | undefined): boolean {
+  if (!user) return false;
+  const claim = (user as Record<string, unknown>)[rolesClaimName()];
+  return roleNames(claim).includes("admin");
+}
+
+/**
+ * Demo owner: a signed-in user with an email, an email Auth0 has not marked
+ * unverified, and the `admin` role. Callers respond with 404 otherwise.
+ */
+export function isAdminUser(
+  user: object | null | undefined,
+): user is { sub: string; email: string } {
+  if (!user) return false;
+  const record = user as Record<string, unknown>;
+  if (typeof record.sub !== "string" || record.sub.length === 0) return false;
+  if (typeof record.email !== "string") return false;
+  if (record.email_verified === false) return false;
+  return hasAdminRole(user);
 }
 
 function sign(payload: string): string {

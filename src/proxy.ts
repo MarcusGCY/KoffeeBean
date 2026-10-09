@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { auth0Configured, getAuth0 } from "./lib/auth0";
-import { isAdminEmail } from "./lib/demo-auth";
+import { isAdminUser } from "./lib/demo-auth";
 
 function notFound(): NextResponse {
   return new NextResponse("Not found", {
@@ -39,11 +39,7 @@ export async function proxy(request: NextRequest) {
 
   try {
     const session = await getAuth0().getSession(request);
-    const user = session?.user;
-    const email = user?.email;
-    if (user && typeof email === "string" && user.email_verified !== false && isAdminEmail(email)) {
-      return authResponse;
-    }
+    if (isAdminUser(session?.user)) return authResponse;
   } catch (error) {
     console.error("[demo] session check failed", error);
   }

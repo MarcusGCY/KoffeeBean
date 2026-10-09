@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { filterDefaultIdTokenClaims } from "@auth0/nextjs-auth0/server";
+import { userKeepingRolesClaim } from "@/lib/auth0";
 import {
-  adminEmailAllowlist,
   demoCsrfToken,
-  isAdminEmail,
+  hasAdminRole,
+  isAdminUser,
   isSameOrigin,
   resetGrant,
   revertGrant,
+  rolesClaimName,
   verifyDemoCsrf,
   verifyResetGrant,
   verifyRevertGrant,
@@ -26,18 +29,79 @@ import {
 const NOW = 1_700_000_000_000;
 
 afterEach(() => {
-  delete process.env.ADMIN_EMAILS;
+  delete process.env.AUTH0_ROLES_CLAIM;
   delete process.env.APPROVAL_SECRET;
 });
 
-describe("admin allowlist", () => {
-  it("matches comma-separated emails and nobody when unset", () => {
-    expect(isAdminEmail("marcusgcy@gmail.com")).toBe(false);
-    process.env.ADMIN_EMAILS = " MarcusGCY@gmail.com , other@example.com ";
-    expect(adminEmailAllowlist()).toEqual(["marcusgcy@gmail.com", "other@example.com"]);
-    expect(isAdminEmail("marcusgcy@gmail.com")).toBe(true);
-    expect(isAdminEmail("shopper@example.com")).toBe(false);
-    expect(isAdminEmail(undefined)).toBe(false);
+function sessionUser(roles: unknown, claim = "https://beanbox/roles") {
+  return {
+    sub: "auth0|marcus",
+    email: "marcusgcy@gmail.com",
+    email_verified: true,
+    [claim]: roles,
+  };
+}
+
+describe("admin role", () => {
+  it("accepts an array or a single string that contains admin", () => {
+    expect(rolesClaimName()).toBe("https://beanbox/roles");
+    expect(hasAdminRole(undefined)).toBe(false);
+    expect(hasAdminRole(sessionUser(undefined))).toBe(false);
+    expect(hasAdminRole(sessionUser(["shopper"]))).toBe(false);
+    expect(hasAdminRole(sessionUser(["shopper", "admin"]))).toBe(true);
+    expect(hasAdminRole(sessionUser("admin"))).toBe(true);
+    expect(hasAdminRole(sessionUser(" admin "))).toBe(true);
+    expect(hasAdminRole(sessionUser("shopper"))).toBe(false);
+    expect(hasAdminRole(sessionUser("admin,shopper"))).toBe(false);
+    expect(hasAdminRole(sessionUser([" Admin "]))).toBe(false);
+    expect(hasAdminRole(sessionUser(["admin", 1, "", "  "]))).toBe(true);
+    expect(hasAdminRole(sessionUser({ role: "admin" }))).toBe(false);
+
+    expect(isAdminUser(sessionUser(["admin"]))).toBe(true);
+    expect(isAdminUser({ ...sessionUser(["admin"]), email_verified: false })).toBe(false);
+    expect(isAdminUser({ ...sessionUser(["admin"]), email: undefined })).toBe(false);
+    expect(isAdminUser({ ...sessionUser(["admin"]), sub: "" })).toBe(false);
+  });
+
+  it("reads AUTH0_ROLES_CLAIM and ignores a blank override", () => {
+    process.env.AUTH0_ROLES_CLAIM = " https://beanbox.example/roles ";
+    expect(rolesClaimName()).toBe("https://beanbox.example/roles");
+    expect(hasAdminRole(sessionUser(["admin"], "https://beanbox.example/roles"))).toBe(true);
+    expect(hasAdminRole(sessionUser(["admin"]))).toBe(false);
+    process.env.AUTH0_ROLES_CLAIM = "   ";
+    expect(rolesClaimName()).toBe("https://beanbox/roles");
+    expect(hasAdminRole(sessionUser("admin"))).toBe(true);
+  });
+
+  it("keeps the roles claim on the session and drops other ID token claims", () => {
+    const user = {
+      sub: "auth0|marcus",
+      name: "Marcus",
+      email: "marcusgcy@gmail.com",
+      email_verified: true,
+      iss: "https://koffeebean.jp.auth0.com/",
+      aud: "client-id",
+      "https://beanbox/roles": ["admin"],
+      "https://beanbox/extra": "drop-me",
+    };
+    expect(filterDefaultIdTokenClaims(user)).not.toHaveProperty("https://beanbox/roles");
+    const saved = userKeepingRolesClaim(user);
+    expect(saved.email).toBe("marcusgcy@gmail.com");
+    expect(saved.name).toBe("Marcus");
+    expect(saved["https://beanbox/roles"]).toEqual(["admin"]);
+    expect(saved).not.toHaveProperty("iss");
+    expect(saved).not.toHaveProperty("aud");
+    expect(saved).not.toHaveProperty("https://beanbox/extra");
+
+    process.env.AUTH0_ROLES_CLAIM = "https://beanbox.example/roles";
+    const custom = userKeepingRolesClaim({
+      sub: "auth0|marcus",
+      email: "marcusgcy@gmail.com",
+      "https://beanbox.example/roles": "admin",
+      "https://beanbox/roles": ["admin"],
+    });
+    expect(custom["https://beanbox.example/roles"]).toBe("admin");
+    expect(custom).not.toHaveProperty("https://beanbox/roles");
   });
 });
 

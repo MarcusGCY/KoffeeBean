@@ -85,7 +85,7 @@ the count is read from recent GitHub issue bodies and comments, so it holds acro
 | `AUTH0_CLIENT_SECRET` | That application's client secret |
 | `AUTH0_SECRET` | Key that encrypts the session cookie. `openssl rand -hex 32` |
 | `APP_BASE_URL` | Origin of this Next app, `http://localhost:3000` locally |
-| `ADMIN_EMAILS` | Comma-separated Auth0 emails allowed to open `/admin/demo`. Example: `marcusgcy@gmail.com` |
+| `AUTH0_ROLES_CLAIM` | Optional. ID token claim that lists Auth0 role names. Leave unset to use `https://beanbox/roles` |
 
 `APP_BASE_URL` is the Auth0 SDK v4 name. `APP_URL` is separate: it is the origin baked into
 approve/reject links. Set both to the same origin for local dev. On Vercel either may be unset;
@@ -96,9 +96,57 @@ preview deployments then use `https://$VERCEL_URL`, and production uses
 `next build` does not need these values. Login works after `.env.local` is filled and the
 dev server is restarted.
 
+### Admin role
+
+`/admin/demo`, `POST /api/demo/revert`, `POST /api/demo/reset`, and the header **Demo** link are
+for a signed-in user whose Auth0 role list contains `admin`. A signed-out visitor, a user
+without that role, and a user whose email Auth0 has marked unverified (`email_verified` is
+`false`) get 404. Signed revert and reset grants still authorize those two POSTs without a
+session. The browser forms still send a CSRF token signed with `APPROVAL_SECRET` and tied to
+the Auth0 user id, and the routes still reject a cross-site `Origin`.
+
+The app reads roles from one namespaced ID token claim, `https://beanbox/roles` by default.
+Set `AUTH0_ROLES_CLAIM` only when the Action below writes a different claim. The value may be
+an array of role names or a single role string. Auth0 v4 does not keep custom ID token claims
+on `session.user` unless the app copies them in `beforeSessionSaved`; this app keeps that one
+claim and drops the rest.
+
+Do this once in the Auth0 dashboard for tenant `koffeebean.jp.auth0.com`:
+
+1. **Create the role.** User Management → Roles → Create Role. Name it `admin`. Description can
+   be anything. Create.
+2. **Assign it.** Open the `admin` role → Users → Add Users, and add the owner. The same
+   assignment is under User Management → Users → that user → Roles → Assign Role → `admin`.
+3. **Create the Action.** Actions → Library → Create Action → Build from scratch. Name it
+   `Add roles to tokens`. Trigger: **Login / Post Login**. Replace the sample with this code,
+   then **Deploy** (Deploy, not only Save):
+
+```javascript
+/**
+ * @param {Event} event - Details about the user and the context in which they are logging in.
+ * @param {PostLoginAPI} api - Interface whose methods can be used to change the behavior of the login.
+ */
+exports.onExecutePostLogin = async (event, api) => {
+  const claim = "https://beanbox/roles";
+  if (event.authorization) {
+    api.idToken.setCustomClaim(claim, event.authorization.roles);
+    api.accessToken.setCustomClaim(claim, event.authorization.roles);
+  }
+};
+```
+
+4. **Add it to the Login flow.** Actions → Triggers → **post-login** (also listed under Flows).
+   Drag `Add roles to tokens` into the flow between Start and Complete, then **Apply**.
+5. **Log out of BeanBox and log in again.** The claim is written at login. A session that
+   already exists does not pick it up.
+
+Delete `ADMIN_EMAILS` from Vercel and from `.env.local` if it is still set. No new Vercel
+variable is required. Add `AUTH0_ROLES_CLAIM` only if the Action uses a claim other than
+`https://beanbox/roles`, and use that same name in the Action and in Vercel.
+
 ## Repeat the demo
 
-After a fix is merged, Vercel redeploys main and that bug is gone. To run the same report again, sign in as an email listed in `ADMIN_EMAILS` (Marcus: `marcusgcy@gmail.com`) and open `/admin/demo`. A signed-out visitor or any other account gets 404.
+After a fix is merged, Vercel redeploys main and that bug is gone. To run the same report again, sign in as a user with the Auth0 role `admin` and open `/admin/demo`. A signed-out visitor or any account without that role gets 404.
 
 | State | What it means |
 |---|---|
@@ -114,7 +162,7 @@ The linked feedback issue is then closed and labeled `demo-reverted`, so triage 
 
 **Reset all demo bugs** re-applies the three planted bugs from `5cb6889` (`src/lib/images.ts`, `src/lib/cart.ts`, `src/data/products.json`). A file that already has its bug is skipped. A file that matches neither the planted bug nor the pre-bug line is left untouched and nothing is committed. Merged fixes that this fully undoes are closed and labeled the same way.
 
-Both actions are POST. The browser form sends a CSRF token signed with `APPROVAL_SECRET` and tied to the Auth0 user id, and the route rejects a cross-site `Origin`. Non-owners, signed-out visitors, and Auth0 users whose email is explicitly unverified get 404.
+Both actions are POST. The browser form sends a CSRF token signed with `APPROVAL_SECRET` and tied to the Auth0 user id, and the route rejects a cross-site `Origin`. Signed-out visitors, users without the `admin` role, and Auth0 users whose email is explicitly unverified get 404.
 
 Optional, for a later Feedback Bot button: `POST /api/demo/revert?pr=<n>&token=<grant>` and `POST /api/demo/reset?token=<grant>`. The grant is an HMAC of `APPROVAL_SECRET` (the same secret as approve/reject links) and expires after 24 hours. The owner page can show a revert URL. These URLs are not added to `review_request`, `fix_started`, or `fix_completed`.
 
@@ -182,7 +230,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `CURSOR_API_KEY` | Same value as local |
 | `GITHUB_REPO` | Same `owner/name` |
 | `GITHUB_TOKEN` | Same token. Issues read/write and Contents read/write. Pull requests write is not required |
-| `ADMIN_EMAILS` | **New.** Comma-separated owner emails, such as `marcusgcy@gmail.com` |
+| `AUTH0_ROLES_CLAIM` | Leave unset. Delete `ADMIN_EMAILS` if a previous deploy set it. Set this only to override `https://beanbox/roles` |
 | `APPROVAL_SECRET` | Same signing secret (or a new one; old approve links would stop matching) |
 | `APP_URL` | **Change** to the production origin, `https://<production-host>` (no trailing slash) |
 | `APP_BASE_URL` | **Change** to that same production origin |
