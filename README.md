@@ -16,8 +16,12 @@ Report a problem widget
        -> the agent id and run id are saved on the GitHub issue
        -> locally, this process tracks the run until it finishes (up to 30 min)
        -> on Vercel, later requests finish tracking (see Deploy to Vercel)
-       -> Grok webhook `fix_completed` (status, PR link, summary)
+       -> Grok webhook `fix_completed` (status, PR link, signed merge link, summary)
        -> issue gets a comment with the PR link
+  -> human taps Merge fix -> GET /api/merge (signed link, valid 48 hours)
+       -> draft PR is marked ready, then squash-merged
+       -> issue is commented, labeled `merged`, and closed
+       -> Grok webhook `fix_merged` (issue, PR, merge commit; Vercel redeploys main)
   -> human taps Reject   -> issue closed as wontfix
 ```
 
@@ -166,7 +170,7 @@ Both actions are POST. The browser form sends a CSRF token signed with `APPROVAL
 
 Optional, for a later Feedback Bot button: `POST /api/demo/revert?pr=<n>&token=<grant>` and `POST /api/demo/reset?token=<grant>`. The grant is an HMAC of `APPROVAL_SECRET` (the same secret as approve/reject links) and expires after 24 hours. The owner page can show a revert URL. These URLs are not added to `review_request`, `fix_started`, or `fix_completed`.
 
-`GITHUB_TOKEN` needs **Contents** read/write (to commit on `main`) and **Issues** read/write (to close and label the feedback issue). **Pull requests** write is not required. If the token cannot read pull requests, merged fixes are still found from squash-merge subjects like `(#23)` on `main`.
+Revert itself needs **Contents** read/write (to commit on `main`) and **Issues** read/write (to close and label the feedback issue). It does not need Pull requests write. If the token cannot read pull requests, merged fixes are still found from squash-merge subjects like `(#23)` on `main`. Squash-merging the fix from the bot also needs Pull requests read/write. See [Grok webhook](#grok-webhook).
 
 ## Demo script
 
@@ -174,7 +178,7 @@ Optional, for a later Feedback Bot button: `POST /api/demo/revert?pr=<n>&token=<
 2. Click **Report a problem** and send one of the feedback lines in the table above.
 3. Triage opens a GitHub issue, then the Feedback Bot asks for review. Tap **Approve**.
 4. Watch the bot for fix status (`fix_started`, then `fix_completed` with the PR). The GitHub issue gets a comment too.
-5. Merge the PR and refresh the store. Repeat with the other two reports; each one is a separate fix.
+5. When the bot shows **Merge fix**, tap it. Refresh the store after Vercel redeploys. Repeat with the other two reports; each one is a separate fix.
 
 ## Grok webhook
 
@@ -184,11 +188,63 @@ Optional, for a later Feedback Bot button: `POST /api/demo/revert?pr=<n>&token=<
 |---|---|---|
 | `review_request` | A new issue needs a human | `{ type, issue:{number,title,url}, summary, actions:[{id,label,url}] }` |
 | `fix_started` | Approve kicks off `fixIssue` | `{ type, issue:{number,title,url} }` |
-| `fix_completed` | The Cursor run reaches a terminal status | `{ type, issue:{number,title,url}, status, prUrl?, summary }` |
+| `fix_completed` | The Cursor run reaches a terminal status | `{ type, issue:{number,title,url}, status, prUrl?, prNumber?, mergeUrl?, summary }` |
+| `fix_merged` | The signed merge link squash-merges that PR | `{ type, issue:{number,title,url}, prNumber, prUrl, sha, summary }` |
 
-`summary` on `fix_completed` is the human-readable GitHub issue comment (PR link, or the run status when no PR opened). A hidden HTML marker on that comment is not part of the payload. `prUrl` is omitted when there is no PR. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
+`summary` on `fix_completed` is the human-readable GitHub issue comment (PR link, or the run status when no PR opened). A hidden HTML marker on that comment is not part of the payload. `prUrl` is omitted when there is no PR. `prNumber` and `mergeUrl` are omitted in that same case, and also when `prUrl` is not a pull request in `GITHUB_REPO`. The original `fix_completed` fields are unchanged, so an older bot can ignore `prNumber` and `mergeUrl`. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
 
 The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.
+
+### Merge fix button
+
+When `fix_completed` includes `mergeUrl`, show a **Merge fix** button that opens that URL (a GET, same as Approve). The issue number is `issue.number`. Example:
+
+```json
+{
+  "type": "fix_completed",
+  "issue": { "number": 12, "title": "Bean images not loading", "url": "https://github.com/org/beanbox/issues/12" },
+  "status": "finished",
+  "prUrl": "https://github.com/org/beanbox/pull/34",
+  "prNumber": 34,
+  "mergeUrl": "https://koffee-bean.vercel.app/api/merge?issue=12&pr=34&token=1710000000000.abcdef",
+  "summary": "Cursor opened a fix: https://github.com/org/beanbox/pull/34"
+}
+```
+
+`mergeUrl` is `/api/merge?issue=<n>&pr=<n>&token=<exp>.<hmac>`. The HMAC is SHA-256 of `merge:<issue>:<pr>:<exp>` with `APPROVAL_SECRET` (the same secret as approve/reject). `exp` is a unix millisecond timestamp 48 hours after the link is signed. The link is bound to that issue and that pull request.
+
+`GET /api/merge` checks the signature, then checks that the pull request is open in `GITHUB_REPO`, that the issue's fix-result comment recorded that pull request (and the head branch, when the Cursor run reported one), and that GitHub reports it mergeable. A draft is marked ready with the GraphQL mutation `markPullRequestReadyForReview`, then squash-merged. The issue gets a comment, the `merged` label, and is closed. The response is JSON, like `/api/review`:
+
+| Result | HTTP | Body |
+|---|---|---|
+| Squash-merged | 200 | `{ status: "merged", message, issue, prNumber, prUrl, sha }` |
+| Already merged | 200 | `{ status: "already-merged", message, issue, prNumber, prUrl, sha? }` |
+| Bad or expired link | 403 | `{ error }` |
+
+`message` is a short sentence. An already-merged pull request is not an error. Opening the link again does not post a second `fix_merged`.
+
+After a squash merge that this request performed (or the first time the issue is closed for an already-merged pull request), BeanBox posts `fix_merged`:
+
+```json
+{
+  "type": "fix_merged",
+  "issue": { "number": 12, "title": "Bean images not loading", "url": "https://github.com/org/beanbox/issues/12" },
+  "prNumber": 34,
+  "prUrl": "https://github.com/org/beanbox/pull/34",
+  "sha": "0123456789abcdef0123456789abcdef01234567",
+  "summary": "Squash-merged pull request #34. Vercel will redeploy main shortly."
+}
+```
+
+`sha` is the squash-merge commit. `summary` tells the bot that Vercel will redeploy `main` shortly. A failed `fix_merged` POST is logged and does not roll back the merge.
+
+Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ignored). BeanBox calls GraphQL `markPullRequestReadyForReview` with the pull request node id. GitHub's GraphQL guide says a fine-grained personal access token can call that API when it has **Pull requests: write** on the repository. This repo cannot call GitHub as the owner, so the route treats a rejected mutation as a failed merge: HTTP 403, the pull request stays a draft, and `error` tells the owner to add Pull requests: write. The token that can merge needs all three:
+
+| Fine-grained permission | Used for |
+|---|---|
+| Contents read/write | Squash-merge commit on `main`, and demo revert |
+| Pull requests read/write | Read the fix PR, squash-merge it, and `markPullRequestReadyForReview` |
+| Issues read/write | Comment, close, and label the feedback issue |
 
 | Variable | Purpose |
 |---|---|
@@ -216,7 +272,7 @@ from whichever of these runs next:
 3. Vercel Cron `GET /api/fix-status` once a day (`0 12 * * *` in `vercel.json`) picks up a run whose
    earlier slice never chained. Hobby cron cannot run more often than that; it is only the backstop.
 
-`fix_started` and `fix_completed` keep the same JSON shapes. `npm run dev` still tracks the run
+`fix_started` is unchanged. `fix_completed` keeps its existing fields and adds `prNumber` and `mergeUrl` when a pull request in this repo was opened. `npm run dev` still tracks the run
 in-process and does not need the webhook or cron.
 
 ### Environment variables
@@ -229,7 +285,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 |---|---|
 | `CURSOR_API_KEY` | Same value as local |
 | `GITHUB_REPO` | Same `owner/name` |
-| `GITHUB_TOKEN` | Same token. Issues read/write and Contents read/write. Pull requests write is not required |
+| `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write. No new variable. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview` (taking a draft out of draft). Contents write also commits demo reverts. Issues write comments, closes, and labels. |
 | `AUTH0_ROLES_CLAIM` | Leave unset. Delete `ADMIN_EMAILS` if a previous deploy set it. Set this only to override `https://beanbox/roles` |
 | `APPROVAL_SECRET` | Same signing secret (or a new one; old approve links would stop matching) |
 | `APP_URL` | **Change** to the production origin, `https://<production-host>` (no trailing slash) |

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { notifyFixCompleted, notifyFixStarted, requestReview } from "@/lib/notify";
+import { verifyMergeToken } from "@/lib/merge-link";
+import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, requestReview } from "@/lib/notify";
 
 const issue = {
   number: 7,
@@ -8,7 +9,7 @@ const issue = {
   summary: "SAVE10 does nothing",
 };
 
-const envKeys = ["APP_URL", "APPROVAL_SECRET", "GROK_WEBHOOK_URL", "GROK_WEBHOOK_AUTH"] as const;
+const envKeys = ["APP_URL", "APPROVAL_SECRET", "GROK_WEBHOOK_URL", "GROK_WEBHOOK_AUTH", "GITHUB_REPO"] as const;
 const saved: Partial<Record<(typeof envKeys)[number], string | undefined>> = {};
 
 function authHeader(): string | undefined {
@@ -73,6 +74,9 @@ function postedJson(): {
   issue: { number: number; title: string; url: string };
   status?: string;
   prUrl?: string;
+  prNumber?: number;
+  mergeUrl?: string;
+  sha?: string;
   summary?: string;
 } {
   const init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit | undefined;
@@ -123,6 +127,7 @@ describe("fix progress webhooks", () => {
 
   it("posts fix_completed with status, prUrl, and the GitHub comment", async () => {
     stubWebhook("Bearer secret");
+    process.env.GITHUB_REPO = "example/beanbox";
     await notifyFixCompleted({
       number: 7,
       title: "Bean images not loading",
@@ -132,17 +137,26 @@ describe("fix progress webhooks", () => {
       summary: "Cursor opened a fix: https://github.com/example/beanbox/pull/9",
     });
     expect(authHeader()).toBe("Bearer secret");
-    expect(postedJson()).toMatchObject({
+    const body = postedJson();
+    expect(body).toMatchObject({
       type: "fix_completed",
-      issue: { number: 7 },
+      issue: { number: 7, title: "Bean images not loading", url: "https://github.com/example/beanbox/issues/7" },
       status: "finished",
       prUrl: "https://github.com/example/beanbox/pull/9",
+      prNumber: 9,
       summary: "Cursor opened a fix: https://github.com/example/beanbox/pull/9",
     });
+    const merge = new URL(body.mergeUrl ?? "");
+    expect(merge.origin).toBe("http://localhost:3000");
+    expect(merge.pathname).toBe("/api/merge");
+    expect(merge.searchParams.get("issue")).toBe("7");
+    expect(merge.searchParams.get("pr")).toBe("9");
+    expect(verifyMergeToken(7, 9, merge.searchParams.get("token") ?? "")).toBe("ok");
   });
 
   it("omits prUrl when the run did not open one", async () => {
     stubWebhook();
+    process.env.GITHUB_REPO = "example/beanbox";
     await notifyFixCompleted({
       number: 7,
       title: "Bean images not loading",
@@ -151,7 +165,73 @@ describe("fix progress webhooks", () => {
       summary: "Cursor run ended with status `error`. No PR was created.",
     });
     expect(postedJson().prUrl).toBeUndefined();
+    expect(postedJson().prNumber).toBeUndefined();
+    expect(postedJson().mergeUrl).toBeUndefined();
     expect(postedJson().summary).toContain("No PR was created.");
+  });
+
+  it("omits the merge link when the pull request is in another repository", async () => {
+    stubWebhook();
+    process.env.GITHUB_REPO = "example/beanbox";
+    await notifyFixCompleted({
+      number: 7,
+      title: "Bean images not loading",
+      url: "https://github.com/example/beanbox/issues/7",
+      status: "finished",
+      prUrl: "https://github.com/other/repo/pull/9",
+      summary: "Cursor opened a fix: https://github.com/other/repo/pull/9",
+    });
+    expect(postedJson().prUrl).toBe("https://github.com/other/repo/pull/9");
+    expect(postedJson().prNumber).toBeUndefined();
+    expect(postedJson().mergeUrl).toBeUndefined();
+  });
+
+  it("posts fix_merged with the pull request and the merge commit", async () => {
+    stubWebhook("Authorization: Bearer secret");
+    await notifyFixMerged({
+      number: 7,
+      title: "Bean images not loading",
+      url: "https://github.com/example/beanbox/issues/7",
+      prNumber: 9,
+      prUrl: "https://github.com/example/beanbox/pull/9",
+      sha: "a".repeat(40),
+    });
+    expect(authHeader()).toBe("Bearer secret");
+    expect(postedJson()).toEqual({
+      type: "fix_merged",
+      issue: {
+        number: 7,
+        title: "Bean images not loading",
+        url: "https://github.com/example/beanbox/issues/7",
+      },
+      prNumber: 9,
+      prUrl: "https://github.com/example/beanbox/pull/9",
+      sha: "a".repeat(40),
+      summary: "Squash-merged pull request #9. Vercel will redeploy main shortly.",
+    });
+  });
+
+  it("still posts fix_completed when the merge link cannot be signed", async () => {
+    stubWebhook();
+    process.env.GITHUB_REPO = "example/beanbox";
+    delete process.env.APPROVAL_SECRET;
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await notifyFixCompleted({
+      number: 7,
+      title: "Bean images not loading",
+      url: "https://github.com/example/beanbox/issues/7",
+      status: "finished",
+      prUrl: "https://github.com/example/beanbox/pull/9",
+      summary: "Cursor opened a fix: https://github.com/example/beanbox/pull/9",
+    });
+    expect(postedJson()).toMatchObject({
+      type: "fix_completed",
+      prUrl: "https://github.com/example/beanbox/pull/9",
+      prNumber: 9,
+      summary: "Cursor opened a fix: https://github.com/example/beanbox/pull/9",
+    });
+    expect(postedJson().mergeUrl).toBeUndefined();
+    expect(err).toHaveBeenCalled();
   });
 
   it("logs and resolves when the webhook fails", async () => {

@@ -96,7 +96,7 @@ describe("fixIssue", () => {
     const handle = agentWith(async () => ({
       id: RUN,
       status: "finished",
-      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", prUrl: PR }] },
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "cursor/beanbox-fix-14", prUrl: PR }] },
     }));
     create.mockResolvedValue(handle);
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -106,7 +106,11 @@ describe("fixIssue", () => {
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
     expect(getRun).not.toHaveBeenCalled();
-    expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`));
+    expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`, {
+      prUrl: PR,
+      prNumber: 15,
+      head: "cursor/beanbox-fix-14",
+    }));
     expect(comment).toHaveBeenCalledWith(14, expect.stringContaining(`"runId":"${RUN}"`));
     expect(notifyFixCompleted).toHaveBeenCalledWith({
       number: 14,
@@ -137,7 +141,10 @@ describe("fixIssue", () => {
     const outcome = await fixIssue(14);
 
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
-    expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`));
+    expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`, {
+      prUrl: PR,
+      prNumber: 15,
+    }));
     expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       status: "finished",
       prUrl: PR,
