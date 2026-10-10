@@ -4,5 +4,5 @@
   { "id": "espresso-1kg", "name": "House Espresso 1kg", "category": "beans", "price": 4200, "blurb": "Dark chocolate, low acidity." },
   { "id": "mug", "name": "BeanBox Ceramic Mug", "category": "merch", "price": 1400, "blurb": "350ml, dishwasher safe." },
   { "id": "tote", "name": "Canvas Tote Bag", "category": "merch", "price": 1200, "blurb": "Fits two 1kg bags." },
-  { "id": "tee", "name": "Roast Day T-Shirt", "category": "merch", "price": 25000, "blurb": "100% organic cotton." }
+  { "id": "tee", "name": "Roast Day T-Shirt", "category": "merch", "price": 2500, "blurb": "100% organic cotton." }
 ]
