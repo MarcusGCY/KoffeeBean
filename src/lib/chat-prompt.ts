@@ -41,12 +41,12 @@ export function buildSystemPrompt(): string {
   ].join("\n");
 }
 
-export type ChatTurn = { role: "user" | "assistant"; content: string };
+export type UserTurn = { role: "user"; content: string };
 
-/** System prompt is always the server copy. Turns are copied through as their own messages. */
-export function completionMessages(turns: readonly ChatTurn[]) {
+/** System prompt is the server copy. Only user turns are included, in the order given. */
+export function completionMessages(turns: readonly UserTurn[]) {
   return [
     { role: "system" as const, content: buildSystemPrompt() },
-    ...turns.map((turn) => ({ role: turn.role, content: turn.content })),
+    ...turns.map((turn) => ({ role: "user" as const, content: turn.content })),
   ];
 }
