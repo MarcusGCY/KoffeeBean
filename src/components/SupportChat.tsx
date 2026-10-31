@@ -4,7 +4,8 @@ import { useState } from "react";
 
 type Turn = { role: "user" | "assistant"; content: string };
 
-const UNAVAILABLE = "Support chat is unavailable";
+const UNAVAILABLE =
+  "Support chat is unavailable. Please use the 'Report a problem' button at the bottom right.";
 
 function noticeFor(status: number, error: string | undefined): string {
   if (status === 429 && error) return error;
@@ -92,7 +93,10 @@ export function SupportChat() {
             ))}
             {notice && <p className="whitespace-pre-wrap break-words text-sm text-stone-700">{notice}</p>}
           </div>
-          <form onSubmit={send} className="flex shrink-0 items-end gap-2 border-t border-stone-200 p-2">
+          <p className="border-t border-stone-200 px-3 pt-2 text-xs text-stone-500">
+            {"Don't share personal info. Messages are processed by OpenAI."}
+          </p>
+          <form onSubmit={send} className="flex shrink-0 items-end gap-2 p-2">
             <label htmlFor="support-chat-input" className="sr-only">
               Message
             </label>

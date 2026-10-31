@@ -259,6 +259,8 @@ Signed-in shoppers get a **Support** button at the bottom left of the shop. Repo
 
 Set `OPENAI_API_KEY` in the Vercel project. Leave it empty in git. `CHAT_MODEL` defaults to `gpt-4.1-mini`. Each shopper can send 20 messages an hour and 60 a day. Those counts are kept in memory on each server instance (best effort, and not shared across instances). An Upstash limiter can replace that later.
 
+Chat messages are sent to OpenAI to generate answers. The app does not store them. Customers should not share personal details.
+
 ## Deploy to Vercel
 
 Production deploys from `main` through the Vercel GitHub integration. The app is a Next.js App Router
