@@ -253,6 +253,12 @@ Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ign
 
 In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` and the Authorization header field into `GROK_WEBHOOK_AUTH` in `.env.local`. Include the `Bearer ` prefix when the panel shows it. Restart `npm run dev` after changing either value.
 
+## Support chat
+
+Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` answers only from `content/faq.md`, in plain text. It does not look up orders, share coupon codes, file reports, or call any API besides OpenAI. If the answer is not in the FAQ, the bot points people to **Report a problem**.
+
+Set `OPENAI_API_KEY` in the Vercel project. Leave it empty in git. `CHAT_MODEL` defaults to `gpt-4.1-mini`. Each shopper can send 20 messages an hour and 60 a day. Those counts are kept in memory on each server instance (best effort, and not shared across instances). An Upstash limiter can replace that later.
+
 ## Deploy to Vercel
 
 Production deploys from `main` through the Vercel GitHub integration. The app is a Next.js App Router
@@ -298,6 +304,8 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `AUTH0_SECRET` | Same session secret (or a newly generated 32-byte hex) |
 | `GITHUB_WEBHOOK_SECRET` | **New.** Random string. The GitHub webhook secret below |
 | `CRON_SECRET` | **New.** Random string. Vercel sends it as `Authorization: Bearer <CRON_SECRET>` on the cron, and the app uses it to chain fix tracking |
+| `OPENAI_API_KEY` | **New.** FAQ support chat. Set the real key in Vercel. Leave it empty in git |
+| `CHAT_MODEL` | Optional. Defaults to `gpt-4.1-mini` |
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
