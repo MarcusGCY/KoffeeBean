@@ -8,6 +8,7 @@ import { checkout, type Order } from "@/lib/checkout";
 import { productImageUrl } from "@/lib/images";
 import { FeedbackWidget } from "./FeedbackWidget";
 import { SiteHeader } from "./SiteHeader";
+import { SupportChat } from "./SupportChat";
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 const catalog = products as Product[];
@@ -115,6 +116,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
         </aside>
       </main>
       <FeedbackWidget />
+      <SupportChat />
     </div>
   );
 }
