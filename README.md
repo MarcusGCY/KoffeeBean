@@ -253,6 +253,18 @@ Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ign
 
 In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` and the Authorization header field into `GROK_WEBHOOK_AUTH` in `.env.local`. Include the `Bearer ` prefix when the panel shows it. Restart `npm run dev` after changing either value.
 
+## Server cart and orders
+
+Signed-in shoppers keep a cart and orders in Neon Postgres. Prices, names, and coupon checks come from `src/data/products.json` and `src/lib/coupons.ts`. Totals use the same 8% tax math as the shop. `DATABASE_URL` empty means the cart routes return 503 and the shop shows a short notice.
+
+Set it up like this:
+
+1. In Vercel, open the KoffeeBean project, go to Storage, then Marketplace, then Neon, and Create or Connect, so `DATABASE_URL` is added to all environments.
+2. Locally, run `vercel env pull .env.local` (or copy `DATABASE_URL`), then `npm run migrate`.
+3. Redeploy.
+
+`npm run migrate` applies `migrations/*.sql` in order and records them in `schema_migrations`. It skips versions that are already applied.
+
 ## Support chat
 
 Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` answers only from `content/faq.md`, in plain text. It does not look up orders, share coupon codes, file reports, or call any API besides OpenAI. If the answer is not in the FAQ, the bot points people to **Report a problem**.
@@ -307,6 +319,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `GITHUB_WEBHOOK_SECRET` | **New.** Random string. The GitHub webhook secret below |
 | `CRON_SECRET` | **New.** Random string. Vercel sends it as `Authorization: Bearer <CRON_SECRET>` on the cron, and the app uses it to chain fix tracking |
 | `OPENAI_API_KEY` | **New.** FAQ support chat. Set the real key in Vercel. Leave it empty in git |
+| `DATABASE_URL` | **New.** Neon connection string. Add it from Storage → Marketplace → Neon so every environment gets it. Leave it empty in git |
 | `CHAT_MODEL` | Optional. Defaults to `gpt-4.1-mini` |
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would

@@ -10,11 +10,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.31.1",
     "@cursor/sdk": "^1.0.37",
+    "@neondatabase/serverless": "^1.2.0",
     "@octokit/rest": "^22.0.1",
     "next": "16.4.0",
     "react": "19.3.0",
