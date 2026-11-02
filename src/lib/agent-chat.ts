@@ -1,3 +1,4 @@
+import { confirmedCard } from "./pending-action";
 import { signSupportToken } from "./support-token";
 
 const UNAVAILABLE = "Support chat is unavailable";
@@ -20,6 +21,7 @@ export type AgentReply = {
 
 type AgentEvent = {
   type?: string;
+  turnId?: string;
   data?: {
     text?: unknown;
     finishReason?: unknown;
@@ -55,31 +57,56 @@ async function postJson(url: string, userId: string, body: unknown, signal: Abor
   return fetch(url, { method: "POST", headers: initHeaders, body: JSON.stringify(body), signal });
 }
 
-function asPending(output: unknown): PendingAction | null {
-  if (!output || typeof output !== "object") return null;
-  const row = output as { pending?: unknown; actionId?: unknown; summary?: unknown };
-  if (row.pending !== true || typeof row.actionId !== "string" || typeof row.summary !== "string") return null;
-  if (!row.actionId || !row.summary) return null;
-  return { actionId: row.actionId, summary: row.summary };
+function actionIdFrom(output: unknown): string | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  const row = output as { pending?: unknown; actionId?: unknown };
+  if (row.pending !== true || typeof row.actionId !== "string" || !row.actionId) return undefined;
+  return row.actionId;
 }
 
-/** Last confirm action a write tool returned during the turn. */
-export function pendingFromEvents(events: AgentEvent[]): PendingAction | undefined {
-  let pending: PendingAction | undefined;
+/** Turn id of the reply we are about to show. Older turns are ignored. */
+function replyTurnId(events: AgentEvent[]): string | undefined {
+  let turnId: string | undefined;
   for (const event of events) {
     const data = event.data ?? {};
+    if (
+      event.type === "message.completed" &&
+      data.finishReason === "stop" &&
+      data.parentCallId == null &&
+      typeof data.text === "string" &&
+      data.text.trim() &&
+      event.turnId
+    ) {
+      turnId = event.turnId;
+    }
+  }
+  return turnId;
+}
+
+/**
+ * Last confirm action from this turn only. The summary is the signed one,
+ * not text the agent attached to the tool result.
+ */
+export function pendingFromEvents(events: AgentEvent[], userId: string, rawSecret: string): PendingAction | undefined {
+  const turnId = replyTurnId(events);
+  if (!turnId) return undefined;
+  let actionId: string | undefined;
+  for (const event of events) {
+    if (event.turnId !== turnId) continue;
+    const data = event.data ?? {};
     if (event.type === "action.result") {
-      const found = asPending(data.output);
-      if (found) pending = found;
+      const id = actionIdFrom(data.output);
+      if (id) actionId = id;
     }
     if (event.type === "actions.completed" && Array.isArray(data.results)) {
       for (const result of data.results) {
-        const found = asPending(result?.output);
-        if (found) pending = found;
+        const id = actionIdFrom(result?.output);
+        if (id) actionId = id;
       }
     }
   }
-  return pending;
+  if (!actionId) return undefined;
+  return confirmedCard(userId, actionId, rawSecret);
 }
 
 function replyFrom(events: AgentEvent[]): string | null | undefined {
@@ -120,7 +147,10 @@ async function waitForReply(
       const body = (await response.json()) as { events?: AgentEvent[] };
       const events = Array.isArray(body.events) ? body.events : [];
       const reply = replyFrom(events);
-      if (reply) return { reply, pendingAction: pendingFromEvents(events) };
+      if (reply) {
+        const rawSecret = process.env.SUPPORT_AGENT_SECRET?.trim() ?? "";
+        return { reply, pendingAction: pendingFromEvents(events, userId, rawSecret) };
+      }
       if (reply === null) throw new Error("no_reply");
     }
     await new Promise((resolve) => setTimeout(resolve, 250));

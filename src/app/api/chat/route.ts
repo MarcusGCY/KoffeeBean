@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { askSupportAgent, chatFailureStatus, supportConfigured } from "@/lib/agent-chat";
+import { confirmedCard } from "@/lib/pending-action";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
@@ -92,7 +93,11 @@ export async function POST(req: Request) {
       sessionId: parsed.data.sessionId,
       continuationToken: parsed.data.continuationToken,
     });
-    return NextResponse.json(reply);
+    const rawSecret = process.env.SUPPORT_AGENT_SECRET?.trim() ?? "";
+    const pendingAction = reply.pendingAction
+      ? confirmedCard(shopper.id, reply.pendingAction.actionId, rawSecret)
+      : undefined;
+    return NextResponse.json({ ...reply, pendingAction });
   } catch (err) {
     if (err instanceof StoreUnavailableError) {
       return NextResponse.json({ error: "unavailable" }, { status: 503 });

@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { getProduct } from "./cart";
 import { findCoupon } from "./coupons";
@@ -17,7 +17,7 @@ import {
   setCartQty,
 } from "./store-meta";
 import type { CartSnapshot } from "./store-types";
-import { consumeNonce, issueNonce, rememberedLines } from "./upstash";
+import { consumeNonce, issueNonce, noncePending, rememberedLines } from "./upstash";
 
 /** Confirm tokens last five minutes and can be used once. */
 export const ACTION_TTL_SEC = 300;
@@ -38,11 +38,13 @@ export const ActionBody = z.discriminatedUnion("op", [
 export type ShopAction = z.infer<typeof ActionBody>;
 
 type SignedAction = {
+  typ: "action";
   sub: string;
   exp: number;
   jti: string;
   summary: string;
   action: ShopAction;
+  cartHash?: string;
 };
 
 export type PendingAction = { pending: true; actionId: string; summary: string };
@@ -61,6 +63,11 @@ function secret(): string {
   return value;
 }
 
+/** Separate MAC key so a confirm action cannot verify as a support bearer token. */
+export function actionKey(rawSecret: string): string {
+  return createHmac("sha256", rawSecret).update("action-v1").digest("base64url");
+}
+
 function fail(status: number, error: string, message = error): CommitResult {
   return { ok: false, status, error, message };
 }
@@ -72,32 +79,73 @@ export function codeAppearsIn(code: string, lines: readonly string[]): boolean {
   return lines.some((line) => line.toUpperCase().split(/[^A-Z0-9]+/).includes(want));
 }
 
+function folded(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** True when the report text appears in a line the shopper typed. */
+export function textAppearsIn(text: string, lines: readonly string[]): boolean {
+  const want = folded(text);
+  if (want.length < 5) return false;
+  return lines.some((line) => folded(line).includes(want));
+}
+
+function cartFingerprint(cart: CartSnapshot): string {
+  const payload = JSON.stringify({
+    items: cart.items.map((item) => [item.productId, item.qty]),
+    coupon: cart.coupon,
+    totalCents: cart.totalCents,
+  });
+  return createHash("sha256").update(payload).digest("hex");
+}
+
 function sign(claims: SignedAction, key: string): string {
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
   const sig = createHmac("sha256", key).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-export function verifyAction(token: string, key: string, nowMs = Date.now()): SignedAction | null {
-  if (!key) return null;
+export function signActionToken(claims: SignedAction, rawSecret: string): string {
+  return sign(claims, actionKey(rawSecret));
+}
+
+export function verifyAction(token: string, rawSecret: string, nowMs = Date.now()): SignedAction | null {
+  if (!rawSecret) return null;
   const dot = token.indexOf(".");
   if (dot <= 0 || dot !== token.lastIndexOf(".")) return null;
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
-  const expected = createHmac("sha256", key).update(payload).digest("base64url");
+  const expected = createHmac("sha256", actionKey(rawSecret)).update(payload).digest("base64url");
   if (!safeEqual(sig, expected)) return null;
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<SignedAction>;
+    if (claims.typ !== "action") return null;
     if (typeof claims.sub !== "string" || !claims.sub.trim()) return null;
     if (typeof claims.exp !== "number" || claims.exp * 1000 <= nowMs) return null;
     if (typeof claims.jti !== "string" || !claims.jti) return null;
     if (typeof claims.summary !== "string" || !claims.summary) return null;
     const action = ActionBody.safeParse(claims.action);
     if (!action.success) return null;
-    return { sub: claims.sub, exp: claims.exp, jti: claims.jti, summary: claims.summary, action: action.data };
+    if (action.data.op === "place_order" && (typeof claims.cartHash !== "string" || !claims.cartHash)) return null;
+    return {
+      typ: "action",
+      sub: claims.sub,
+      exp: claims.exp,
+      jti: claims.jti,
+      summary: claims.summary,
+      action: action.data,
+      cartHash: claims.cartHash,
+    };
   } catch {
     return null;
   }
+}
+
+/** Signed summary for this shopper, or nothing when the action id does not verify. */
+export function confirmedCard(userId: string, actionId: string, rawSecret: string): { actionId: string; summary: string } | undefined {
+  const claims = verifyAction(actionId, rawSecret);
+  if (!claims || claims.sub !== userId) return undefined;
+  return { actionId, summary: claims.summary };
 }
 
 async function summaryFor(userId: string, action: ShopAction): Promise<string | { error: string }> {
@@ -133,44 +181,67 @@ async function summaryFor(userId: string, action: ShopAction): Promise<string | 
     if (!order.cancellable) return { error: "not_cancellable" };
     return `Cancel order ${order.id} (${order.status}). Press Confirm to cancel it.`;
   }
-  return `Send this problem report: ${action.message.trim().slice(0, 140)}. Press Confirm to send it.`;
+  const shown = action.message.trim().slice(0, 500);
+  if (shown.length < 5) return { error: "invalid_body" };
+  const lines = await rememberedLines(userId);
+  if (!textAppearsIn(shown, lines)) return { error: "report_not_typed" };
+  return shown;
 }
 
 /** Signs a pending action. Does not change the cart, orders, or feedback. */
 export async function proposeAction(userId: string, action: ShopAction): Promise<PendingAction | { error: string }> {
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
+  const stored: ShopAction = action.op === "report_problem" ? { op: "report_problem", message: summary } : action;
+  const cartHash = action.op === "place_order" ? cartFingerprint(await getCart(userId)) : undefined;
   const claims: SignedAction = {
+    typ: "action",
     sub: userId,
     exp: Math.floor(Date.now() / 1000) + ACTION_TTL_SEC,
     jti: randomBytes(16).toString("base64url"),
     summary,
-    action,
+    action: stored,
+    ...(cartHash ? { cartHash } : {}),
   };
   await issueNonce(claims.jti, ACTION_TTL_SEC);
-  return { pending: true, actionId: sign(claims, secret()), summary };
+  return { pending: true, actionId: signActionToken(claims, secret()), summary };
 }
 
 function cartLine(prefix: string, cart: CartSnapshot): string {
   return `${prefix} Cart total ${money(cart.totalCents)}.`;
 }
 
-/** Checks the signature, the shopper, and one-time use, then writes. */
+/** Checks the signature, the shopper, and one-time use, then writes. The nonce is spent only after the write succeeds. */
 export async function commitAction(userId: string, actionId: string, shopper: Shopper): Promise<CommitResult> {
   const claims = verifyAction(actionId, secret());
   if (!claims || claims.sub !== userId) return fail(403, "invalid_action", "That confirmation is not valid.");
-  if (claims.action.op === "apply_coupon") {
-    const lines = await rememberedLines(userId);
-    if (!codeAppearsIn(claims.action.code, lines)) {
-      return fail(400, "coupon_not_typed", "Type the coupon code in the chat, then ask again.");
+  const lines = await rememberedLines(userId);
+  if (claims.action.op === "apply_coupon" && !codeAppearsIn(claims.action.code, lines)) {
+    return fail(400, "coupon_not_typed", "Type the coupon code in the chat, then ask again.");
+  }
+  if (claims.action.op === "report_problem") {
+    if (!textAppearsIn(claims.action.message, lines)) {
+      return fail(400, "report_not_typed", "The report must be text you typed in this chat.");
+    }
+    if (await tooManyFeedbackReports(userId)) {
+      return fail(429, "rate_limited", "Too many reports. Try again in a little while.");
     }
   }
-  if (claims.action.op === "report_problem" && (await tooManyFeedbackReports(userId))) {
-    return fail(429, "rate_limited", "Too many reports. Try again in a little while.");
+  if (claims.action.op === "place_order") {
+    const cart = await getCart(userId);
+    if (cartFingerprint(cart) !== claims.cartHash) {
+      return fail(409, "cart_changed", "Your cart changed. Ask again to place the order.");
+    }
   }
-  if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
+  if (!(await noncePending(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
 
-  const action = claims.action;
+  const outcome = await perform(userId, claims.action, shopper);
+  if (!outcome.ok) return outcome;
+  await consumeNonce(claims.jti);
+  return outcome;
+}
+
+async function perform(userId: string, action: ShopAction, shopper: Shopper): Promise<CommitResult> {
   if (action.op === "add_to_cart") {
     const result = await addToCart(userId, action.productId, action.qty ?? 1);
     if ("error" in result) return writeError(result);

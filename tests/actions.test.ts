@@ -15,6 +15,7 @@ vi.mock("@/lib/upstash", () => ({
   issueNonce: async (jti: string) => {
     nonces.ids.add(jti);
   },
+  noncePending: async (jti: string) => nonces.ids.has(jti),
   consumeNonce: async (jti: string) => {
     if (!nonces.ids.has(jti)) return false;
     nonces.ids.delete(jti);
@@ -136,9 +137,11 @@ describe("confirm actions", () => {
   });
 
   it("rejects another shopper's confirm and files a report only after confirm", async () => {
+    const message = "Add to cart does nothing for the Canvas Tote Bag.";
+    lines.text = [message];
     const pending = await proposeAction("auth0|shopper", {
       op: "report_problem",
-      message: "Add to cart does nothing for the Canvas Tote Bag.",
+      message,
     });
     if (!("actionId" in pending)) throw new Error("expected pending");
     const other = await commitAction("auth0|other", pending.actionId, { ...shopper, id: "auth0|other" });
@@ -152,10 +155,67 @@ describe("confirm actions", () => {
     expect(db.meta.cart).toBeUndefined();
   });
 
-  it("reads a pending action from the agent tool result", () => {
-    const found = pendingFromEvents([
-      { type: "action.result", data: { output: { pending: true, actionId: "a.b", summary: "Add 1 mug" } } },
-    ]);
-    expect(found).toEqual({ actionId: "a.b", summary: "Add 1 mug" });
+  it("uses this turn's signed summary and ignores an older action and the agent's text", async () => {
+    const prepared = await proposeAction("auth0|shopper", { op: "add_to_cart", productId: "mug", qty: 1 });
+    if (!("actionId" in prepared)) throw new Error("expected pending");
+    const events = [
+      {
+        type: "action.result",
+        turnId: "turn-old",
+        data: { output: { pending: true, actionId: prepared.actionId, summary: "old card" } },
+      },
+      { type: "message.completed", turnId: "turn-old", data: { text: "old", finishReason: "stop" } },
+      { type: "message.completed", turnId: "turn-new", data: { text: "Added nothing yet.", finishReason: "stop" } },
+      {
+        type: "action.result",
+        turnId: "turn-new",
+        data: { output: { pending: true, actionId: prepared.actionId, summary: "AGENT TEXT" } },
+      },
+    ];
+    const found = pendingFromEvents(events, "auth0|shopper", "action-secret");
+    expect(found?.actionId).toBe(prepared.actionId);
+    expect(found?.summary).toBe(prepared.summary);
+    expect(found?.summary).not.toContain("AGENT TEXT");
+    expect(pendingFromEvents(events, "auth0|other", "action-secret")).toBeUndefined();
+    expect(
+      pendingFromEvents(
+        [
+          events[0]!,
+          { type: "message.completed", turnId: "turn-new", data: { text: "No change.", finishReason: "stop" } },
+        ],
+        "auth0|shopper",
+        "action-secret",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects place_order when the cart changed and keeps the confirmation", async () => {
+    db.meta = { cart: { items: [{ productId: "mug", qty: 1 }], coupon: null } };
+    const pending = await proposeAction("auth0|shopper", { op: "place_order" });
+    if (!("actionId" in pending)) throw new Error("expected pending");
+    db.meta = { cart: { items: [{ productId: "mug", qty: 2 }], coupon: null } };
+    const changed = await commitAction("auth0|shopper", pending.actionId, shopper);
+    expect(changed).toMatchObject({
+      ok: false,
+      error: "cart_changed",
+      message: "Your cart changed. Ask again to place the order.",
+    });
+    expect(nonces.ids.size).toBe(1);
+  });
+
+  it("shows the typed report text, capped at 500 characters", async () => {
+    const text = "Add to cart does nothing for the Canvas Tote Bag.";
+    lines.text = [text];
+    const pending = await proposeAction("auth0|shopper", { op: "report_problem", message: text });
+    expect(pending).toMatchObject({ pending: true, summary: text });
+    const invented = await proposeAction("auth0|shopper", {
+      op: "report_problem",
+      message: "The warehouse is closed on Sundays.",
+    });
+    expect(invented).toEqual({ error: "report_not_typed" });
+    const long = `${"a".repeat(500)} extra that was not typed`;
+    lines.text = ["a".repeat(500)];
+    const capped = await proposeAction("auth0|shopper", { op: "report_problem", message: long });
+    expect(capped).toMatchObject({ pending: true, summary: "a".repeat(500) });
   });
 });
