@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { addToCart, removeFromCart } from "@/lib/store-db";
-import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
+import { addToCart, removeFromCart } from "@/lib/store-meta";
+import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 
 const Body = z
   .object({
@@ -26,7 +26,10 @@ async function change(req: Request, op: "add" | "remove") {
       op === "add"
         ? await addToCart(auth.userId, parsed.data.productId, qty)
         : await removeFromCart(auth.userId, parsed.data.productId, qty);
-    if ("error" in result) return NextResponse.json(result, { status: 400 });
+    if ("error" in result) {
+      if (result.error === "rate_limited") return rateLimited(result);
+      return NextResponse.json(result, { status: 400 });
+    }
     return NextResponse.json(result);
   } catch (err) {
     return dbFailure(err);

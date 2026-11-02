@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { cancelOrder } from "@/lib/store-db";
-import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
+import { cancelOrder } from "@/lib/store-meta";
+import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
   const auth = await requireShopper();
@@ -13,6 +13,7 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
 
   try {
     const result = await cancelOrder(auth.userId, id);
+    if ("error" in result && result.error === "rate_limited") return rateLimited(result);
     if ("error" in result && result.error === "not_found") {
       return NextResponse.json({ error: "not_found" }, { status: 404 });
     }
