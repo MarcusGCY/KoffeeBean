@@ -7,7 +7,6 @@ import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
 import { rememberUserLines } from "@/lib/upstash";
 
-export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const MAX_CHARS = 500;
