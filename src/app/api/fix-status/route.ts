@@ -1,6 +1,7 @@
 import { after, NextResponse } from "next/server";
 import { resumeOutstandingFixes } from "@/lib/fix";
 import { safeEqual } from "@/lib/github-signature";
+import { resumeOutstandingRepros } from "@/lib/repro-track";
 import { serverlessTrackBudgetMs } from "@/lib/run-status";
 
 // Hobby Fluid compute allows 300s, including work scheduled with after().
@@ -8,10 +9,10 @@ import { serverlessTrackBudgetMs } from "@/lib/run-status";
 export const maxDuration = 300;
 
 /**
- * Resume fix runs that outlived the previous function invocation.
+ * Resume fix runs and reproduction checks that outlived the previous invocation.
  * Vercel Cron GETs this daily (Hobby allows one run per day) with
- * `Authorization: Bearer $CRON_SECRET`. The approve handler and a slice
- * that is still pending POST the same URL so tracking continues immediately.
+ * `Authorization: Bearer $CRON_SECRET`. A slice that is still pending POSTs
+ * the same URL so tracking continues immediately.
  * The body of work runs in after() so a caller is not held for the slice.
  */
 async function handle(req: Request) {
@@ -33,8 +34,9 @@ async function handle(req: Request) {
   const budgetMs = serverlessTrackBudgetMs();
   after(async () => {
     try {
-      const results = await resumeOutstandingFixes({ issue, budgetMs });
-      console.log("[fix-status]", JSON.stringify(results));
+      const fixes = await resumeOutstandingFixes({ issue, budgetMs });
+      const repros = await resumeOutstandingRepros({ issue, budgetMs });
+      console.log("[fix-status]", JSON.stringify({ fixes, repros }));
     } catch (err) {
       console.error("[fix-status] failed", err);
     }

@@ -12,7 +12,6 @@
 
 # testing
 /coverage
-tests/repro/pending-*.test.ts
 
 # next.js
 /.next/

@@ -32,8 +32,8 @@ export async function POST(req: Request) {
   }
 
   // Triage runs after the response so the shopper is not kept waiting.
-  // On Vercel the callback must finish inside maxDuration. Triage polls
-  // only for that budget, then the server runs the reproduction test.
+  // On Vercel the callback must finish inside maxDuration. A reproduction
+  // check that is still running resumes from /api/fix-status, like a fix.
   after(async () => {
     try {
       await fileFeedback(feedback, reportedBy);

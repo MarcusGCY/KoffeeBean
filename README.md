@@ -8,11 +8,12 @@ Report a problem widget
   -> POST /api/feedback
   -> Cursor agent writes a failing test, then triages: duplicate of an open issue?
        yes -> comment on the existing issue (merged)
-       no  -> agent pushes a failing vitest test on its own branch
-            -> server runs that test against main
-                 fails -> GitHub issue (user-feedback, awaiting-review)
-                          body includes the test path and the failure output
-                 passes, or no test -> closed issue labeled cannot-reproduce
+       no  -> agent pushes tests/repro/*.test.ts on a beanbox-triage branch
+            -> GitHub Actions runs that file
+                 repro job fails -> issue (user-feedback, awaiting-review)
+                          body includes the test path, check link, and failure output
+                 passes, no test, or setup error -> closed issue labeled cannot-reproduce
+                 still running -> same resume path as fixes (webhook, /api/fix-status, cron)
   -> review request sent to the Grok bot (GROK_WEBHOOK_URL, optional GROK_WEBHOOK_AUTH)
   -> human taps Approve  -> GET /api/review (signed link)
        -> Grok webhook `fix_started` (issue number, title, url)
@@ -32,13 +33,17 @@ Report a problem widget
 
 ## Reproduce first
 
-Triage is a cloud agent that can edit the repo. For a new report it adds one failing vitest file under `tests/repro/`, commits it, and pushes that branch. The pull request comes later, from the fix agent. The server fetches the file and runs it with vitest against this checkout of main.
+Triage is a cloud agent that can edit the repo. For a new report it adds one failing vitest file under `tests/repro/`, commits it, and pushes a branch whose name contains `beanbox-triage`. The pull request comes later, from the fix agent.
 
-An `awaiting-review` issue is opened when that test fails. The body names the test path and includes the failure output, trimmed to 2000 characters. When the test passes, or no test file was produced, BeanBox closes an issue labeled `user-feedback` and `cannot-reproduce` and skips the review request.
+GitHub Actions workflow `repro` runs on that push. The `repro-setup` job installs dependencies. The `repro` job runs only the new `tests/repro/*.test.ts` file and, when vitest fails, emits a `REPRO_FAILED` annotation. The server reads those check runs from the GitHub Checks API.
+
+An `awaiting-review` issue is opened only when the `repro` check completed with conclusion `failure` and that annotation is present. The body names the test path, links to the check run, and includes the failure output trimmed to 2000 characters. A passing check, a missing test, or a setup failure (the `repro` job skipped, or it failed without `REPRO_FAILED`) is a closed `cannot-reproduce` issue and does not request review.
+
+If the check is still queued or running, the report is saved as an open issue labeled `repro-pending`. It then resumes the same way a fix does: the `check_run` webhook, `POST /api/fix-status`, and the daily cron. After 30 minutes with no result, the report is closed as `cannot-reproduce`.
 
 The fix agent copies that same test onto its pull request and makes it pass, with the original assertions still there. The merge link refuses while that file is missing from the pull request head.
 
-No new environment variable. Fetching the test uses `GITHUB_TOKEN` (Contents read, already required). Running it needs the `vitest` binary from `npm install` in this checkout, which `npm run dev` has. If vitest cannot be started, the error is logged and the report stops before an awaiting-review issue.
+The app token needs **Checks: read** in addition to the existing permissions. No new environment variable. The workflow uses GitHub's built-in token with contents read.
 
 ## Shop issues a customer can report
 
@@ -191,7 +196,7 @@ Revert itself needs **Contents** read/write (to commit on `main`) and **Issues**
 
 1. Log in and open the store.
 2. Click **Report a problem** and send one of the feedback lines in the table above.
-3. If the reproduction test fails on main, triage opens a GitHub issue and the Feedback Bot asks for review. Tap **Approve**.
+3. If the reproduction check fails, triage opens a GitHub issue and the Feedback Bot asks for review. Tap **Approve**.
 4. Watch the bot for fix status (`fix_started`, then `fix_completed` with the PR). The GitHub issue gets a comment too.
 5. When the bot shows **Merge fix**, tap it. Refresh the store after Vercel redeploys. Repeat with the other two reports; each one is a separate fix.
 
@@ -253,13 +258,14 @@ After a squash merge that this request performed (or the first time the issue is
 
 `sha` is the squash-merge commit. `summary` tells the bot that Vercel will redeploy `main` shortly. A failed `fix_merged` POST is logged and does not roll back the merge.
 
-Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ignored). BeanBox calls GraphQL `markPullRequestReadyForReview` with the pull request node id. GitHub's GraphQL guide says a fine-grained personal access token can call that API when it has **Pull requests: write** on the repository. This repo cannot call GitHub as the owner, so the route treats a rejected mutation as a failed merge: HTTP 403, the pull request stays a draft, and `error` tells the owner to add Pull requests: write. The token that can merge needs all three:
+Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ignored). BeanBox calls GraphQL `markPullRequestReadyForReview` with the pull request node id. GitHub's GraphQL guide says a fine-grained personal access token can call that API when it has **Pull requests: write** on the repository. This repo cannot call GitHub as the owner, so the route treats a rejected mutation as a failed merge: HTTP 403, the pull request stays a draft, and `error` tells the owner to add Pull requests: write. The token that can merge needs the first three. Reproduction checks also need Checks: read.
 
 | Fine-grained permission | Used for |
 |---|---|
 | Contents read/write | Squash-merge commit on `main`, and demo revert |
 | Pull requests read/write | Read the fix PR, squash-merge it, and `markPullRequestReadyForReview` |
 | Issues read/write | Comment, close, and label the feedback issue |
+| Checks read | Read the reproduction workflow's check runs and annotations |
 
 | Variable | Purpose |
 |---|---|
@@ -304,8 +310,9 @@ from whichever of these runs next:
 1. When `CRON_SECRET` is set, the deployment calls `POST /api/fix-status?issue=N` for another slice, up to 30 minutes total.
 2. `POST /api/github/webhook` on `pull_request` (`opened`, `synchronize`, `reopened`, `closed`) resumes
    the issue named in the PR (`Fixes #N`) or linked from the cloud agent's `beanboxIssue` metadata.
+   The same route on `check_run` `completed` for `repro` or `repro-setup` resumes a `repro-pending` report.
 3. Vercel Cron `GET /api/fix-status` once a day (`0 12 * * *` in `vercel.json`) picks up a run whose
-   earlier slice never chained. Hobby cron cannot run more often than that; it is only the backstop.
+   earlier slice never chained, including a reproduction check that is still pending. Hobby cron cannot run more often than that; it is only the backstop.
 
 `fix_started` is unchanged. `fix_completed` keeps its existing fields and adds `prNumber` and `mergeUrl` when a pull request in this repo was opened. `npm run dev` still tracks the run
 in-process and does not need the webhook or cron.
@@ -320,7 +327,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 |---|---|
 | `CURSOR_API_KEY` | Same value as local |
 | `GITHUB_REPO` | Same `owner/name` |
-| `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write. No new variable. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview` (taking a draft out of draft). Contents write also commits demo reverts. Issues write comments, closes, and labels. |
+| `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write, **Checks** read. No new variable. Checks read is how BeanBox sees the reproduction workflow. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview` (taking a draft out of draft). Contents write also commits demo reverts. Issues write comments, closes, and labels. |
 | `AUTH0_ROLES_CLAIM` | Leave unset. Delete `ADMIN_EMAILS` if a previous deploy set it. Set this only to override `https://beanbox/roles` |
 | `APPROVAL_SECRET` | Same signing secret (or a new one; old approve links would stop matching) |
 | `APP_URL` | **Change** to the production origin, `https://<production-host>` (no trailing slash) |
@@ -361,7 +368,7 @@ On the repo (`GITHUB_REPO`), add one webhook:
 | Payload URL | `https://<production-host>/api/github/webhook` |
 | Content type | `application/json` |
 | Secret | the `GITHUB_WEBHOOK_SECRET` value |
-| Events | Pull requests |
+| Events | Pull requests, and Check runs |
 
 The route checks `X-Hub-Signature-256` and ignores deliveries for any other repository.
 

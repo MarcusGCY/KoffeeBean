@@ -18,8 +18,8 @@ const PREVIEW_MAX = 160;
 
 /**
  * Ask a Cursor agent to decide whether a feedback report duplicates an open
- * issue. A new bug is a failing vitest file pushed on the agent's branch.
- * The server runs that file against main before opening an issue.
+ * issue. A new bug is a failing vitest file pushed on a beanbox-triage branch.
+ * GitHub Actions runs that file; the server reads the check before opening an issue.
  *
  * wait() can report a false error or hang when the run is launched from
  * Next.js after(). reconcileRunResult confirms the terminal status first.
@@ -96,7 +96,7 @@ function prompt(feedback: string, open: OpenIssue[]): string {
     "If it is a new bug (action \"create\"):",
     "- Add one self-contained vitest test at tests/repro/<short-slug>.test.ts that fails on current main and reproduces the report.",
     "- Import app code with the @/ alias. Do not change files under src/ or src/data.",
-    "- Commit and push only that test. Do not open a pull request.",
+    "- Commit and push only that test on a branch whose name contains beanbox-triage (for example beanbox-triage/tote-add). Do not open a pull request.",
     "- Set testPath to that file.",
     "",
     "If it is a duplicate (action \"merge\"), do not add a test and omit testPath.",

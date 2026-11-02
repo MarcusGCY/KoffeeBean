@@ -128,7 +128,7 @@ export async function resumeOutstandingFixes(opts?: { issue?: number; budgetMs?:
   for (const number of numbers) {
     const remaining = deadline - Date.now();
     if (remaining < 1000) {
-      await scheduleNextCheck(number);
+      await continueTracking(number);
       results.push({ number, action: "deferred" });
       continue;
     }
@@ -153,7 +153,7 @@ async function finishIfExpired(
   prUrl?: string,
 ): Promise<Extract<ResumeOutcome, { action: "pending" | "completed" }>> {
   if (Date.now() - ref.startedAt < POLL_CAP_MS - 500) {
-    await scheduleNextCheck(issue.number);
+    await continueTracking(issue.number);
     return { action: "pending" };
   }
   const published = await publishFixResult(
@@ -232,13 +232,14 @@ function attachPr(result: RunResult, prUrl: string | undefined): RunResult {
  * Ask this deployment to keep polling. The next request returns immediately
  * and continues in `after()`, so this call does not stack function time.
  * No-op off Vercel, or when CRON_SECRET / the public origin is missing.
+ * Fixes and pending reproduction checks both resume from `/api/fix-status`.
  */
-async function scheduleNextCheck(number: number): Promise<void> {
+export async function continueTracking(number: number): Promise<void> {
   if (!onVercel()) return;
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     console.warn(
-      `[fix] #${number} still running; set CRON_SECRET so tracking continues. The pull_request webhook can also finish it.`,
+      `[fix] #${number} still running; set CRON_SECRET so tracking continues. The pull_request or check_run webhook can also finish it.`,
     );
     return;
   }

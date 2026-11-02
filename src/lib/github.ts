@@ -7,6 +7,7 @@ export const LABEL_APPROVED = "approved";
 export const LABEL_FIXING = "cursor-fixing";
 export const LABEL_MERGED = "merged";
 export const LABEL_CANNOT_REPRODUCE = "cannot-reproduce";
+export const LABEL_REPRO_PENDING = "repro-pending";
 
 const gh = () => new Octokit({ auth: env("GITHUB_TOKEN") });
 
@@ -32,6 +33,57 @@ export async function createIssue(
     owner, repo: r, title, body, labels,
   });
   return { number: res.data.number, url: res.data.html_url };
+}
+
+export type CiCheck = {
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+  text: string;
+};
+
+/**
+ * Latest check run of `name` on `ref`, or null when the ref or the check
+ * does not exist yet. Failure annotations are included in `text`.
+ */
+export async function latestCheck(ref: string, name: string): Promise<CiCheck | null> {
+  const { owner, repo: r } = repo();
+  const client = gh();
+  let run: Awaited<ReturnType<Octokit["checks"]["listForRef"]>>["data"]["check_runs"][number] | undefined;
+  try {
+    const res = await client.checks.listForRef({
+      owner, repo: r, ref, check_name: name, filter: "latest", per_page: 1,
+    });
+    run = res.data.check_runs[0];
+  } catch (error) {
+    if (githubHttpStatus(error) === 404) return null;
+    throw error;
+  }
+  if (!run) return null;
+  const parts = [run.output?.title, run.output?.summary, run.output?.text];
+  if (run.status === "completed" && run.conclusion === "failure") {
+    try {
+      const notes = await client.checks.listAnnotations({
+        owner, repo: r, check_run_id: run.id, per_page: 50,
+      });
+      for (const note of notes.data) {
+        if (note.message) parts.push(note.message);
+      }
+    } catch (error) {
+      if (githubHttpStatus(error) !== 404) throw error;
+    }
+  }
+  return {
+    status: run.status,
+    conclusion: run.conclusion,
+    htmlUrl: run.html_url || run.details_url || "",
+    text: parts.filter((part): part is string => Boolean(part && part.trim())).join("\n"),
+  };
+}
+
+export async function updateIssue(number: number, body: string): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().issues.update({ owner, repo: r, issue_number: number, body });
 }
 
 /** File text at `ref`, or null when GitHub has no such file. */
@@ -179,9 +231,18 @@ export function githubHttpStatus(error: unknown): number | undefined {
 
 /** Open issues the fix pipeline still has to finish. */
 export async function listFixingIssueNumbers(): Promise<number[]> {
+  return listOpenIssueNumbers(LABEL_FIXING);
+}
+
+/** Reports whose reproduction check has not finished. */
+export async function listReproPendingIssueNumbers(): Promise<number[]> {
+  return listOpenIssueNumbers(LABEL_REPRO_PENDING);
+}
+
+async function listOpenIssueNumbers(label: string): Promise<number[]> {
   const { owner, repo: r } = repo();
   const res = await gh().issues.listForRepo({
-    owner, repo: r, state: "open", labels: LABEL_FIXING, per_page: 50,
+    owner, repo: r, state: "open", labels: label, per_page: 50,
   });
   return res.data.filter((i) => !i.pull_request).map((i) => i.number);
 }
