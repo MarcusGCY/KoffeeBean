@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+support-agent/node_modules
+support-agent/.agent-sdk
 /.pnp
 .pnp.*
 .yarn/*

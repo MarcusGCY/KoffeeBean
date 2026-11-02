@@ -22,6 +22,9 @@ const SECRET_ENV = [
   "GITHUB_WEBHOOK_SECRET",
   "OPENAI_API_KEY",
   "DATABASE_URL",
+  "AUTH0_MGMT_CLIENT_SECRET",
+  "SUPPORT_AGENT_SECRET",
+  "SUPPORT_AGENT_ALIAS_TOKEN",
 ] as const;
 
 export const REPRO_MARKER = "beanbox-repro";

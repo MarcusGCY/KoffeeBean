@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCart } from "@/lib/store-db";
+import { getCart } from "@/lib/store-meta";
 import { dbFailure, requireShopper } from "@/lib/store-http";
 
 export async function GET() {
