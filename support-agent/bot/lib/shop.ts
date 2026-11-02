@@ -28,17 +28,39 @@ function asJson(value: unknown): Json {
   return null;
 }
 
-async function getJson(userId: string, path: string): Promise<Json> {
+async function shopFetch(userId: string, path: string, init?: RequestInit): Promise<Json> {
   const base = process.env.KOFFEEBEAN_URL?.trim().replace(/\/$/, "");
   const secret = process.env.SUPPORT_AGENT_SECRET?.trim();
   if (!base || !secret) return { error: "shop_unavailable" };
   const token = signSupportToken(userId, secret);
   const response = await fetch(`${base}${path}`, {
-    headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+    ...init,
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+      ...(init?.body ? { "content-type": "application/json" } : {}),
+    },
   });
   const body = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) return { error: "shop_error", status: response.status };
+  if (!response.ok) {
+    if (body && typeof body === "object" && !Array.isArray(body)) return asJson(body);
+    return { error: "shop_error", status: response.status };
+  }
   return asJson(body);
+}
+
+async function getJson(userId: string, path: string): Promise<Json> {
+  return shopFetch(userId, path);
+}
+
+type ProposeBody = { [key: string]: Json };
+
+/** Asks the shop for a signed confirm action. The shop does not change state here. */
+function propose(auth: Principal, input: { userId?: unknown } | null | undefined, body: ProposeBody): Promise<Json> {
+  return shopFetch(customerId(auth, input), "/api/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function faqAnswer(auth: Principal, input: { userId?: unknown; question?: unknown }): Promise<Json> {
@@ -56,6 +78,52 @@ export function viewCart(auth: Principal, input: { userId?: unknown }): Promise<
 
 export function listMyOrders(auth: Principal, input: { userId?: unknown }): Promise<Json> {
   return getJson(customerId(auth, input), "/api/agent/orders");
+}
+
+export function proposeAddToCart(
+  auth: Principal,
+  input: { userId?: unknown; productId?: unknown; qty?: unknown },
+): Promise<Json> {
+  const productId = typeof input.productId === "string" ? input.productId.trim() : "";
+  const qty = typeof input.qty === "number" ? input.qty : 1;
+  return propose(auth, input, { op: "add_to_cart", productId, qty });
+}
+
+export function proposeUpdateQty(
+  auth: Principal,
+  input: { userId?: unknown; productId?: unknown; qty?: unknown },
+): Promise<Json> {
+  const productId = typeof input.productId === "string" ? input.productId.trim() : "";
+  const qty = typeof input.qty === "number" ? input.qty : 0;
+  return propose(auth, input, { op: "update_cart_qty", productId, qty });
+}
+
+export function proposeRemoveFromCart(
+  auth: Principal,
+  input: { userId?: unknown; productId?: unknown; qty?: unknown },
+): Promise<Json> {
+  const productId = typeof input.productId === "string" ? input.productId.trim() : "";
+  const qty = typeof input.qty === "number" ? input.qty : 1;
+  return propose(auth, input, { op: "remove_from_cart", productId, qty });
+}
+
+export function proposeApplyCoupon(auth: Principal, input: { userId?: unknown; code?: unknown }): Promise<Json> {
+  const code = typeof input.code === "string" ? input.code.trim() : "";
+  return propose(auth, input, { op: "apply_coupon", code });
+}
+
+export function proposePlaceOrder(auth: Principal, input: { userId?: unknown }): Promise<Json> {
+  return propose(auth, input, { op: "place_order" });
+}
+
+export function proposeCancelOrder(auth: Principal, input: { userId?: unknown; orderId?: unknown }): Promise<Json> {
+  const orderId = typeof input.orderId === "string" ? input.orderId.trim() : "";
+  return propose(auth, input, { op: "cancel_order", orderId });
+}
+
+export function proposeReportProblem(auth: Principal, input: { userId?: unknown; message?: unknown }): Promise<Json> {
+  const message = typeof input.message === "string" ? input.message.trim() : "";
+  return propose(auth, input, { op: "report_problem", message });
 }
 
 export function getOrderStatus(

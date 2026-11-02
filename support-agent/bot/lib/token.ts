@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 
 const TTL_SEC = 300;
 
-type Claims = { sub: string; exp: number };
+type Claims = { typ: "support"; sub: string; exp: number };
 
 function safeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -19,7 +19,7 @@ function safeEqual(a: string, b: string): boolean {
 export function signSupportToken(userId: string, secret: string, nowMs = Date.now()): string {
   const sub = userId.trim();
   if (!sub || !secret) throw new Error("support_token");
-  const claims: Claims = { sub, exp: Math.floor(nowMs / 1000) + TTL_SEC };
+  const claims: Claims = { typ: "support", sub, exp: Math.floor(nowMs / 1000) + TTL_SEC };
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
   const sig = createHmac("sha256", secret).update(payload).digest("base64url");
   return `${payload}.${sig}`;
@@ -40,6 +40,7 @@ export function verifySupportToken(
   if (!safeEqual(sig, expected)) return null;
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<Claims>;
+    if (claims.typ !== "support") return null;
     if (typeof claims.sub !== "string" || !claims.sub.trim()) return null;
     if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp)) return null;
     if (claims.exp * 1000 <= nowMs) return null;

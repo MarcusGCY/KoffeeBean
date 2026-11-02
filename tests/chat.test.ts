@@ -10,6 +10,26 @@ vi.mock("@/lib/shopper", () => ({
 
 const bags = vi.hoisted(() => ({ meta: new Map<string, Record<string, unknown>>() }));
 
+const steps = vi.hoisted(() => ({ list: [] as string[], lines: [] as string[], counts: new Map<string, number>() }));
+
+vi.mock("@/lib/upstash", () => ({
+  takeChatSlot: async (userId: string) => {
+    steps.list.push("limit");
+    const next = (steps.counts.get(userId) ?? 0) + 1;
+    steps.counts.set(userId, next);
+    if (userId === "auth0|redis-down") {
+      const { StoreUnavailableError } = await import("@/lib/store-error");
+      throw new StoreUnavailableError();
+    }
+    if (next > 20) return { ok: false, retryAfterSec: 30 };
+    return { ok: true };
+  },
+  rememberUserLines: async (_userId: string, lines: string[]) => {
+    steps.list.push("remember");
+    steps.lines.push(...lines);
+  },
+}));
+
 vi.mock("@/lib/auth0-mgmt", () => ({
   getAppMetadata: async (userId: string) => structuredClone(bags.meta.get(userId) ?? {}),
   patchAppMetadata: async (userId: string, patch: Record<string, unknown>) => {
@@ -56,6 +76,7 @@ function installFetch(stale = false) {
       const url = String(input);
       const method = init?.method ?? "GET";
       const headers = new Headers(init?.headers);
+      steps.list.push("agent");
       seen.push({
         url,
         method,
@@ -93,6 +114,9 @@ describe("POST /api/chat", () => {
     delete process.env.SUPPORT_AGENT_ALIAS_TOKEN;
     bags.meta.clear();
     seen.length = 0;
+    steps.list.length = 0;
+    steps.lines.length = 0;
+    steps.counts.clear();
     vi.mocked(getShopper).mockReset();
     installFetch();
   });
@@ -199,6 +223,18 @@ describe("POST /api/chat", () => {
     const logged = errorSpy.mock.calls.flat().map(String).join("\n");
     expect(logged).not.toContain("test-secret");
     expect(logged).not.toContain(jailbreak);
+    expect(steps.list.indexOf("limit")).toBeGreaterThanOrEqual(0);
+    expect(steps.list.indexOf("limit")).toBeLessThan(steps.list.indexOf("agent"));
+    expect(steps.list.indexOf("remember")).toBeLessThan(steps.list.indexOf("agent"));
+    expect(steps.lines).toContain(jailbreak);
+    expect(steps.lines.join("\n")).not.toContain("assistant-history-marker");
+  });
+
+  it("returns 503 when the chat counter is unavailable and does not call the agent", async () => {
+    signIn("auth0|redis-down");
+    const res = await post({ messages: [{ role: "user", content: "Hello" }] });
+    expect(res.status).toBe(503);
+    expect(seen).toHaveLength(0);
   });
 
   it("sends the alias token when it is set", async () => {
