@@ -1,5 +1,5 @@
 import { bearerAuth, httpChannel } from "@grok/agent-sdk/channels";
-import { verifySupportToken } from "../lib/token";
+import { verifySupportToken } from "../../../src/lib/support-token";
 
 /**
  * Loopback sessions only. The Next route signs the shopper id with APPROVAL_SECRET.

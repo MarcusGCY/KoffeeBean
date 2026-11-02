@@ -226,16 +226,31 @@ async function openSession(
   return { sessionId: body.sessionId, continuationToken: body.continuationToken };
 }
 
-export async function askSupportAgent(turn: AgentTurn): Promise<AgentReply> {
+/** Stop the in-process run. The SDK maps this to run.cancel() so the turn stops billing. */
+async function stopSession(sessionId: string, userId: string): Promise<void> {
+  try {
+    const base = await localAgentUrl();
+    await fetch(`${base}/v1/session/${encodeURIComponent(sessionId)}/stop`, {
+      method: "POST",
+      headers: headers(userId),
+    });
+  } catch (err) {
+    console.error("[chat] stop failed", err instanceof Error ? err.name : "Error");
+  }
+}
+
+export async function askSupportAgent(turn: AgentTurn, timeoutMs = SUPPORT_RUN_MS): Promise<AgentReply> {
   if (!supportConfigured()) throw new Error("unconfigured");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SUPPORT_RUN_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let sessionId: string | undefined;
   try {
     const prior =
       turn.sessionId && turn.continuationToken
         ? { sessionId: turn.sessionId, continuationToken: turn.continuationToken }
         : undefined;
     const session = await openSession(turn.userId, turn.message, controller.signal, prior);
+    sessionId = session.sessionId;
     const done = await waitForReply(session.sessionId, turn.userId, controller.signal);
     return {
       reply: done.reply,
@@ -244,7 +259,10 @@ export async function askSupportAgent(turn: AgentTurn): Promise<AgentReply> {
       pendingAction: done.pendingAction,
     };
   } catch (err) {
-    if (timedOut(err, controller.signal)) throw new SupportTimeoutError();
+    if (timedOut(err, controller.signal)) {
+      if (sessionId) await stopSession(sessionId, turn.userId);
+      throw new SupportTimeoutError();
+    }
     throw err;
   } finally {
     clearTimeout(timer);
