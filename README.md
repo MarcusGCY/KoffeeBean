@@ -287,11 +287,9 @@ Cart and order write quotas stay on the `chat_limits` key: 30 cart writes an hou
 
 ## Support chat
 
-Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` is a proxy to the Cursor Agent SDK support agent in `support-agent/`. Read tools call back into this app for the approved FAQ (`content/faq.md`), the catalog, and this shopper's cart and orders. Write tools (`add_to_cart`, `update_cart_qty`, `remove_from_cart`, `apply_coupon`, `place_order`, `cancel_order`, `report_problem`) do not change state. Each one returns a pending action: a short summary and a server-signed action id bound to that shopper, expiring in 5 minutes, usable once. The chat shows **Confirm** and **Cancel**. Only Confirm calls `POST /api/chat/confirm`, which checks the signature, the shopper, and one-time use, then writes through `store-meta`. Prices come from the catalogue. A coupon is applied only when that code appears in a message the shopper typed in this chat. The bot does not list, reveal, or guess codes. `report_problem` files through the existing feedback path after Confirm, which starts reproduce-first triage. A short click-through is in `docs/demo.md`.
+Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` runs the Cursor Agent SDK support agent in this Next.js server. It does not call a hosted agent URL. `CURSOR_API_KEY` stays on the server. Read tools use the approved FAQ (`content/faq.md`), the catalog, and this shopper's cart and orders. The shopper id comes from the server session. Write tools (`add_to_cart`, `update_cart_qty`, `remove_from_cart`, `apply_coupon`, `place_order`, `cancel_order`, `report_problem`) do not change state. Each one returns a pending action signed with `APPROVAL_SECRET`, bound to that shopper, expiring in 5 minutes, and usable once. The chat shows **Confirm** and **Cancel**. Only Confirm calls `POST /api/chat/confirm`, which checks the signature, the shopper, and one-time use, then writes through `store-meta`. Prices come from the catalogue. A coupon is applied only when that code appears in a message the shopper typed in this chat. The bot does not list, reveal, or guess codes. `report_problem` files through the existing feedback path after Confirm, which starts reproduce-first triage. A short click-through is in `docs/demo.md`.
 
-The shop mints a short-lived HMAC token (`SUPPORT_AGENT_SECRET`) whose `userId` comes from the server session. The agent's bearer auth checks that token and sets the principal. Tools read that principal and ignore any user id in the model input. The same secret protects `/api/agent/*` and signs confirm actions.
-
-Set `SUPPORT_AGENT_URL` and `SUPPORT_AGENT_SECRET` in Vercel. Leave the secret empty in git. If either is missing, the bubble says support chat is unavailable. `SUPPORT_AGENT_ALIAS_TOKEN` is the alias token printed once by `agent-sdk deploy`. The proxy sends it as `X-Agent-Alias-Token` when it is set. Each shopper can send 20 messages an hour and 60 a day. Those counts live in Upstash, not in Auth0.
+The chat route allows 300 seconds. The agent run stops at 270 seconds and the bubble says the chat timed out. Each shopper can send 20 messages an hour and 60 a day. Those counts live in Upstash, not in Auth0. If `CURSOR_API_KEY` or `APPROVAL_SECRET` is missing, the bubble says support chat is unavailable.
 
 Chats are processed by Cursor's agent service. The app does not store the message text. Customers should not share personal details.
 
@@ -299,8 +297,7 @@ Chats are processed by Cursor's agent service. The app does not store the messag
 
 Production deploys from `main` through the Vercel GitHub integration. The app is a Next.js App Router
 project (`npm run build`). Set the Node.js version to 22.x (also declared in `package.json` `engines`).
-`@cursor/sdk` stays in `serverExternalPackages` so the server function loads it with Node rather than
-bundling it.
+`@cursor/sdk` and `@grok/agent-sdk` stay in `serverExternalPackages` so the server function loads them with Node rather than bundling them. The support chat route runs on the Node runtime.
 
 Vercel kills work inside `after()` when the function hits `maxDuration`. These routes export
 `maxDuration = 300`, the Hobby ceiling with Fluid compute. Triage and a fast fix can finish in that
@@ -345,9 +342,6 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `AUTH0_MGMT_CLIENT_SECRET` | Machine-to-machine client secret. Scopes `read:users` and `update:users_app_metadata`. Leave it empty in git |
 | `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL for chat quotas and one-time confirm actions. Leave it empty in git |
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. Leave it empty in git |
-| `SUPPORT_AGENT_URL` | HTTPS origin of the deployed `support-agent` (the URL `agent-sdk deploy` prints), with no trailing slash |
-| `SUPPORT_AGENT_SECRET` | Shared HMAC secret for the shopper token. Same value as the agent secret. Leave it empty in git |
-| `SUPPORT_AGENT_ALIAS_TOKEN` | Alias token printed once by the first `agent-sdk deploy`. Sent as `X-Agent-Alias-Token`. Leave it empty in git |
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.

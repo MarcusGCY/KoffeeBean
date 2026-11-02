@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { POST as prepare } from "@/app/api/agent/actions/route";
 import { POST as confirm } from "@/app/api/chat/confirm/route";
-import { signSupportToken } from "@/lib/support-token";
 import { CART_WRITE_HOUR_LIMIT } from "@/lib/limits";
 import { codeAppearsIn, commitAction, proposeAction, textAppearsIn } from "@/lib/pending-action";
 import { pendingFromEvents } from "@/lib/agent-chat";
@@ -65,17 +63,6 @@ vi.mock("next/server", async () => {
 
 const shopper = { id: "auth0|shopper", email: "ada@example.com", name: "Ada" };
 
-function agentRequest(body: unknown, userId = "auth0|shopper") {
-  return new Request("http://localhost/api/agent/actions", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${signSupportToken(userId, "action-secret")}`,
-    },
-    body: JSON.stringify(body),
-  });
-}
-
 function confirmRequest(actionId: string) {
   return new Request("http://localhost/api/chat/confirm", {
     method: "POST",
@@ -95,13 +82,13 @@ describe("confirm actions", () => {
     db.meta = {};
     db.pauseMs = 0;
     db.writes = 0;
-    process.env.SUPPORT_AGENT_SECRET = "action-secret";
+    process.env.APPROVAL_SECRET = "action-secret";
     process.env.APP_BASE_URL = "http://localhost:3000";
     vi.mocked(getShopper).mockResolvedValue(shopper);
   });
 
   afterEach(() => {
-    delete process.env.SUPPORT_AGENT_SECRET;
+    delete process.env.APPROVAL_SECRET;
     delete process.env.APP_BASE_URL;
   });
 
@@ -113,12 +100,9 @@ describe("confirm actions", () => {
   });
 
   it("prepares an add without writing, then confirm writes the catalogue price once", async () => {
-    const prepared = await prepare(agentRequest({ op: "add_to_cart", productId: "mug", qty: 2, userId: "auth0|other" }));
-    expect(prepared.status).toBe(400);
-
-    const open = await prepare(agentRequest({ op: "add_to_cart", productId: "mug", qty: 2 }));
-    expect(open.status).toBe(200);
-    const pending = (await open.json()) as { actionId: string; summary: string };
+    const open = await proposeAction("auth0|shopper", { op: "add_to_cart", productId: "mug", qty: 2 });
+    if (!("actionId" in open)) throw new Error("expected pending");
+    const pending = open;
     expect(pending.summary).toContain("$14.00");
     expect(pending.summary).not.toContain("999");
     expect(db.meta.cart).toBeUndefined();

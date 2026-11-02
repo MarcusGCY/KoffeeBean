@@ -4,6 +4,14 @@ import { getShopper } from "@/lib/shopper";
 import { verifySupportToken } from "@/lib/support-token";
 import { POST } from "@/app/api/chat/route";
 
+vi.mock("@grok/agent-sdk", () => ({
+  serve: async () => ({
+    url: "http://127.0.0.1:9",
+    agents: [{ url: "http://127.0.0.1:9", slug: "" }],
+    close: async () => {},
+  }),
+}));
+
 vi.mock("@/lib/shopper", () => ({
   getShopper: vi.fn(),
 }));
@@ -40,7 +48,8 @@ vi.mock("@/lib/auth0-mgmt", () => ({
   mgmtConfigured: () => true,
 }));
 
-const envKeys = ["SUPPORT_AGENT_URL", "SUPPORT_AGENT_SECRET", "SUPPORT_AGENT_ALIAS_TOKEN"] as const;
+const LOCAL = "http://127.0.0.1:9";
+const envKeys = ["CURSOR_API_KEY", "APPROVAL_SECRET"] as const;
 const saved: Partial<Record<(typeof envKeys)[number], string | undefined>> = {};
 const seen: { url: string; method: string; auth: string | null; alias: string | null; body: string | null }[] = [];
 
@@ -109,9 +118,8 @@ function installFetch(stale = false) {
 describe("POST /api/chat", () => {
   beforeEach(() => {
     for (const key of envKeys) saved[key] = process.env[key];
-    process.env.SUPPORT_AGENT_URL = "https://agent.example";
-    process.env.SUPPORT_AGENT_SECRET = "test-secret";
-    delete process.env.SUPPORT_AGENT_ALIAS_TOKEN;
+    process.env.CURSOR_API_KEY = "cursor-test";
+    process.env.APPROVAL_SECRET = "test-secret";
     bags.meta.clear();
     seen.length = 0;
     steps.list.length = 0;
@@ -134,15 +142,15 @@ describe("POST /api/chat", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("returns 503 when the agent URL or secret is missing and does not call out", async () => {
+  it("returns 503 when the Cursor key or approval secret is missing and does not call out", async () => {
     signIn("auth0|no-key");
-    delete process.env.SUPPORT_AGENT_URL;
-    const missingUrl = await post({ messages: [{ role: "user", content: "What beans do you sell?" }] });
-    expect(missingUrl.status).toBe(503);
-    expect(await missingUrl.json()).toEqual({ error: "unavailable" });
+    delete process.env.CURSOR_API_KEY;
+    const missingKey = await post({ messages: [{ role: "user", content: "What beans do you sell?" }] });
+    expect(missingKey.status).toBe(503);
+    expect(await missingKey.json()).toEqual({ error: "unavailable" });
 
-    process.env.SUPPORT_AGENT_URL = "https://agent.example";
-    delete process.env.SUPPORT_AGENT_SECRET;
+    process.env.CURSOR_API_KEY = "cursor-test";
+    delete process.env.APPROVAL_SECRET;
     const missingSecret = await post({ messages: [{ role: "user", content: "What beans do you sell?" }] });
     expect(missingSecret.status).toBe(503);
     expect(seen).toHaveLength(0);
@@ -202,7 +210,7 @@ describe("POST /api/chat", () => {
       continuationToken: "tok-1",
     });
 
-    const start = seen.find((call) => call.method === "POST" && call.url === "https://agent.example/v1/session");
+    const start = seen.find((call) => call.method === "POST" && call.url === `${LOCAL}/v1/session`);
     expect(start?.body).toBe(JSON.stringify({ message: jailbreak }));
     expect(start?.body).not.toContain("assistant-history-marker");
     expect(start?.alias).toBeNull();
@@ -217,7 +225,7 @@ describe("POST /api/chat", () => {
     });
     expect(second.status).toBe(200);
     expect(await second.json()).toMatchObject({ continuationToken: "tok-2" });
-    const follow = seen.find((call) => call.url === "https://agent.example/v1/session/ses_1");
+    const follow = seen.find((call) => call.url === `${LOCAL}/v1/session/ses_1`);
     expect(follow?.body).toBe(JSON.stringify({ continuationToken: "tok-1", message: "And the mug?" }));
 
     const logged = errorSpy.mock.calls.flat().map(String).join("\n");
@@ -237,13 +245,19 @@ describe("POST /api/chat", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("sends the alias token when it is set", async () => {
-    signIn("auth0|alias");
-    process.env.SUPPORT_AGENT_ALIAS_TOKEN = "alias-token";
-    const res = await post({ messages: [{ role: "user", content: "Hours?" }] });
-    expect(res.status).toBe(200);
-    expect(seen[0]?.alias).toBe("alias-token");
-    expect(seen[0]?.body).not.toContain("alias-token");
+  it("returns 504 when the in-process agent run is aborted", async () => {
+    signIn("auth0|slow");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        throw err;
+      }),
+    );
+    const res = await post({ messages: [{ role: "user", content: "Hello" }] });
+    expect(res.status).toBe(504);
+    expect(await res.json()).toEqual({ error: "Support chat timed out. Please try again." });
   });
 
   it("opens a new session when the continuation token is stale", async () => {
@@ -256,8 +270,8 @@ describe("POST /api/chat", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ sessionId: "ses_1", continuationToken: "tok-1" });
-    expect(seen.map((call) => call.url)).toContain("https://agent.example/v1/session/ses_old");
-    expect(seen.map((call) => call.url)).toContain("https://agent.example/v1/session");
+    expect(seen.map((call) => call.url)).toContain(`${LOCAL}/v1/session/ses_old`);
+    expect(seen.map((call) => call.url)).toContain(`${LOCAL}/v1/session`);
   });
 
   it("returns 400 when more than 6 messages are sent", async () => {
