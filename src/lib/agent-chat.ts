@@ -194,10 +194,26 @@ async function waitForReply(
   throw new SupportTimeoutError();
 }
 
+const SESSION_ID_HEADER = "x-agent-serve-session-id";
+
+async function readOpenedSession(
+  response: Response,
+  note: (sessionId: string) => void,
+): Promise<{ sessionId: string; continuationToken: string }> {
+  const headerId = response.headers.get(SESSION_ID_HEADER)?.trim();
+  if (headerId) note(headerId);
+  const body = (await response.json()) as { sessionId?: unknown; continuationToken?: unknown };
+  const sessionId = (typeof body.sessionId === "string" && body.sessionId.trim()) || headerId;
+  if (!sessionId || typeof body.continuationToken !== "string") throw new Error("missing_session");
+  note(sessionId);
+  return { sessionId, continuationToken: body.continuationToken };
+}
+
 async function openSession(
   userId: string,
   message: string,
   signal: AbortSignal,
+  note: (sessionId: string) => void,
   prior?: { sessionId: string; continuationToken: string },
 ): Promise<{ sessionId: string; continuationToken: string }> {
   const base = await localAgentUrl();
@@ -210,20 +226,12 @@ async function openSession(
     );
     if (follow.status !== 409) {
       if (!follow.ok) throw new Error(`status_${follow.status}`);
-      const body = (await follow.json()) as { sessionId?: unknown; continuationToken?: unknown };
-      if (typeof body.sessionId !== "string" || typeof body.continuationToken !== "string") {
-        throw new Error("missing_session");
-      }
-      return { sessionId: body.sessionId, continuationToken: body.continuationToken };
+      return readOpenedSession(follow, note);
     }
   }
   const started = await postJson(`${base}/v1/session`, userId, { message }, signal);
   if (!started.ok) throw new Error(`status_${started.status}`);
-  const body = (await started.json()) as { sessionId?: unknown; continuationToken?: unknown };
-  if (typeof body.sessionId !== "string" || typeof body.continuationToken !== "string") {
-    throw new Error("missing_session");
-  }
-  return { sessionId: body.sessionId, continuationToken: body.continuationToken };
+  return readOpenedSession(started, note);
 }
 
 /** Stop the in-process run. The SDK maps this to run.cancel() so the turn stops billing. */
@@ -233,6 +241,7 @@ async function stopSession(sessionId: string, userId: string): Promise<void> {
     await fetch(`${base}/v1/session/${encodeURIComponent(sessionId)}/stop`, {
       method: "POST",
       headers: headers(userId),
+      signal: AbortSignal.timeout(5000),
     });
   } catch (err) {
     console.error("[chat] stop failed", err instanceof Error ? err.name : "Error");
@@ -242,15 +251,27 @@ async function stopSession(sessionId: string, userId: string): Promise<void> {
 export async function askSupportAgent(turn: AgentTurn, timeoutMs = SUPPORT_RUN_MS): Promise<AgentReply> {
   if (!supportConfigured()) throw new Error("unconfigured");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let sessionId: string | undefined;
+  let stopping: Promise<void> | undefined;
+  const stopOnce = () => {
+    if (!sessionId) return;
+    if (!stopping) stopping = stopSession(sessionId, turn.userId);
+    return stopping;
+  };
+  const note = (id: string) => {
+    sessionId = id;
+    if (controller.signal.aborted) void stopOnce();
+  };
+  const timer = setTimeout(() => {
+    controller.abort();
+    void stopOnce();
+  }, timeoutMs);
   try {
     const prior =
       turn.sessionId && turn.continuationToken
         ? { sessionId: turn.sessionId, continuationToken: turn.continuationToken }
         : undefined;
-    const session = await openSession(turn.userId, turn.message, controller.signal, prior);
-    sessionId = session.sessionId;
+    const session = await openSession(turn.userId, turn.message, controller.signal, note, prior);
     const done = await waitForReply(session.sessionId, turn.userId, controller.signal);
     return {
       reply: done.reply,
@@ -260,7 +281,7 @@ export async function askSupportAgent(turn: AgentTurn, timeoutMs = SUPPORT_RUN_M
     };
   } catch (err) {
     if (timedOut(err, controller.signal)) {
-      if (sessionId) await stopSession(sessionId, turn.userId);
+      await stopOnce();
       throw new SupportTimeoutError();
     }
     throw err;
