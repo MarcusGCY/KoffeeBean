@@ -211,8 +211,10 @@ describe("POST /api/chat", () => {
     });
 
     const start = seen.find((call) => call.method === "POST" && call.url === `${LOCAL}/v1/session`);
-    expect(start?.body).toBe(JSON.stringify({ message: jailbreak }));
-    expect(start?.body).not.toContain("assistant-history-marker");
+    const startBody = JSON.parse(start?.body ?? "{}") as { message?: string };
+    expect(startBody.message).toContain(jailbreak);
+    expect(startBody.message).toContain("Assistant: assistant-history-marker");
+    expect(startBody.message).not.toContain("test-secret");
     expect(start?.alias).toBeNull();
     const token = start?.auth?.replace(/^Bearer\s+/, "") ?? "";
     expect(verifySupportToken(token, "test-secret")?.userId).toBe("auth0|prompt");
@@ -224,9 +226,12 @@ describe("POST /api/chat", () => {
       continuationToken: "tok-1",
     });
     expect(second.status).toBe(200);
-    expect(await second.json()).toMatchObject({ continuationToken: "tok-2" });
-    const follow = seen.find((call) => call.url === `${LOCAL}/v1/session/ses_1`);
-    expect(follow?.body).toBe(JSON.stringify({ continuationToken: "tok-1", message: "And the mug?" }));
+    expect(await second.json()).toMatchObject({ reply: "We sell three coffees." });
+    expect(seen.map((call) => call.url)).not.toContain(`${LOCAL}/v1/session/ses_1`);
+    const fresh = seen.filter((call) => call.method === "POST" && call.url === `${LOCAL}/v1/session`);
+    expect(fresh).toHaveLength(2);
+    expect(fresh[1]?.body).toContain("And the mug?");
+    expect(fresh[1]?.body).toContain("We sell three coffees.");
 
     const logged = errorSpy.mock.calls.flat().map(String).join("\n");
     expect(logged).not.toContain("test-secret");
@@ -260,7 +265,7 @@ describe("POST /api/chat", () => {
     expect(await res.json()).toEqual({ error: "Support chat timed out. Please try again." });
   });
 
-  it("opens a new session when the continuation token is stale", async () => {
+  it("starts a fresh session when the client sends a dead continuation", async () => {
     signIn("auth0|stale");
     installFetch(true);
     const res = await post({
@@ -270,7 +275,7 @@ describe("POST /api/chat", () => {
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ sessionId: "ses_1", continuationToken: "tok-1" });
-    expect(seen.map((call) => call.url)).toContain(`${LOCAL}/v1/session/ses_old`);
+    expect(seen.map((call) => call.url)).not.toContain(`${LOCAL}/v1/session/ses_old`);
     expect(seen.map((call) => call.url)).toContain(`${LOCAL}/v1/session`);
   });
 

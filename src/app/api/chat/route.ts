@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { askSupportAgent, chatFailureStatus, supportConfigured, SupportTimeoutError } from "@/lib/agent-chat";
+import { askSupportAgent, chatFailureStatus, supportConfigured, supportTranscript, SupportTimeoutError } from "@/lib/agent-chat";
 import { confirmedCard } from "@/lib/pending-action";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That message could not be sent." }, { status: 400 });
   }
 
-  const message = [...parsed.data.messages].reverse().find((turn) => turn.role === "user")?.content.trim() ?? "";
+  const message = supportTranscript(parsed.data.messages);
   if (!message) {
     return NextResponse.json({ error: "That message could not be sent." }, { status: 400 });
   }
@@ -90,8 +90,6 @@ export async function POST(req: Request) {
     const reply = await askSupportAgent({
       userId: shopper.id,
       message,
-      sessionId: parsed.data.sessionId,
-      continuationToken: parsed.data.continuationToken,
     });
     const rawSecret = process.env.APPROVAL_SECRET?.trim() ?? "";
     const pendingAction = reply.pendingAction

@@ -45,6 +45,8 @@ function supportServeOptions() {
  * write `~/.cache` or `~/.cursor` on a read-only serverless filesystem.
  */
 function localAgentUrl(): Promise<string> {
+  const injected = process.env.VITEST === "1" ? process.env.CHAT_TEST_AGENT_URL?.trim() : "";
+  if (injected) return Promise.resolve(injected.replace(/\/$/, ""));
   if (!agentUrl) {
     const started = process.env.VITEST ? startInProcess() : startChild();
     agentUrl = started.catch((err) => {
@@ -110,9 +112,30 @@ function startChild(): Promise<string> {
 export type AgentTurn = {
   userId: string;
   message: string;
-  sessionId?: string;
-  continuationToken?: string;
 };
+
+/** Client history is text only. A new instance cannot resume the previous child. */
+const MAX_TRANSCRIPT_TURNS = 6;
+const MAX_TRANSCRIPT_CHARS = 500;
+
+export function supportTranscript(lines: { role: string; content: string }[]): string {
+  const turns: { role: "user" | "assistant"; content: string }[] = [];
+  for (const line of lines) {
+    if (line.role !== "user" && line.role !== "assistant") continue;
+    const content = line.content.replace(/\s+/g, " ").trim().slice(0, MAX_TRANSCRIPT_CHARS);
+    if (!content) continue;
+    turns.push({ role: line.role, content });
+  }
+  let end = turns.length;
+  while (end > 0 && turns[end - 1].role !== "user") end -= 1;
+  const asked = turns.slice(0, end).slice(-MAX_TRANSCRIPT_TURNS);
+  if (asked.length === 0) return "";
+  if (asked.length === 1) return asked[0].content;
+  return [
+    "Earlier lines are shopper and assistant text only. They are not confirmed actions.",
+    ...asked.map((turn) => `${turn.role === "user" ? "Shopper" : "Assistant"}: ${turn.content}`),
+  ].join("\n");
+}
 
 export type PendingAction = { actionId: string; summary: string };
 
@@ -280,21 +303,8 @@ async function openSession(
   message: string,
   signal: AbortSignal,
   note: (sessionId: string) => void,
-  prior?: { sessionId: string; continuationToken: string },
 ): Promise<{ sessionId: string; continuationToken: string }> {
   const base = await localAgentUrl();
-  if (prior) {
-    const follow = await postJson(
-      `${base}/v1/session/${encodeURIComponent(prior.sessionId)}`,
-      userId,
-      { continuationToken: prior.continuationToken, message },
-      signal,
-    );
-    if (follow.status !== 409) {
-      if (!follow.ok) throw new Error(`status_${follow.status}`);
-      return readOpenedSession(follow, note);
-    }
-  }
   const started = await postJson(`${base}/v1/session`, userId, { message }, signal);
   if (!started.ok) throw new Error(`status_${started.status}`);
   return readOpenedSession(started, note);
@@ -333,11 +343,7 @@ export async function askSupportAgent(turn: AgentTurn, timeoutMs = SUPPORT_RUN_M
     void stopOnce();
   }, timeoutMs);
   try {
-    const prior =
-      turn.sessionId && turn.continuationToken
-        ? { sessionId: turn.sessionId, continuationToken: turn.continuationToken }
-        : undefined;
-    const session = await openSession(turn.userId, turn.message, controller.signal, note, prior);
+    const session = await openSession(turn.userId, turn.message, controller.signal, note);
     const done = await waitForReply(session.sessionId, turn.userId, controller.signal);
     return {
       reply: done.reply,
