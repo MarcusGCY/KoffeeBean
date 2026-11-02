@@ -20,6 +20,8 @@ export function SupportChat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [continuationToken, setContinuationToken] = useState<string | null>(null);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -36,11 +38,21 @@ export function SupportChat() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: next }),
+        body: JSON.stringify({
+          messages: next,
+          ...(sessionId && continuationToken ? { sessionId, continuationToken } : {}),
+        }),
       });
-      const body = (await res.json().catch(() => null)) as { error?: string; reply?: string } | null;
+      const body = (await res.json().catch(() => null)) as {
+        error?: string;
+        reply?: string;
+        sessionId?: string;
+        continuationToken?: string;
+      } | null;
       if (res.ok && typeof body?.reply === "string" && body.reply) {
         const reply = body.reply;
+        if (typeof body.sessionId === "string") setSessionId(body.sessionId);
+        if (typeof body.continuationToken === "string") setContinuationToken(body.continuationToken);
         setTurns((current) => [...current, { role: "assistant" as const, content: reply }].slice(-6));
         return;
       }
@@ -94,7 +106,7 @@ export function SupportChat() {
             {notice && <p className="whitespace-pre-wrap break-words text-sm text-stone-700">{notice}</p>}
           </div>
           <p className="border-t border-stone-200 px-3 pt-2 text-xs text-stone-500">
-            {"Don't share personal info. Messages are processed by OpenAI."}
+            {"Don't share personal info. Chats are processed by Cursor's agent service."}
           </p>
           <form onSubmit={send} className="flex shrink-0 items-end gap-2 p-2">
             <label htmlFor="support-chat-input" className="sr-only">

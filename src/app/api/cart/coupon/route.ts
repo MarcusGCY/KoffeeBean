@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { applyCoupon, clearCoupon } from "@/lib/store-db";
-import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
+import { applyCoupon, clearCoupon } from "@/lib/store-meta";
+import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 
 const Body = z.object({
   code: z.string().trim().min(1).max(40),
@@ -19,7 +19,10 @@ export async function POST(req: Request) {
 
   try {
     const result = await applyCoupon(auth.userId, parsed.data.code);
-    if ("error" in result) return NextResponse.json({ error: "invalid_coupon" }, { status: 400 });
+    if ("error" in result) {
+      if (result.error === "rate_limited") return rateLimited(result);
+      return NextResponse.json({ error: "invalid_coupon" }, { status: 400 });
+    }
     return NextResponse.json(result);
   } catch (err) {
     return dbFailure(err);
@@ -35,7 +38,9 @@ export async function DELETE(req: Request) {
   if (payload instanceof NextResponse) return payload;
 
   try {
-    return NextResponse.json(await clearCoupon(auth.userId));
+    const result = await clearCoupon(auth.userId);
+    if ("error" in result) return rateLimited(result);
+    return NextResponse.json(result);
   } catch (err) {
     return dbFailure(err);
   }

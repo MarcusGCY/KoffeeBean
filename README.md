@@ -277,23 +277,25 @@ In the Feedback Bot routine panel, copy the webhook URL into `GROK_WEBHOOK_URL` 
 
 ## Server cart and orders
 
-Signed-in shoppers keep a cart and orders in Neon Postgres. Prices, names, and coupon checks come from `src/data/products.json` and `src/lib/coupons.ts`. Totals use the same 8% tax math as the shop. `DATABASE_URL` empty means the cart routes return 503 and the shop shows a short notice.
+Signed-in shoppers keep a cart and orders in Auth0 `app_metadata` (never `user_metadata`). Prices, names, and coupon checks come from `src/data/products.json` and `src/lib/coupons.ts`. Totals use the same math as the shop, including the planted demo bugs in `src/lib/cart.ts`. Quantity is checked in code and must be an integer from 1 to 99.
 
-Set it up like this:
+Auth0 merges only top-level keys. A patch sends the full value of each key it changes (`cart`, `orders`, `chat_limits`, `audit`) and leaves the other keys alone. Two requests that patch the same key are last-write-wins. That can drop a cart line or a quota stamp. Orders keep the newest 20. Audit keeps the newest 50 entries (`ts`, `tool`, `summary`, `outcome`).
 
-1. In Vercel, open the KoffeeBean project, go to Storage, then Marketplace, then Neon, and Create or Connect, so `DATABASE_URL` is added to all environments.
-2. Locally, run `vercel env pull .env.local` (or copy `DATABASE_URL`), then `npm run migrate`.
-3. Redeploy.
+The Management API uses a separate machine-to-machine application (not the Regular Web Application used for login). In the Auth0 dashboard, create an application of type **Machine to Machine**, authorize the **Auth0 Management API**, and grant only `read:users` and `update:users`. Copy that app's client id and client secret into `AUTH0_MGMT_CLIENT_ID` and `AUTH0_MGMT_CLIENT_SECRET`. The audience is `https://<AUTH0_DOMAIN>/api/v2/`. If those values are missing, cart routes return 503 and the shop shows a short notice.
 
-`npm run migrate` applies `migrations/*.sql` in order and records them in `schema_migrations`. It skips versions that are already applied.
+Chat quotas and cart/order write quotas share the `chat_limits` key: 20 chat messages an hour, 60 a day, 30 cart writes an hour, and 10 order writes an hour. A shopper who passes a limit gets HTTP 429 and a short message.
 
 ## Support chat
 
-Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` answers only from `content/faq.md`, in plain text. It does not look up orders, share coupon codes, file reports, or call any API besides OpenAI. If the answer is not in the FAQ, the bot points people to **Report a problem**.
+Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` is a proxy to the Cursor Agent SDK support agent in `support-agent/`. The agent answers only from its read-only tools. Those tools call back into this app (`/api/agent/*`) for the approved FAQ (`content/faq.md`), the catalog, and this shopper's cart and orders. It does not invent facts, reveal coupon codes, change the cart, or file reports. If the tools do not contain the answer, it points people to **Report a problem**.
 
-Set `OPENAI_API_KEY` in the Vercel project. Leave it empty in git. `CHAT_MODEL` defaults to `gpt-4.1-mini`. Each shopper can send 20 messages an hour and 60 a day. Those counts are kept in memory on each server instance (best effort, and not shared across instances). An Upstash limiter can replace that later.
+The shop mints a short-lived HMAC token (`SUPPORT_AGENT_SECRET`) whose `userId` comes from the server session. The agent's bearer auth checks that token and sets the principal. Tools read that principal and ignore any user id in the model input. The same secret protects `/api/agent/*`.
 
-Chat messages are sent to OpenAI to generate answers. The app does not store them. Customers should not share personal details.
+Set `SUPPORT_AGENT_URL` and `SUPPORT_AGENT_SECRET` in Vercel. Leave the secret empty in git. If either is missing, the bubble says support chat is unavailable. `SUPPORT_AGENT_ALIAS_TOKEN` is the alias token printed once by `agent-sdk deploy`. The proxy sends it as `X-Agent-Alias-Token` when it is set. Each shopper can send 20 messages an hour and 60 a day. Those counts are stored in Auth0 `app_metadata.chat_limits`.
+
+Chats are processed by Cursor's agent service. The app does not store the message text. Customers should not share personal details.
+
+Write tools (cart changes, coupons, place or cancel an order, and report a problem with a confirm step) are not in this version.
 
 ## Deploy to Vercel
 
@@ -341,9 +343,11 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `AUTH0_SECRET` | Same session secret (or a newly generated 32-byte hex) |
 | `GITHUB_WEBHOOK_SECRET` | **New.** Random string. The GitHub webhook secret below |
 | `CRON_SECRET` | **New.** Random string. Vercel sends it as `Authorization: Bearer <CRON_SECRET>` on the cron, and the app uses it to chain fix tracking |
-| `OPENAI_API_KEY` | **New.** FAQ support chat. Set the real key in Vercel. Leave it empty in git |
-| `DATABASE_URL` | **New.** Neon connection string. Add it from Storage → Marketplace → Neon so every environment gets it. Leave it empty in git |
-| `CHAT_MODEL` | Optional. Defaults to `gpt-4.1-mini` |
+| `AUTH0_MGMT_CLIENT_ID` | Machine-to-machine client id for Auth0 `app_metadata` (cart, orders, chat limits, audit). Leave it empty in git |
+| `AUTH0_MGMT_CLIENT_SECRET` | Machine-to-machine client secret. Scopes `read:users` and `update:users`. Leave it empty in git |
+| `SUPPORT_AGENT_URL` | HTTPS origin of the deployed `support-agent` (the URL `agent-sdk deploy` prints), with no trailing slash |
+| `SUPPORT_AGENT_SECRET` | Shared HMAC secret for the shopper token. Same value as the agent secret. Leave it empty in git |
+| `SUPPORT_AGENT_ALIAS_TOKEN` | Alias token printed once by the first `agent-sdk deploy`. Sent as `X-Agent-Alias-Token`. Leave it empty in git |
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.

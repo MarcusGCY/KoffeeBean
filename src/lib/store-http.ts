@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
+import { mgmtConfigured } from "./auth0-mgmt";
+import type { RateLimited } from "./limits";
 import { getShopper } from "./shopper";
 
 export async function requireShopper(): Promise<{ userId: string } | NextResponse> {
   const shopper = await getShopper();
   if (!shopper) return NextResponse.json({ error: "Sign in to shop." }, { status: 401 });
-  if (!process.env.DATABASE_URL?.trim()) {
+  if (!mgmtConfigured()) {
     return NextResponse.json({ error: "store_unavailable" }, { status: 503 });
   }
   return { userId: shopper.id };
+}
+
+export function rateLimited(result: RateLimited): NextResponse {
+  return NextResponse.json(
+    { error: "rate_limited", message: result.message },
+    { status: 429, headers: { "retry-after": String(result.retryAfterSec) } },
+  );
 }
 
 /** Writes must be JSON from the configured app origin. userId is never read from the body. */

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getOrder } from "@/lib/store-db";
+import { getOrder } from "@/lib/store-meta";
 import { dbFailure, requireShopper } from "@/lib/store-http";
 
 export async function GET(_req: Request, context: { params: Promise<{ id: string }> }) {

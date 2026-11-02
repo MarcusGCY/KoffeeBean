@@ -70,9 +70,13 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
         headers: body === undefined ? undefined : { "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
-      const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+      const payload = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
       if (res.status === 503 || payload?.error === "store_unavailable") {
         setUnavailable(true);
+        return null;
+      }
+      if (res.status === 429) {
+        setNotice(payload?.message || "Too many updates. Please try again in a little while.");
         return null;
       }
       if (!res.ok) {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canCancel, orderStatus } from "@/lib/order-status";
 import { getShopper } from "@/lib/shopper";
-import { addToCart, cancelOrder, getCart, getOrder, placeOrder } from "@/lib/store-db";
+import { addToCart, cancelOrder, getCart, getOrder, placeOrder } from "@/lib/store-meta";
 import { GET as getCartRoute } from "@/app/api/cart/route";
 import { POST as addItemRoute } from "@/app/api/cart/items/route";
 import { POST as placeOrderRoute } from "@/app/api/orders/route";
@@ -12,7 +12,7 @@ vi.mock("@/lib/shopper", () => ({
   getShopper: vi.fn(),
 }));
 
-vi.mock("@/lib/store-db", () => ({
+vi.mock("@/lib/store-meta", () => ({
   getCart: vi.fn(),
   addToCart: vi.fn(),
   removeFromCart: vi.fn(),
@@ -25,7 +25,9 @@ vi.mock("@/lib/store-db", () => ({
 }));
 
 const saved = {
-  DATABASE_URL: process.env.DATABASE_URL,
+  AUTH0_DOMAIN: process.env.AUTH0_DOMAIN,
+  AUTH0_MGMT_CLIENT_ID: process.env.AUTH0_MGMT_CLIENT_ID,
+  AUTH0_MGMT_CLIENT_SECRET: process.env.AUTH0_MGMT_CLIENT_SECRET,
   APP_BASE_URL: process.env.APP_BASE_URL,
 };
 
@@ -67,9 +69,13 @@ describe("order status", () => {
 
 describe("store API", () => {
   beforeEach(() => {
-    saved.DATABASE_URL = process.env.DATABASE_URL;
+    saved.AUTH0_DOMAIN = process.env.AUTH0_DOMAIN;
+    saved.AUTH0_MGMT_CLIENT_ID = process.env.AUTH0_MGMT_CLIENT_ID;
+    saved.AUTH0_MGMT_CLIENT_SECRET = process.env.AUTH0_MGMT_CLIENT_SECRET;
     saved.APP_BASE_URL = process.env.APP_BASE_URL;
-    process.env.DATABASE_URL = "postgres://unit-test";
+    process.env.AUTH0_DOMAIN = "tenant.example.auth0.com";
+    process.env.AUTH0_MGMT_CLIENT_ID = "mgmt-id";
+    process.env.AUTH0_MGMT_CLIENT_SECRET = "mgmt-secret";
     process.env.APP_BASE_URL = "http://localhost:3000";
     vi.mocked(getShopper).mockReset();
     vi.mocked(getCart).mockReset();
@@ -80,8 +86,12 @@ describe("store API", () => {
   });
 
   afterEach(() => {
-    if (saved.DATABASE_URL === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = saved.DATABASE_URL;
+    if (saved.AUTH0_DOMAIN === undefined) delete process.env.AUTH0_DOMAIN;
+    else process.env.AUTH0_DOMAIN = saved.AUTH0_DOMAIN;
+    if (saved.AUTH0_MGMT_CLIENT_ID === undefined) delete process.env.AUTH0_MGMT_CLIENT_ID;
+    else process.env.AUTH0_MGMT_CLIENT_ID = saved.AUTH0_MGMT_CLIENT_ID;
+    if (saved.AUTH0_MGMT_CLIENT_SECRET === undefined) delete process.env.AUTH0_MGMT_CLIENT_SECRET;
+    else process.env.AUTH0_MGMT_CLIENT_SECRET = saved.AUTH0_MGMT_CLIENT_SECRET;
     if (saved.APP_BASE_URL === undefined) delete process.env.APP_BASE_URL;
     else process.env.APP_BASE_URL = saved.APP_BASE_URL;
   });
@@ -160,6 +170,18 @@ describe("store API", () => {
     });
     expect(packed.status).toBe(200);
     expect(vi.mocked(cancelOrder)).toHaveBeenCalledWith("auth0|shopper", "BB-PACKED");
+
+    vi.mocked(addToCart).mockResolvedValue({
+      error: "rate_limited",
+      message: "Too many cart updates. Please try again in a little while.",
+      retryAfterSec: 12,
+    });
+    const limited = await addItemRoute(write("/api/cart/items", { productId: "mug", qty: 1 }));
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({
+      error: "rate_limited",
+      message: "Too many cart updates. Please try again in a little while.",
+    });
 
     vi.mocked(cancelOrder).mockResolvedValueOnce({ error: "not_cancellable" });
     const shipped = await cancelRoute(write("/api/orders/BB-SHIPPD/cancel", {}), {

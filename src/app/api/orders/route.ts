@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { listOrders, placeOrder } from "@/lib/store-db";
-import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
+import { listOrders, placeOrder } from "@/lib/store-meta";
+import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 
 export async function GET() {
   const auth = await requireShopper();
@@ -22,7 +22,10 @@ export async function POST(req: Request) {
 
   try {
     const result = await placeOrder(auth.userId);
-    if ("error" in result) return NextResponse.json({ error: "empty_cart" }, { status: 400 });
+    if ("error" in result) {
+      if (result.error === "rate_limited") return rateLimited(result);
+      return NextResponse.json({ error: "empty_cart" }, { status: 400 });
+    }
     return NextResponse.json(result);
   } catch (err) {
     return dbFailure(err);
