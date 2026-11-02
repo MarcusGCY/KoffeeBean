@@ -54,7 +54,7 @@ export async function fixIssue(number: number) {
         "",
         issue.body,
         "",
-        "Rules: make the smallest change that fixes the root cause. Run `npm test` and make sure tests/cart.test.ts and tests/images.test.ts pass. productImageUrl for a bean id must return the path that exists under public/ (bean files are in public/images/beans/).",
+        "Rules: make the smallest change that fixes the root cause. The issue lists a reproduction test (`beanbox-repro`). Copy that file from the triage branch into this PR, make that same test pass, and do not delete it, skip it, or weaken its assertions. Run `npm test` and make sure tests/cart.test.ts and tests/images.test.ts pass. productImageUrl for a bean id must return the path that exists under public/ (bean files are in public/images/beans/).",
         `Reference "Fixes #${number}" in the PR description.`,
       ].join("\n"),
     );

@@ -48,7 +48,7 @@ const issue = {
 
 function agentWith(wait: () => Promise<unknown>) {
   const close = vi.fn();
-  const send = vi.fn(async () => ({ id: RUN, agentId: AGENT, wait }));
+  const send = vi.fn(async (_prompt: string) => ({ id: RUN, agentId: AGENT, wait }));
   return { agentId: AGENT, send, close };
 }
 
@@ -105,6 +105,7 @@ describe("fixIssue", () => {
 
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
+    expect(handle.send.mock.calls[0][0]).toContain("do not delete it, skip it, or weaken its assertions");
     expect(getRun).not.toHaveBeenCalled();
     expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`, {
       prUrl: PR,

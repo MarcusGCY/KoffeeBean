@@ -6,6 +6,7 @@ export const LABEL_AWAITING = "awaiting-review";
 export const LABEL_APPROVED = "approved";
 export const LABEL_FIXING = "cursor-fixing";
 export const LABEL_MERGED = "merged";
+export const LABEL_CANNOT_REPRODUCE = "cannot-reproduce";
 
 const gh = () => new Octokit({ auth: env("GITHUB_TOKEN") });
 
@@ -21,12 +22,34 @@ export async function listOpenFeedbackIssues(): Promise<OpenIssue[]> {
     .map((i) => ({ number: i.number, title: i.title, body: i.body ?? "" }));
 }
 
-export async function createIssue(title: string, body: string) {
+export async function createIssue(
+  title: string,
+  body: string,
+  labels: string[] = [FEEDBACK_LABEL, LABEL_AWAITING],
+) {
   const { owner, repo: r } = repo();
   const res = await gh().issues.create({
-    owner, repo: r, title, body, labels: [FEEDBACK_LABEL, LABEL_AWAITING],
+    owner, repo: r, title, body, labels,
   });
   return { number: res.data.number, url: res.data.html_url };
+}
+
+/** File text at `ref`, or null when GitHub has no such file. */
+export async function getFile(path: string, ref: string): Promise<string | null> {
+  const { owner, repo: r } = repo();
+  try {
+    const res = await gh().repos.getContent({ owner, repo: r, path, ref });
+    const data = res.data;
+    if (Array.isArray(data) || data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string") {
+      return null;
+    }
+    const text = Buffer.from(data.content, "base64").toString("utf8");
+    if (text.includes("\0") || text.length > 100_000) return null;
+    return text;
+  } catch (error) {
+    if (githubHttpStatus(error) === 404) return null;
+    throw error;
+  }
 }
 
 /** Merge a duplicate report into an existing issue as a comment. */

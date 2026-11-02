@@ -6,24 +6,39 @@ store, and a pipeline triages them, asks a human to approve, then has Cursor fix
 ```
 Report a problem widget
   -> POST /api/feedback
-  -> Cursor agent (plan mode) triages: duplicate of an open issue?
+  -> Cursor agent writes a failing test, then triages: duplicate of an open issue?
        yes -> comment on the existing issue (merged)
-       no  -> create a GitHub issue (labels: user-feedback, awaiting-review)
+       no  -> agent pushes a failing vitest test on its own branch
+            -> server runs that test against main
+                 fails -> GitHub issue (user-feedback, awaiting-review)
+                          body includes the test path and the failure output
+                 passes, or no test -> closed issue labeled cannot-reproduce
   -> review request sent to the Grok bot (GROK_WEBHOOK_URL, optional GROK_WEBHOOK_AUTH)
   -> human taps Approve  -> GET /api/review (signed link)
        -> Grok webhook `fix_started` (issue number, title, url)
-       -> Cursor cloud agent fixes the bug and opens a PR (autoCreatePR)
+       -> Cursor cloud agent copies that test, makes it pass, and opens a PR (autoCreatePR)
        -> the agent id and run id are saved on the GitHub issue
        -> locally, this process tracks the run until it finishes (up to 30 min)
        -> on Vercel, later requests finish tracking (see Deploy to Vercel)
        -> Grok webhook `fix_completed` (status, PR link, signed merge link, summary)
        -> issue gets a comment with the PR link
   -> human taps Merge fix -> GET /api/merge (signed link, valid 48 hours)
+       -> merge check requires the reproduction test file on the PR
        -> draft PR is marked ready, then squash-merged
        -> issue is commented, labeled `merged`, and closed
        -> Grok webhook `fix_merged` (issue, PR, merge commit; Vercel redeploys main)
   -> human taps Reject   -> issue closed as wontfix
 ```
+
+## Reproduce first
+
+Triage is a cloud agent that can edit the repo. For a new report it adds one failing vitest file under `tests/repro/`, commits it, and pushes that branch. The pull request comes later, from the fix agent. The server fetches the file and runs it with vitest against this checkout of main.
+
+An `awaiting-review` issue is opened when that test fails. The body names the test path and includes the failure output, trimmed to 2000 characters. When the test passes, or no test file was produced, BeanBox closes an issue labeled `user-feedback` and `cannot-reproduce` and skips the review request.
+
+The fix agent copies that same test onto its pull request and makes it pass, with the original assertions still there. The merge link refuses while that file is missing from the pull request head.
+
+No new environment variable. Fetching the test uses `GITHUB_TOKEN` (Contents read, already required). Running it needs the `vitest` binary from `npm install` in this checkout, which `npm run dev` has. If vitest cannot be started, the error is logged and the report stops before an awaiting-review issue.
 
 ## Shop issues a customer can report
 
@@ -176,7 +191,7 @@ Revert itself needs **Contents** read/write (to commit on `main`) and **Issues**
 
 1. Log in and open the store.
 2. Click **Report a problem** and send one of the feedback lines in the table above.
-3. Triage opens a GitHub issue, then the Feedback Bot asks for review. Tap **Approve**.
+3. If the reproduction test fails on main, triage opens a GitHub issue and the Feedback Bot asks for review. Tap **Approve**.
 4. Watch the bot for fix status (`fix_started`, then `fix_completed` with the PR). The GitHub issue gets a comment too.
 5. When the bot shows **Merge fix**, tap it. Refresh the store after Vercel redeploys. Repeat with the other two reports; each one is a separate fix.
 

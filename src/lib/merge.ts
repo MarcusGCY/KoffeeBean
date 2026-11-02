@@ -6,6 +6,7 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { notifyFixMerged } from "./notify";
+import { parseRepro } from "./reproduce";
 
 export class MergeError extends Error {
   readonly status: number;
@@ -82,6 +83,7 @@ export async function mergeApprovedFix(issueNumber: number, prNumber: number): P
         409,
       );
     }
+    await assertReproductionKept(issue.body, pull.headRef, prNumber);
     try {
       const sha = await gh.squashMergePullRequest(prNumber, commitTitle(pull));
       pull = { ...pull, merged: true, state: "closed", mergeCommitSha: sha };
@@ -141,6 +143,19 @@ async function finish(
     prUrl: pull.url,
     sha,
   };
+}
+
+/** The fix PR must still contain the triage reproduction test. */
+async function assertReproductionKept(body: string, headRef: string, prNumber: number): Promise<void> {
+  const repro = parseRepro(body);
+  if (!repro) return;
+  const file = await gh.getFile(repro.testPath, headRef);
+  if (file == null || !file.trim()) {
+    throw new MergeError(
+      `Pull request #${prNumber} is missing the reproduction test \`${repro.testPath}\`. The fix must keep that test and make it pass.`,
+      409,
+    );
+  }
 }
 
 async function markReady(pull: gh.PullSnapshot): Promise<gh.PullSnapshot> {
