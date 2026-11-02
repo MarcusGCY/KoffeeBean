@@ -23,6 +23,7 @@ function fakeAgent(result: {
   requestId?: string;
   id?: string;
   error?: { message: string; code?: string };
+  git?: { branches: { repoUrl: string; branch?: string; prUrl?: string }[] };
 }) {
   const close = vi.fn();
   const runId = result.id ?? "run-id";
@@ -33,6 +34,7 @@ function fakeAgent(result: {
     status: result.status,
     result: result.result,
     error: result.error,
+    git: result.git,
   }));
   const send = vi.fn(async (_prompt: string) => ({ id: runId, agentId: AGENT, wait }));
   return { close, send, agent: { agentId: AGENT, send, close } };
@@ -70,7 +72,7 @@ afterEach(() => {
 });
 
 describe("triageFeedback", () => {
-  it("keeps a finished plan when wait() reports a false error", async () => {
+  it("keeps a finished triage run when wait() reports a false error", async () => {
     const fenced = [
       "Different wording, same coupon bug.",
       "```json",
@@ -109,10 +111,15 @@ describe("triageFeedback", () => {
     expect(create.mock.calls[0][0].name).toMatch(/^beanbox-triage-\d+-/);
     expect(create.mock.calls[0][0]).toMatchObject({
       apiKey: API_KEY,
-      mode: "plan",
-      cloud: { repos: [{ url: "https://github.com/acme/beanbox" }], autoCreatePR: false },
+      mode: "agent",
+      cloud: {
+        repos: [{ url: "https://github.com/acme/beanbox", startingRef: "main" }],
+        autoCreatePR: false,
+      },
     });
     expect(attempt.send.mock.calls[0][0]).toContain("```json");
+    expect(attempt.send.mock.calls[0][0]).toContain("tests/repro/");
+    expect(attempt.send.mock.calls[0][0]).toContain("beanbox-triage");
     expect(attempt.send.mock.calls[0][0]).toContain("promo code does nothing");
   });
 
@@ -163,6 +170,40 @@ describe("triageFeedback", () => {
       /Triage run cancelled durationMs=90 requestId=run-only result="stopped early"/,
     );
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a safe test path and the branch the agent pushed", async () => {
+    const fenced = [
+      "```json",
+      '{"action":"create","title":"Tote","body":"Cart skips the tote.","testPath":"tests/repro/tote-add.test.ts","branch":"ignored-by-server"}',
+      "```",
+    ].join("\n");
+    create.mockResolvedValueOnce(fakeAgent({
+      status: "finished",
+      result: fenced,
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "refs/heads/cursor/triage-tote" }] },
+    }).agent);
+
+    await expect(triageFeedback("the tote will not add", [])).resolves.toEqual({
+      action: "create",
+      title: "Tote",
+      body: "Cart skips the tote.",
+      testPath: "tests/repro/tote-add.test.ts",
+      branch: "cursor/triage-tote",
+    });
+  });
+
+  it("drops a test path that is not under tests/repro", async () => {
+    create.mockResolvedValueOnce(fakeAgent({
+      status: "finished",
+      result: '{"action":"create","title":"Nope","body":"Bad path.","testPath":"src/lib/cart.ts"}',
+    }).agent);
+
+    await expect(triageFeedback("bad path", [])).resolves.toEqual({
+      action: "create",
+      title: "Nope",
+      body: "Bad path.",
+    });
   });
 
   it("still parses a bare JSON object and drops a merge target that is not open", async () => {

@@ -9,6 +9,7 @@ const comment = vi.hoisted(() => vi.fn());
 const setLabels = vi.hoisted(() => vi.fn());
 const closeIssue = vi.hoisted(() => vi.fn());
 const ensureLabel = vi.hoisted(() => vi.fn());
+const getFile = vi.hoisted(() => vi.fn());
 const notifyFixMerged = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/github", async () => {
@@ -24,6 +25,7 @@ vi.mock("@/lib/github", async () => {
     setLabels,
     closeIssue,
     ensureLabel,
+    getFile,
   };
 });
 
@@ -35,6 +37,7 @@ import { GET } from "@/app/api/merge/route";
 import { fixMergedComment, fixResultComment } from "@/lib/fix-marker";
 import { mergeApprovedFix } from "@/lib/merge";
 import { MERGE_LINK_TTL_MS, mergeToken } from "@/lib/merge-link";
+import { reproMarker } from "@/lib/reproduce";
 
 const SHA = "a".repeat(40);
 const PR_URL = "https://github.com/acme/beanbox/pull/15";
@@ -87,6 +90,7 @@ beforeEach(() => {
   setLabels.mockReset();
   closeIssue.mockReset();
   ensureLabel.mockReset();
+  getFile.mockReset();
   notifyFixMerged.mockReset();
   comments.length = 0;
   comments.push({ id: 1, body: resultComment() });
@@ -100,6 +104,7 @@ beforeEach(() => {
     comments.push({ id: comments.length + 1, body });
   });
   ensureLabel.mockResolvedValue(undefined);
+  getFile.mockResolvedValue("import { expect, test } from 'vitest';\ntest('repro', () => { expect(1).toBe(1); });\n");
   setLabels.mockResolvedValue(undefined);
   closeIssue.mockResolvedValue(undefined);
   markPullRequestReady.mockResolvedValue(undefined);
@@ -207,6 +212,38 @@ describe("mergeApprovedFix", () => {
   it("refuses a pull request GitHub says is not mergeable", async () => {
     getPullRequest.mockResolvedValue(pull({ mergeable: false }));
     await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/cannot be merged yet/);
+    expect(squashMergePullRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses to merge when the reproduction test file is missing", async () => {
+    getIssue.mockResolvedValue({
+      ...issue,
+      body: `Photos 404\n\n${reproMarker("tests/repro/tote-add.test.ts", "beanbox-triage/tote", "b".repeat(40))}`,
+    });
+    getFile.mockResolvedValue(null);
+
+    await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/tests\/repro\/tote-add\.test\.ts/);
+    expect(getFile).toHaveBeenCalledWith("tests/repro/tote-add.test.ts", HEAD);
+    expect(squashMergePullRequest).not.toHaveBeenCalled();
+    expect(notifyFixMerged).not.toHaveBeenCalled();
+  });
+
+  it("refuses to merge when the reproduction test was modified or skipped", async () => {
+    const triageSha = "b".repeat(40);
+    const original = "import { expect, test } from 'vitest';\ntest('tote', () => { expect(1).toBe(2); });\n";
+    getIssue.mockResolvedValue({
+      ...issue,
+      body: `Photos 404\n\n${reproMarker("tests/repro/tote-add.test.ts", "beanbox-triage/tote", triageSha)}`,
+    });
+    getFile.mockImplementation(async (_path: string, ref: string) => (
+      ref === triageSha ? original : original.replace("toBe(2)", "toBe(1)")
+    ));
+    await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/changed the reproduction test/);
+
+    getFile.mockImplementation(async (_path: string, ref: string) => (
+      ref === triageSha ? original : original.replace("test(", "test.skip(")
+    ));
+    await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/skips the reproduction test/);
     expect(squashMergePullRequest).not.toHaveBeenCalled();
   });
 

@@ -1,0 +1,38 @@
+name: repro
+
+run-name: repro ${{ inputs.test_sha }} ${{ inputs.test_path }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: tests/repro file from the triage commit
+        required: true
+        type: string
+      test_sha:
+        description: triage commit sha
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: repro
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run the pinned reproduction test
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
+          TEST_SHA: ${{ inputs.test_sha }}
+        run: node scripts/repro-ci.mjs

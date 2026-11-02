@@ -1,7 +1,5 @@
 import { after, NextResponse } from "next/server";
-import * as gh from "@/lib/github";
-import { triageFeedback } from "@/lib/triage";
-import { requestReview } from "@/lib/notify";
+import { fileFeedback } from "@/lib/file-feedback";
 import { tooManyFeedbackReports } from "@/lib/rate-limit";
 import { getShopper, reporterBlock } from "@/lib/shopper";
 
@@ -34,23 +32,11 @@ export async function POST(req: Request) {
   }
 
   // Triage runs after the response so the shopper is not kept waiting.
-  // On Vercel the callback must finish inside maxDuration; triage polls
-  // only for that budget and logs if the plan run is still going.
+  // On Vercel the callback must finish inside maxDuration. A reproduction
+  // check that is still running resumes from /api/fix-status, like a fix.
   after(async () => {
     try {
-      const open = await gh.listOpenFeedbackIssues();
-      const d = await triageFeedback(feedback, open);
-      if (d.action === "merge" && d.issueNumber) {
-        await gh.appendReport(d.issueNumber, `${feedback}\n\n${reportedBy}`);
-        console.log(`[feedback] merged into #${d.issueNumber}`);
-        return; // already in (or past) review
-      }
-      const issue = await gh.createIssue(
-        d.title,
-        `${d.body}\n\n---\n**Original report:**\n> ${feedback}\n\n${reportedBy}`,
-      );
-      console.log(`[feedback] created #${issue.number}`);
-      await requestReview({ number: issue.number, title: d.title, url: issue.url, summary: d.body });
+      await fileFeedback(feedback, reportedBy);
     } catch (e) {
       console.error("[feedback] pipeline failed", e);
     }

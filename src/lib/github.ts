@@ -6,6 +6,8 @@ export const LABEL_AWAITING = "awaiting-review";
 export const LABEL_APPROVED = "approved";
 export const LABEL_FIXING = "cursor-fixing";
 export const LABEL_MERGED = "merged";
+export const LABEL_CANNOT_REPRODUCE = "cannot-reproduce";
+export const LABEL_REPRO_PENDING = "repro-pending";
 
 const gh = () => new Octokit({ auth: env("GITHUB_TOKEN") });
 
@@ -21,12 +23,119 @@ export async function listOpenFeedbackIssues(): Promise<OpenIssue[]> {
     .map((i) => ({ number: i.number, title: i.title, body: i.body ?? "" }));
 }
 
-export async function createIssue(title: string, body: string) {
+export async function createIssue(
+  title: string,
+  body: string,
+  labels: string[] = [FEEDBACK_LABEL, LABEL_AWAITING],
+) {
   const { owner, repo: r } = repo();
   const res = await gh().issues.create({
-    owner, repo: r, title, body, labels: [FEEDBACK_LABEL, LABEL_AWAITING],
+    owner, repo: r, title, body, labels,
   });
   return { number: res.data.number, url: res.data.html_url };
+}
+
+export type ChangedFile = { filename: string; status: string };
+
+export type WorkflowRunSnapshot = {
+  id: number;
+  status: string;
+  conclusion: string | null;
+  htmlUrl: string;
+  name: string;
+};
+
+/** Commit at the tip of `branch`, or null when the ref does not exist. */
+export async function branchSha(branch: string): Promise<string | null> {
+  const { owner, repo: r } = repo();
+  try {
+    const res = await gh().git.getRef({ owner, repo: r, ref: `heads/${branch}` });
+    const sha = res.data.object.sha;
+    return /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null;
+  } catch (error) {
+    if (githubHttpStatus(error) === 404) return null;
+    throw error;
+  }
+}
+
+/** Files changed between base and head. `main...sha` is the triage diff. */
+export async function compareFiles(base: string, head: string): Promise<ChangedFile[]> {
+  const { owner, repo: r } = repo();
+  const res = await gh().repos.compareCommitsWithBasehead({
+    owner, repo: r, basehead: `${base}...${head}`,
+  });
+  return (res.data.files ?? []).map((file) => ({
+    filename: file.filename,
+    status: file.status ?? "",
+  }));
+}
+
+/** Start the repro workflow on main. The definition that runs is main's. */
+export async function dispatchRepro(testPath: string, sha: string): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().actions.createWorkflowDispatch({
+    owner,
+    repo: r,
+    workflow_id: "repro.yml",
+    ref: "main",
+    inputs: { test_path: testPath, test_sha: sha },
+  });
+}
+
+/** workflow_dispatch run whose name pins this triage commit and test file. */
+export async function findReproRun(sha: string, testPath: string): Promise<WorkflowRunSnapshot | null> {
+  const { owner, repo: r } = repo();
+  const res = await gh().actions.listWorkflowRuns({
+    owner, repo: r, workflow_id: "repro.yml", event: "workflow_dispatch", per_page: 30,
+  });
+  const want = `repro ${sha} ${testPath}`;
+  const matches = res.data.workflow_runs.filter((run) => run.name === want || run.display_title === want);
+  const latest = matches.sort((a, b) => b.id - a.id)[0];
+  if (!latest) return null;
+  return {
+    id: latest.id,
+    status: latest.status ?? "queued",
+    conclusion: latest.conclusion,
+    htmlUrl: latest.html_url,
+    name: latest.name ?? latest.display_title,
+  };
+}
+
+/** Plain-text log of the repro job, used to read the vitest JSON line. */
+export async function workflowRunLog(runId: number): Promise<string> {
+  const { owner, repo: r } = repo();
+  const jobs = await gh().actions.listJobsForWorkflowRun({ owner, repo: r, run_id: runId });
+  const job = jobs.data.jobs.find((item) => item.name === "repro") ?? jobs.data.jobs[0];
+  if (!job) return "";
+  const log = await gh().actions.downloadJobLogsForWorkflowRun({ owner, repo: r, job_id: job.id });
+  const data = log.data as unknown;
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  return "";
+}
+
+export async function updateIssue(number: number, body: string): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().issues.update({ owner, repo: r, issue_number: number, body });
+}
+
+/** File text at `ref`, or null when GitHub has no such file. */
+export async function getFile(path: string, ref: string): Promise<string | null> {
+  const { owner, repo: r } = repo();
+  try {
+    const res = await gh().repos.getContent({ owner, repo: r, path, ref });
+    const data = res.data;
+    if (Array.isArray(data) || data.type !== "file" || data.encoding !== "base64" || typeof data.content !== "string") {
+      return null;
+    }
+    const text = Buffer.from(data.content, "base64").toString("utf8");
+    if (text.includes("\0") || text.length > 100_000) return null;
+    return text;
+  } catch (error) {
+    if (githubHttpStatus(error) === 404) return null;
+    throw error;
+  }
 }
 
 /** Merge a duplicate report into an existing issue as a comment. */
@@ -156,9 +265,18 @@ export function githubHttpStatus(error: unknown): number | undefined {
 
 /** Open issues the fix pipeline still has to finish. */
 export async function listFixingIssueNumbers(): Promise<number[]> {
+  return listOpenIssueNumbers(LABEL_FIXING);
+}
+
+/** Reports whose reproduction check has not finished. */
+export async function listReproPendingIssueNumbers(): Promise<number[]> {
+  return listOpenIssueNumbers(LABEL_REPRO_PENDING);
+}
+
+async function listOpenIssueNumbers(label: string): Promise<number[]> {
   const { owner, repo: r } = repo();
   const res = await gh().issues.listForRepo({
-    owner, repo: r, state: "open", labels: LABEL_FIXING, per_page: 50,
+    owner, repo: r, state: "open", labels: label, per_page: 50,
   });
   return res.data.filter((i) => !i.pull_request).map((i) => i.number);
 }

@@ -2,6 +2,7 @@ import { Agent, type Run, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
+import { branchFromRun, safeTestPath } from "./reproduce";
 import { followRun, readFinalAssistantText, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
 const Decision = z.object({
@@ -9,14 +10,16 @@ const Decision = z.object({
   issueNumber: z.number().int().optional(),
   title: z.string(),
   body: z.string(),
+  testPath: z.string().optional(),
 });
-export type Decision = z.infer<typeof Decision>;
+export type Decision = z.infer<typeof Decision> & { branch?: string };
 
 const PREVIEW_MAX = 160;
 
 /**
- * Ask a Cursor agent (read-only "plan" mode) to decide whether a feedback
- * report duplicates an open issue, and to draft the issue text if it doesn't.
+ * Ask a Cursor agent to decide whether a feedback report duplicates an open
+ * issue. A new bug is a failing vitest file pushed on a beanbox-triage branch.
+ * GitHub Actions runs that file; the server reads the check before opening an issue.
  *
  * wait() can report a false error or hang when the run is launched from
  * Next.js after(). reconcileRunResult confirms the terminal status first.
@@ -30,8 +33,11 @@ export async function triageFeedback(
     apiKey,
     // Parallel reports must not share one cloud agent name.
     name: `beanbox-triage-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
-    mode: "plan",
-    cloud: { repos: [{ url: repo().url }], autoCreatePR: false },
+    mode: "agent",
+    cloud: {
+      repos: [{ url: repo().url, startingRef: "main" }],
+      autoCreatePR: false,
+    },
   });
   try {
     const run = await agent.send(prompt(feedback, open));
@@ -85,7 +91,16 @@ function prompt(feedback: string, open: OpenIssue[]): string {
   return [
     "You triage user feedback for the BeanBox online store (Next.js, code in src/lib and src/components).",
     "Decide if the feedback describes the SAME underlying bug as one of the open issues below.",
-    "Look at the code if needed to find the real root cause; different wording can be one bug.",
+    "Look at the code to find the real root cause; different wording can be one bug.",
+    "",
+    "If it is a new bug (action \"create\"):",
+    "- Add one self-contained vitest test at tests/repro/<short-slug>.test.ts that fails on current main and reproduces the report.",
+    "- Import app code with the @/ alias. Do not change files under src/ or src/data.",
+    "- Commit and push only that new test file. Do not edit .github, src, package.json, or any other file.",
+    "- Use a branch whose name contains beanbox-triage (for example beanbox-triage/tote-add). Do not open a pull request.",
+    "- Set testPath to that file.",
+    "",
+    "If it is a duplicate (action \"merge\"), do not add a test and omit testPath.",
     "",
     `## New feedback\n${feedback}`,
     "",
@@ -93,14 +108,14 @@ function prompt(feedback: string, open: OpenIssue[]): string {
     "",
     "As your final answer, put one JSON object in a markdown json fenced code block:",
     "```json",
-    '{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>"}',
+    '{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts"}',
     "```",
   ].join("\n");
 }
 
 function parseDecision(text: string | undefined, open: OpenIssue[], result: RunResult): Decision {
   const parsed = firstDecision(text, open);
-  if (parsed) return parsed;
+  if (parsed) return attachRepro(parsed, result);
   const preview = previewResult(text);
   const received = preview ? JSON.stringify(preview) : '"(empty)"';
   throw new Error(
@@ -130,6 +145,17 @@ function firstDecision(text: string | undefined, open: OpenIssue[]): Decision | 
     }
   }
   return undefined;
+}
+
+function attachRepro(d: Decision, result: RunResult): Decision {
+  const next: Decision = { ...d };
+  const testPath = safeTestPath(d.testPath);
+  if (testPath) next.testPath = testPath;
+  else delete next.testPath;
+  const branch = branchFromRun(result);
+  if (branch) next.branch = branch;
+  else delete next.branch;
+  return next;
 }
 
 function triageRunError(result: RunResult): Error {

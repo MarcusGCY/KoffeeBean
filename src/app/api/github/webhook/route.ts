@@ -3,6 +3,8 @@ import { repo } from "@/lib/env";
 import { resumeFix } from "@/lib/fix";
 import { verifyGithubSignature } from "@/lib/github-signature";
 import { wakesForPullRequest } from "@/lib/pull-request";
+import { resumeOutstandingRepros } from "@/lib/repro-track";
+import { REPRO_CHECK } from "@/lib/reproduce";
 import { serverlessTrackBudgetMs } from "@/lib/run-status";
 
 // Hobby Fluid compute allows 300s, including work scheduled with after().
@@ -10,17 +12,19 @@ import { serverlessTrackBudgetMs } from "@/lib/run-status";
 export const maxDuration = 300;
 
 const PULL_ACTIONS = new Set(["opened", "synchronize", "reopened", "closed"]);
-
-type PullPayload = {
+type HookPayload = {
   action?: string;
   repository?: { full_name?: string };
   pull_request?: { title?: string | null; body?: string | null; html_url?: string };
+  check_run?: { name?: string | null };
+  workflow?: { path?: string | null; name?: string | null };
+  workflow_run?: { name?: string | null; path?: string | null };
 };
 
 /**
- * GitHub calls this when a pull request is opened or updated. That is the
- * signal that a cloud agent is far enough along to finish fix_completed,
- * without holding the approve request open for the whole run.
+ * GitHub calls this when a pull request is opened or updated, or when the
+ * reproduction workflow finishes. Either event resumes work that was handed
+ * off before the function limit, the same way `/api/fix-status` does.
  */
 export async function POST(req: Request) {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
@@ -34,17 +38,16 @@ export async function POST(req: Request) {
 
   const event = req.headers.get("x-github-event") ?? "";
   if (event === "ping") return NextResponse.json({ ok: true });
-  if (event !== "pull_request") return NextResponse.json({ ok: true, ignored: event });
+  if (event !== "pull_request" && event !== "check_run" && event !== "workflow_run") {
+    return NextResponse.json({ ok: true, ignored: event });
+  }
 
-  let payload: PullPayload;
+  let payload: HookPayload;
   try {
-    payload = JSON.parse(raw) as PullPayload;
+    payload = JSON.parse(raw) as HookPayload;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-
-  const action = payload.action ?? "";
-  if (!PULL_ACTIONS.has(action)) return NextResponse.json({ ok: true, ignored: action });
 
   const { owner, repo: name } = repo();
   const full = payload.repository?.full_name ?? "";
@@ -52,6 +55,25 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, ignored: "repo" });
   }
 
+  const action = payload.action ?? "";
+  if (event === "check_run" || event === "workflow_run") {
+    const checkName = payload.check_run?.name ?? "";
+    const workflowPath = payload.workflow?.path ?? payload.workflow_run?.path ?? "";
+    const isRepro = event === "check_run"
+      ? action === "completed" && checkName === REPRO_CHECK
+      : action === "completed" && workflowPath.endsWith("repro.yml");
+    if (!isRepro) return NextResponse.json({ ok: true, ignored: action || checkName || workflowPath });
+    after(async () => {
+      try {
+        await resumeOutstandingRepros({ budgetMs: serverlessTrackBudgetMs() });
+      } catch (err) {
+        console.error("[github-webhook] repro resume failed", err);
+      }
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (!PULL_ACTIONS.has(action)) return NextResponse.json({ ok: true, ignored: action });
   const pr = payload.pull_request;
   if (!pr?.html_url) return NextResponse.json({ ok: true, ignored: "no-pr" });
   const title = pr.title ?? "";
