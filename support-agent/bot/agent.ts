@@ -6,7 +6,7 @@ import { defineAgent } from "@grok/agent-sdk";
  * if it changes. Example: "koffeebean.vercel.app".
  * It must be the host in the KOFFEEBEAN_URL secret.
  */
-const SHOP_HOST: string = "";
+const SHOP_HOST: string = "koffee-bean.vercel.app";
 
 export default defineAgent({
   name: "BeanBox support",
