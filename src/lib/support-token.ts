@@ -6,9 +6,15 @@ export const SUPPORT_TOKEN_TTL_SEC = 300;
 
 type Claims = { typ: "support"; sub: string; exp: number };
 
+/** Separate MAC key so a support token is not an approval link or an action id. */
+export function supportKey(rawSecret: string): string {
+  return createHmac("sha256", rawSecret).update("support-v1").digest("base64url");
+}
+
 /**
  * HMAC token carrying the shopper id. `userId` is taken from the server session
  * when the Next app mints it, and from the verified claims everywhere else.
+ * The MAC key is HMAC(secret, "support-v1"), never the raw secret.
  * `typ` is required so a confirm action id cannot be used as this bearer token.
  */
 export function signSupportToken(userId: string, secret: string, nowMs = Date.now()): string {
@@ -16,7 +22,7 @@ export function signSupportToken(userId: string, secret: string, nowMs = Date.no
   if (!sub || !secret) throw new Error("support_token");
   const claims: Claims = { typ: "support", sub, exp: Math.floor(nowMs / 1000) + SUPPORT_TOKEN_TTL_SEC };
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
-  const sig = createHmac("sha256", secret).update(payload).digest("base64url");
+  const sig = createHmac("sha256", supportKey(secret)).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
@@ -31,7 +37,7 @@ export function verifySupportToken(
   const payload = token.slice(0, dot);
   const sig = token.slice(dot + 1);
   if (!payload || !sig) return null;
-  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
+  const expected = createHmac("sha256", supportKey(secret)).update(payload).digest("base64url");
   if (!safeEqual(sig, expected)) return null;
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<Claims>;

@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["bot/**/*", "evals/**/*"]
+  "include": ["bot/**/*"]
 }
