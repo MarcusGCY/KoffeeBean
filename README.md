@@ -8,11 +8,12 @@ Report a problem widget
   -> POST /api/feedback
   -> Cursor agent writes a failing test, then triages: duplicate of an open issue?
        yes -> comment on the existing issue (merged)
-       no  -> agent pushes tests/repro/*.test.ts on a beanbox-triage branch
-            -> GitHub Actions runs that file
-                 repro job fails -> issue (user-feedback, awaiting-review)
+       no  -> agent pushes one new tests/repro/*.test.ts file on a beanbox-triage branch
+            -> server checks the commit adds only that file, then dispatches the main workflow
+            -> workflow checks out main, copies that file at the pinned sha, runs vitest
+                 failed assertion -> issue (user-feedback, awaiting-review)
                           body includes the test path, check link, and failure output
-                 passes, no test, or setup error -> closed issue labeled cannot-reproduce
+                 passes, no test, extra files, or a load error -> closed cannot-reproduce
                  still running -> same resume path as fixes (webhook, /api/fix-status, cron)
   -> review request sent to the Grok bot (GROK_WEBHOOK_URL, optional GROK_WEBHOOK_AUTH)
   -> human taps Approve  -> GET /api/review (signed link)
@@ -35,15 +36,15 @@ Report a problem widget
 
 Triage is a cloud agent that can edit the repo. For a new report it adds one failing vitest file under `tests/repro/`, commits it, and pushes a branch whose name contains `beanbox-triage`. The pull request comes later, from the fix agent.
 
-GitHub Actions workflow `repro` runs on that push. The `repro-setup` job installs dependencies. The `repro` job runs only the new `tests/repro/*.test.ts` file and, when vitest fails, emits a `REPRO_FAILED` annotation. The server reads those check runs from the GitHub Checks API.
+The server resolves that branch to a commit sha. The diff from `main` must be exactly one added `tests/repro/*.test.ts` file. Anything else, including `.github/`, `src/`, or `package.json`, is `cannot-reproduce`. The server then dispatches workflow `repro` on `main`, passing the test path and the sha. The workflow file that runs is the one on `main`. It checks out `main`, copies in only that file at the pinned sha, and runs vitest's JSON reporter with `permissions: contents: read` and no secrets. The untrusted test process does not receive `GITHUB_TOKEN`.
 
-An `awaiting-review` issue is opened only when the `repro` check completed with conclusion `failure` and that annotation is present. The body names the test path, links to the check run, and includes the failure output trimmed to 2000 characters. A passing check, a missing test, or a setup failure (the `repro` job skipped, or it failed without `REPRO_FAILED`) is a closed `cannot-reproduce` issue and does not request review.
+An `awaiting-review` issue is opened only when that report contains a failed assertion in the named file and no collection, import, or syntax error. The body names the test path and sha, links to the workflow run, and includes the failure output trimmed to 2000 characters. A passing test, a missing test, a load error, or no tests at all is a closed `cannot-reproduce` issue. Issue markers are HMAC-signed with `APPROVAL_SECRET` and written first, so text from the report cannot forge one.
 
-If the check is still queued or running, the report is saved as an open issue labeled `repro-pending`. It then resumes the same way a fix does: the `check_run` webhook, `POST /api/fix-status`, and the daily cron. After 30 minutes with no result, the report is closed as `cannot-reproduce`.
+If the run is still queued, the report is an open `repro-pending` issue. It resumes the same way a fix does: the `workflow_run` webhook, `POST /api/fix-status`, and the daily cron. After 30 minutes with no result, it is closed as `cannot-reproduce`.
 
-The fix agent copies that same test onto its pull request and makes it pass, with the original assertions still there. The merge link refuses while that file is missing from the pull request head.
+The fix agent copies that same test onto its pull request and makes it pass, with the original assertions still there. Merge returns 409 when the file is missing, skipped (`.skip` or `.todo`), or not byte-for-byte the triage copy.
 
-The app token needs **Checks: read** in addition to the existing permissions. No new environment variable. The workflow uses GitHub's built-in token with contents read.
+The app token needs **Actions: write** to dispatch the workflow and **Actions: read** to read the run log. No new environment variable. The workflow's own token is contents read only.
 
 ## Shop issues a customer can report
 
@@ -265,7 +266,7 @@ Marking a draft ready has no REST field (a PATCH that sets `draft: false` is ign
 | Contents read/write | Squash-merge commit on `main`, and demo revert |
 | Pull requests read/write | Read the fix PR, squash-merge it, and `markPullRequestReadyForReview` |
 | Issues read/write | Comment, close, and label the feedback issue |
-| Checks read | Read the reproduction workflow's check runs and annotations |
+| Actions read and write | Dispatch the reproduction workflow on `main` and read its log |
 
 | Variable | Purpose |
 |---|---|
@@ -310,7 +311,7 @@ from whichever of these runs next:
 1. When `CRON_SECRET` is set, the deployment calls `POST /api/fix-status?issue=N` for another slice, up to 30 minutes total.
 2. `POST /api/github/webhook` on `pull_request` (`opened`, `synchronize`, `reopened`, `closed`) resumes
    the issue named in the PR (`Fixes #N`) or linked from the cloud agent's `beanboxIssue` metadata.
-   The same route on `check_run` `completed` for `repro` or `repro-setup` resumes a `repro-pending` report.
+   The same route on `workflow_run` `completed` for `.github/workflows/repro.yml` resumes a `repro-pending` report.
 3. Vercel Cron `GET /api/fix-status` once a day (`0 12 * * *` in `vercel.json`) picks up a run whose
    earlier slice never chained, including a reproduction check that is still pending. Hobby cron cannot run more often than that; it is only the backstop.
 
@@ -327,7 +328,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 |---|---|
 | `CURSOR_API_KEY` | Same value as local |
 | `GITHUB_REPO` | Same `owner/name` |
-| `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write, **Checks** read. No new variable. Checks read is how BeanBox sees the reproduction workflow. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview` (taking a draft out of draft). Contents write also commits demo reverts. Issues write comments, closes, and labels. |
+| `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write, **Actions** read and write. No new variable. Actions write dispatches the reproduction workflow on `main`. Actions read fetches its log. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview`. Contents write also commits demo reverts. Issues write comments, closes, and labels. |
 | `AUTH0_ROLES_CLAIM` | Leave unset. Delete `ADMIN_EMAILS` if a previous deploy set it. Set this only to override `https://beanbox/roles` |
 | `APPROVAL_SECRET` | Same signing secret (or a new one; old approve links would stop matching) |
 | `APP_URL` | **Change** to the production origin, `https://<production-host>` (no trailing slash) |
@@ -368,7 +369,7 @@ On the repo (`GITHUB_REPO`), add one webhook:
 | Payload URL | `https://<production-host>/api/github/webhook` |
 | Content type | `application/json` |
 | Secret | the `GITHUB_WEBHOOK_SECRET` value |
-| Events | Pull requests, and Check runs |
+| Events | Pull requests, and Workflow runs |
 
 The route checks `X-Hub-Signature-256` and ignores deliveries for any other repository.
 

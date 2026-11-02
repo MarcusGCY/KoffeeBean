@@ -1,55 +1,38 @@
 name: repro
 
+run-name: repro ${{ inputs.test_sha }} ${{ inputs.test_path }}
+
 on:
-  push:
-    branches:
-      - "**beanbox-triage**"
+  workflow_dispatch:
+    inputs:
+      test_path:
+        description: tests/repro file from the triage commit
+        required: true
+        type: string
+      test_sha:
+        description: triage commit sha
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  setup:
-    name: repro-setup
+  repro:
+    name: repro
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-
-  repro:
-    name: repro
-    needs: setup
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: Install dependencies
-        id: install
-        run: npm ci
-        continue-on-error: true
-      - name: Run reproduction test
-        if: steps.install.outcome == 'success'
-        run: |
-          set +e
-          git fetch origin main --depth=1
-          file=$(git diff --name-only --diff-filter=AM FETCH_HEAD...HEAD -- tests/repro | grep '\.test\.ts$' | head -n 1)
-          if [ -z "$file" ]; then
-            echo "No tests/repro test file on this branch."
-            exit 1
-          fi
-          npx vitest run "$file" --reporter=verbose > "$RUNNER_TEMP/repro.txt" 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            node -e 'const fs=require("fs"); const text=fs.readFileSync(process.env.RUNNER_TEMP+"/repro.txt","utf8").slice(-2000); const msg=("REPRO_FAILED\n"+text).replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A"); console.log("::error::"+msg);'
-            exit "$code"
-          fi
-      - name: Install failed
-        if: steps.install.outcome != 'success'
-        run: exit 1
+      - name: Run the pinned reproduction test
+        env:
+          TEST_PATH: ${{ inputs.test_path }}
+          TEST_SHA: ${{ inputs.test_sha }}
+        run: node scripts/repro-ci.mjs

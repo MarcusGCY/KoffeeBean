@@ -34,14 +34,20 @@ export async function watchRepro(
   testPath: string | undefined,
   branch: string | undefined,
   budgetMs: number,
+  opts?: { sha?: string; dispatch?: boolean },
 ): Promise<ReproduceResult> {
   const deadline = Date.now() + Math.max(0, budgetMs);
-  let verdict = await judgeRepro(testPath, branch);
+  let sha = opts?.sha;
+  let dispatch = opts?.dispatch ?? false;
+  let verdict = await judgeRepro(testPath, branch, { sha, dispatch });
+  if ("sha" in verdict && verdict.sha) sha = verdict.sha;
+  dispatch = false;
   while (verdict.status === "pending" && Date.now() < deadline) {
     const wait = Math.min(POLL_INTERVAL_MS, deadline - Date.now());
     if (wait < 500) break;
     await delay(wait);
-    verdict = await judgeRepro(testPath, branch);
+    verdict = await judgeRepro(testPath, branch, { sha, dispatch });
+    if ("sha" in verdict && verdict.sha) sha = verdict.sha;
   }
   return verdict;
 }
@@ -54,16 +60,17 @@ export function initialReproBudgetMs(): number {
 export async function settleNewReport(
   report: Report & { testPath?: string; branch?: string },
 ): Promise<void> {
-  const verdict = await watchRepro(report.testPath, report.branch, initialReproBudgetMs());
-  if (verdict.status === "pending" && report.testPath && report.branch) {
+  const verdict = await watchRepro(report.testPath, report.branch, initialReproBudgetMs(), { dispatch: true });
+  if (verdict.status === "pending") {
     await gh.ensureLabel(gh.LABEL_REPRO_PENDING, "fbca04", "Reproduction check has not finished");
     const pending: PendingRepro = {
       title: report.title,
       summary: report.summary,
       feedback: report.feedback,
       reportedBy: report.reportedBy,
-      testPath: report.testPath,
-      branch: report.branch,
+      testPath: verdict.testPath,
+      branch: verdict.branch,
+      sha: verdict.sha,
       startedAt: Date.now(),
     };
     const issue = await gh.createIssue(report.title, pendingIssueBody(pending), [gh.LABEL_REPRO_PENDING]);
@@ -81,7 +88,10 @@ export async function resumeRepro(number: number, budgetMs: number): Promise<Rep
   const pending = parsePending(issue.body);
   if (!pending) return { action: "skipped", reason: "no-marker" };
 
-  const verdict = await watchRepro(pending.testPath, pending.branch, budgetMs);
+  const verdict = await watchRepro(pending.testPath, pending.branch, budgetMs, {
+    sha: pending.sha,
+    dispatch: false,
+  });
   if (verdict.status === "pending") {
     if (Date.now() - pending.startedAt >= POLL_CAP_MS) {
       await publish(issue, pending, {
@@ -134,6 +144,7 @@ async function publish(
       summary: report.summary,
       testPath: verdict.testPath,
       branch: verdict.branch,
+      sha: verdict.sha,
       output: verdict.output,
       checkUrl: verdict.checkUrl,
       feedback: report.feedback,

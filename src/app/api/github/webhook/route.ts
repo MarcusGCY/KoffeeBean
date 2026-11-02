@@ -4,7 +4,7 @@ import { resumeFix } from "@/lib/fix";
 import { verifyGithubSignature } from "@/lib/github-signature";
 import { wakesForPullRequest } from "@/lib/pull-request";
 import { resumeOutstandingRepros } from "@/lib/repro-track";
-import { REPRO_CHECK, REPRO_SETUP_CHECK } from "@/lib/reproduce";
+import { REPRO_CHECK } from "@/lib/reproduce";
 import { serverlessTrackBudgetMs } from "@/lib/run-status";
 
 // Hobby Fluid compute allows 300s, including work scheduled with after().
@@ -12,13 +12,13 @@ import { serverlessTrackBudgetMs } from "@/lib/run-status";
 export const maxDuration = 300;
 
 const PULL_ACTIONS = new Set(["opened", "synchronize", "reopened", "closed"]);
-const REPRO_CHECKS = new Set([REPRO_CHECK, REPRO_SETUP_CHECK]);
-
 type HookPayload = {
   action?: string;
   repository?: { full_name?: string };
   pull_request?: { title?: string | null; body?: string | null; html_url?: string };
   check_run?: { name?: string | null };
+  workflow?: { path?: string | null; name?: string | null };
+  workflow_run?: { name?: string | null; path?: string | null };
 };
 
 /**
@@ -38,7 +38,7 @@ export async function POST(req: Request) {
 
   const event = req.headers.get("x-github-event") ?? "";
   if (event === "ping") return NextResponse.json({ ok: true });
-  if (event !== "pull_request" && event !== "check_run") {
+  if (event !== "pull_request" && event !== "check_run" && event !== "workflow_run") {
     return NextResponse.json({ ok: true, ignored: event });
   }
 
@@ -56,11 +56,13 @@ export async function POST(req: Request) {
   }
 
   const action = payload.action ?? "";
-  if (event === "check_run") {
+  if (event === "check_run" || event === "workflow_run") {
     const checkName = payload.check_run?.name ?? "";
-    if (action !== "completed" || !REPRO_CHECKS.has(checkName)) {
-      return NextResponse.json({ ok: true, ignored: action || checkName });
-    }
+    const workflowPath = payload.workflow?.path ?? payload.workflow_run?.path ?? "";
+    const isRepro = event === "check_run"
+      ? action === "completed" && checkName === REPRO_CHECK
+      : action === "completed" && workflowPath.endsWith("repro.yml");
+    if (!isRepro) return NextResponse.json({ ok: true, ignored: action || checkName || workflowPath });
     after(async () => {
       try {
         await resumeOutstandingRepros({ budgetMs: serverlessTrackBudgetMs() });

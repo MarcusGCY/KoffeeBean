@@ -218,7 +218,7 @@ describe("mergeApprovedFix", () => {
   it("refuses to merge when the reproduction test file is missing", async () => {
     getIssue.mockResolvedValue({
       ...issue,
-      body: `Photos 404\n\n${reproMarker("tests/repro/tote-add.test.ts", "cursor/triage-tote")}`,
+      body: `Photos 404\n\n${reproMarker("tests/repro/tote-add.test.ts", "beanbox-triage/tote", "b".repeat(40))}`,
     });
     getFile.mockResolvedValue(null);
 
@@ -226,6 +226,25 @@ describe("mergeApprovedFix", () => {
     expect(getFile).toHaveBeenCalledWith("tests/repro/tote-add.test.ts", HEAD);
     expect(squashMergePullRequest).not.toHaveBeenCalled();
     expect(notifyFixMerged).not.toHaveBeenCalled();
+  });
+
+  it("refuses to merge when the reproduction test was modified or skipped", async () => {
+    const triageSha = "b".repeat(40);
+    const original = "import { expect, test } from 'vitest';\ntest('tote', () => { expect(1).toBe(2); });\n";
+    getIssue.mockResolvedValue({
+      ...issue,
+      body: `Photos 404\n\n${reproMarker("tests/repro/tote-add.test.ts", "beanbox-triage/tote", triageSha)}`,
+    });
+    getFile.mockImplementation(async (_path: string, ref: string) => (
+      ref === triageSha ? original : original.replace("toBe(2)", "toBe(1)")
+    ));
+    await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/changed the reproduction test/);
+
+    getFile.mockImplementation(async (_path: string, ref: string) => (
+      ref === triageSha ? original : original.replace("test(", "test.skip(")
+    ));
+    await expect(mergeApprovedFix(14, 15)).rejects.toThrow(/skips the reproduction test/);
+    expect(squashMergePullRequest).not.toHaveBeenCalled();
   });
 
   it("accepts an older fix-result comment that only contains the pull URL", async () => {

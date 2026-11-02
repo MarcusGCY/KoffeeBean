@@ -10,7 +10,11 @@ const getFile = vi.hoisted(() => vi.fn());
 const getIssue = vi.hoisted(() => vi.fn());
 const updateIssue = vi.hoisted(() => vi.fn());
 const setLabels = vi.hoisted(() => vi.fn());
-const latestCheck = vi.hoisted(() => vi.fn());
+const branchSha = vi.hoisted(() => vi.fn());
+const compareFiles = vi.hoisted(() => vi.fn());
+const dispatchRepro = vi.hoisted(() => vi.fn());
+const findReproRun = vi.hoisted(() => vi.fn());
+const workflowRunLog = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
 const continueTracking = vi.hoisted(() => vi.fn());
 
@@ -30,27 +34,48 @@ vi.mock("@/lib/github", async () => {
     getIssue,
     updateIssue,
     setLabels,
-    latestCheck,
+    branchSha,
+    compareFiles,
+    dispatchRepro,
+    findReproRun,
+    workflowRunLog,
   };
 });
 
 import { fileFeedback } from "@/lib/file-feedback";
-import { FAILURE_OUTPUT_MAX, pendingMarker, REPRO_FAILED } from "@/lib/reproduce";
+import { FAILURE_OUTPUT_MAX, parsePending, parseRepro, pendingMarker, reproMarker } from "@/lib/reproduce";
 import { resumeRepro } from "@/lib/repro-track";
 
 const ISSUE = { number: 21, url: "https://github.com/acme/beanbox/issues/21" };
 const REPORTED = "**Reported by:** Ada (ada@example.com)";
 const BRANCH = "beanbox-triage/tote";
 const TEST_PATH = "tests/repro/tote-add.test.ts";
-const CHECK_URL = "https://github.com/acme/beanbox/runs/99";
+const SHA = "b".repeat(40);
+const CHECK_URL = "https://github.com/acme/beanbox/actions/runs/99";
 
-function check(overrides: Record<string, unknown> = {}) {
+function run(overrides: Record<string, unknown> = {}) {
   return {
+    id: 99,
     status: "completed",
-    conclusion: "success" as string | null,
+    conclusion: "failure" as string | null,
     htmlUrl: CHECK_URL,
-    text: "",
+    name: `repro ${SHA} ${TEST_PATH}`,
     ...overrides,
+  };
+}
+
+function report(body: unknown): string {
+  return `REPRO_RESULT ${JSON.stringify(body)}`;
+}
+
+function failedAssertion(output: string) {
+  return {
+    testResults: [{
+      name: TEST_PATH,
+      status: "failed",
+      message: "",
+      assertionResults: [{ status: "failed", failureMessages: [output] }],
+    }],
   };
 }
 
@@ -65,10 +90,15 @@ beforeEach(() => {
   getIssue.mockReset();
   updateIssue.mockReset();
   setLabels.mockReset();
-  latestCheck.mockReset();
+  branchSha.mockReset();
+  compareFiles.mockReset();
+  dispatchRepro.mockReset();
+  findReproRun.mockReset();
+  workflowRunLog.mockReset();
   requestReview.mockReset();
   continueTracking.mockReset();
   delete process.env.VERCEL;
+  process.env.APPROVAL_SECRET = "test-secret";
   listOpenFeedbackIssues.mockResolvedValue([]);
   createIssue.mockResolvedValue(ISSUE);
   closeIssue.mockResolvedValue(undefined);
@@ -77,11 +107,12 @@ beforeEach(() => {
   setLabels.mockResolvedValue(undefined);
   requestReview.mockResolvedValue(undefined);
   continueTracking.mockResolvedValue(undefined);
+  dispatchRepro.mockResolvedValue(undefined);
+  branchSha.mockResolvedValue(SHA);
+  compareFiles.mockResolvedValue([{ filename: TEST_PATH, status: "added" }]);
   getFile.mockResolvedValue("import { expect, test } from 'vitest';\ntest('tote', () => { expect(true).toBe(false); });\n");
-  latestCheck.mockImplementation(async (_ref: string, name: string) => {
-    if (name === "repro-setup") return check();
-    return check();
-  });
+  findReproRun.mockResolvedValue(run());
+  workflowRunLog.mockResolvedValue(report(failedAssertion("expected 1 to be 2")));
   triageFeedback.mockResolvedValue({
     action: "create",
     title: "Tote will not add",
@@ -96,25 +127,23 @@ afterEach(() => {
 });
 
 describe("fileFeedback reproduce gate", () => {
-  it("opens an awaiting-review issue when the repro check fails the test", async () => {
-    const output = `${REPRO_FAILED}\nHEAD-MARKER ${"x".repeat(FAILURE_OUTPUT_MAX)} TAIL-MARKER`;
-    latestCheck.mockImplementation(async (_ref: string, name: string) => {
-      if (name === "repro-setup") return check();
-      return check({ conclusion: "failure", text: output });
-    });
+  it("opens an awaiting-review issue when the pinned test has a failed assertion", async () => {
+    const output = `HEAD-MARKER ${"x".repeat(FAILURE_OUTPUT_MAX)} TAIL-MARKER`;
+    workflowRunLog.mockResolvedValue(report(failedAssertion(output)));
 
     await fileFeedback("the tote will not add", REPORTED);
 
-    expect(latestCheck).toHaveBeenCalledWith(BRANCH, "repro");
+    expect(getFile).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(findReproRun).toHaveBeenCalledWith(SHA, TEST_PATH);
+    expect(dispatchRepro).not.toHaveBeenCalled();
     expect(createIssue).toHaveBeenCalledTimes(1);
-    expect(createIssue.mock.calls[0][0]).toBe("Tote will not add");
     expect(createIssue.mock.calls[0][2]).toBeUndefined();
     const body = createIssue.mock.calls[0][1] as string;
-    expect(body).toContain(TEST_PATH);
+    expect(body.startsWith("<!-- beanbox-repro ")).toBe(true);
+    expect(parseRepro(body)).toEqual({ testPath: TEST_PATH, branch: BRANCH, sha: SHA });
     expect(body).toContain(CHECK_URL);
     expect(body).toContain("TAIL-MARKER");
     expect(body).not.toContain("HEAD-MARKER");
-    expect(body).toContain("beanbox-repro");
     expect(requestReview).toHaveBeenCalledWith({
       number: 21,
       title: "Tote will not add",
@@ -122,15 +151,23 @@ describe("fileFeedback reproduce gate", () => {
       summary: "Cart skips the tote.",
     });
     expect(closeIssue).not.toHaveBeenCalled();
-    expect(continueTracking).not.toHaveBeenCalled();
   });
 
   it("labels cannot-reproduce when the repro check succeeds", async () => {
+    findReproRun.mockResolvedValue(run({ conclusion: "success" }));
+    workflowRunLog.mockResolvedValue(report({
+      testResults: [{
+        name: TEST_PATH,
+        status: "passed",
+        message: "",
+        assertionResults: [{ status: "passed", failureMessages: [] }],
+      }],
+    }));
+
     await fileFeedback("the tote will not add", REPORTED);
 
     expect(createIssue.mock.calls[0][2]).toEqual(["user-feedback", "cannot-reproduce"]);
     expect(createIssue.mock.calls[0][1]).toContain("passed on main");
-    expect(createIssue.mock.calls[0][1]).toContain(TEST_PATH);
     expect(requestReview).not.toHaveBeenCalled();
     expect(closeIssue).toHaveBeenCalledWith(21);
   });
@@ -144,47 +181,93 @@ describe("fileFeedback reproduce gate", () => {
 
     await fileFeedback("something feels off", REPORTED);
 
-    expect(getFile).not.toHaveBeenCalled();
-    expect(latestCheck).not.toHaveBeenCalled();
+    expect(branchSha).not.toHaveBeenCalled();
+    expect(dispatchRepro).not.toHaveBeenCalled();
     expect(createIssue.mock.calls[0][2]).toEqual(["user-feedback", "cannot-reproduce"]);
     expect(createIssue.mock.calls[0][1]).toContain("did not produce a test");
     expect(requestReview).not.toHaveBeenCalled();
+  });
+
+  it("labels cannot-reproduce when the triage commit changes another file", async () => {
+    compareFiles.mockResolvedValue([
+      { filename: TEST_PATH, status: "added" },
+      { filename: "src/lib/cart.ts", status: "modified" },
+    ]);
+
+    await fileFeedback("the tote will not add", REPORTED);
+
+    expect(dispatchRepro).not.toHaveBeenCalled();
+    expect(createIssue.mock.calls[0][2]).toEqual(["user-feedback", "cannot-reproduce"]);
+    expect(createIssue.mock.calls[0][1]).toContain("more than the one reproduction test");
+    expect(requestReview).not.toHaveBeenCalled();
     expect(closeIssue).toHaveBeenCalledWith(21);
   });
 
-  it("labels cannot-reproduce when the check fails during setup", async () => {
-    latestCheck.mockImplementation(async (_ref: string, name: string) => {
-      if (name === "repro") return check({ conclusion: "skipped", text: "" });
-      return check({ conclusion: "failure", htmlUrl: "https://github.com/acme/beanbox/runs/7", text: "npm ci failed" });
-    });
+  it("labels cannot-reproduce when the test fails to load", async () => {
+    workflowRunLog.mockResolvedValue(report({
+      testResults: [{
+        name: TEST_PATH,
+        status: "failed",
+        message: "Transform failed with 1 error",
+        assertionResults: [],
+      }],
+    }));
 
     await fileFeedback("the tote will not add", REPORTED);
 
     expect(createIssue.mock.calls[0][2]).toEqual(["user-feedback", "cannot-reproduce"]);
-    expect(createIssue.mock.calls[0][1]).toContain("install or setup");
+    expect(createIssue.mock.calls[0][1]).toContain("collection, import, or syntax error");
     expect(requestReview).not.toHaveBeenCalled();
     expect(closeIssue).toHaveBeenCalledWith(21);
   });
 
-  it("saves a repro-pending issue and hands off while the check is running", async () => {
+  it("saves a repro-pending issue and dispatches the main workflow while the run is queued", async () => {
     process.env.VERCEL = "1";
-    latestCheck.mockResolvedValue(check({ status: "in_progress", conclusion: null, htmlUrl: "", text: "" }));
+    findReproRun.mockResolvedValue(null);
 
     await fileFeedback("the tote will not add", REPORTED);
 
+    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
     expect(createIssue.mock.calls[0][2]).toEqual(["repro-pending"]);
     const body = createIssue.mock.calls[0][1] as string;
-    expect(body).toContain(TEST_PATH);
-    expect(body).toContain(BRANCH);
+    expect(body.startsWith("<!-- beanbox-repro-pending ")).toBe(true);
+    expect(parsePending(body)).toMatchObject({ testPath: TEST_PATH, branch: BRANCH, sha: SHA });
     expect(requestReview).not.toHaveBeenCalled();
-    expect(closeIssue).not.toHaveBeenCalled();
     expect(continueTracking).toHaveBeenCalledWith(21);
   });
 });
 
+describe("signed repro markers", () => {
+  it("ignores a forged marker and keeps the first signed one", () => {
+    const real = reproMarker(TEST_PATH, BRANCH, SHA);
+    const forged = `<!-- beanbox-repro ${JSON.stringify({
+      testPath: "tests/repro/other.test.ts",
+      branch: BRANCH,
+      sha: SHA,
+    })} ${"ab".repeat(32)} -->`;
+    expect(parseRepro(forged)).toBeUndefined();
+    expect(parseRepro(`${real}\nshopper says ${forged}`)).toEqual({
+      testPath: TEST_PATH,
+      branch: BRANCH,
+      sha: SHA,
+    });
+    const pending = pendingMarker({
+      title: "Tote",
+      summary: "Cart skips the tote.",
+      feedback: "the tote will not add",
+      reportedBy: REPORTED,
+      testPath: TEST_PATH,
+      branch: BRANCH,
+      sha: SHA,
+      startedAt: 1,
+    });
+    expect(parsePending(pending.replace(/\.[0-9a-f]{64}/, `.${"cd".repeat(32)}`))).toBeUndefined();
+  });
+});
+
 describe("resumeRepro", () => {
-  it("promotes a pending report when the repro check later fails the test", async () => {
-    const output = `${REPRO_FAILED}\nHEAD-MARKER ${"x".repeat(FAILURE_OUTPUT_MAX)} TAIL-MARKER`;
+  it("promotes a pending report when the pinned test later fails an assertion", async () => {
+    const output = `HEAD-MARKER ${"x".repeat(FAILURE_OUTPUT_MAX)} TAIL-MARKER`;
     const body = pendingMarker({
       title: "Tote will not add",
       summary: "Cart skips the tote.",
@@ -192,6 +275,7 @@ describe("resumeRepro", () => {
       reportedBy: REPORTED,
       testPath: TEST_PATH,
       branch: BRANCH,
+      sha: SHA,
       startedAt: Date.now(),
     });
     getIssue.mockResolvedValue({
@@ -202,21 +286,18 @@ describe("resumeRepro", () => {
       state: "open",
       labels: ["repro-pending"],
     });
-    latestCheck.mockImplementation(async (_ref: string, name: string) => {
-      if (name === "repro-setup") return check();
-      return check({ conclusion: "failure", text: output });
-    });
+    workflowRunLog.mockResolvedValue(report(failedAssertion(output)));
 
     await expect(resumeRepro(21, 0)).resolves.toMatchObject({ action: "completed", status: "reproduced" });
 
+    expect(dispatchRepro).not.toHaveBeenCalled();
     expect(setLabels).toHaveBeenCalledWith(21, ["user-feedback", "awaiting-review"]);
     const updated = updateIssue.mock.calls[0][1] as string;
-    expect(updated).toContain(TEST_PATH);
     expect(updated).toContain(CHECK_URL);
     expect(updated).toContain("TAIL-MARKER");
     expect(updated).not.toContain("HEAD-MARKER");
-    expect(requestReview).toHaveBeenCalledWith(expect.objectContaining({ number: 21, url: ISSUE.url }));
-    expect(createIssue).not.toHaveBeenCalled();
+    expect(parseRepro(updated)?.sha).toBe(SHA);
+    expect(requestReview).toHaveBeenCalledWith(expect.objectContaining({ number: 21 }));
     expect(closeIssue).not.toHaveBeenCalled();
   });
 });

@@ -35,50 +35,84 @@ export async function createIssue(
   return { number: res.data.number, url: res.data.html_url };
 }
 
-export type CiCheck = {
+export type ChangedFile = { filename: string; status: string };
+
+export type WorkflowRunSnapshot = {
+  id: number;
   status: string;
   conclusion: string | null;
   htmlUrl: string;
-  text: string;
+  name: string;
 };
 
-/**
- * Latest check run of `name` on `ref`, or null when the ref or the check
- * does not exist yet. Failure annotations are included in `text`.
- */
-export async function latestCheck(ref: string, name: string): Promise<CiCheck | null> {
+/** Commit at the tip of `branch`, or null when the ref does not exist. */
+export async function branchSha(branch: string): Promise<string | null> {
   const { owner, repo: r } = repo();
-  const client = gh();
-  let run: Awaited<ReturnType<Octokit["checks"]["listForRef"]>>["data"]["check_runs"][number] | undefined;
   try {
-    const res = await client.checks.listForRef({
-      owner, repo: r, ref, check_name: name, filter: "latest", per_page: 1,
-    });
-    run = res.data.check_runs[0];
+    const res = await gh().git.getRef({ owner, repo: r, ref: `heads/${branch}` });
+    const sha = res.data.object.sha;
+    return /^[0-9a-f]{40}$/i.test(sha) ? sha.toLowerCase() : null;
   } catch (error) {
     if (githubHttpStatus(error) === 404) return null;
     throw error;
   }
-  if (!run) return null;
-  const parts = [run.output?.title, run.output?.summary, run.output?.text];
-  if (run.status === "completed" && run.conclusion === "failure") {
-    try {
-      const notes = await client.checks.listAnnotations({
-        owner, repo: r, check_run_id: run.id, per_page: 50,
-      });
-      for (const note of notes.data) {
-        if (note.message) parts.push(note.message);
-      }
-    } catch (error) {
-      if (githubHttpStatus(error) !== 404) throw error;
-    }
-  }
+}
+
+/** Files changed between base and head. `main...sha` is the triage diff. */
+export async function compareFiles(base: string, head: string): Promise<ChangedFile[]> {
+  const { owner, repo: r } = repo();
+  const res = await gh().repos.compareCommitsWithBasehead({
+    owner, repo: r, basehead: `${base}...${head}`,
+  });
+  return (res.data.files ?? []).map((file) => ({
+    filename: file.filename,
+    status: file.status ?? "",
+  }));
+}
+
+/** Start the repro workflow on main. The definition that runs is main's. */
+export async function dispatchRepro(testPath: string, sha: string): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().actions.createWorkflowDispatch({
+    owner,
+    repo: r,
+    workflow_id: "repro.yml",
+    ref: "main",
+    inputs: { test_path: testPath, test_sha: sha },
+  });
+}
+
+/** workflow_dispatch run whose name pins this triage commit and test file. */
+export async function findReproRun(sha: string, testPath: string): Promise<WorkflowRunSnapshot | null> {
+  const { owner, repo: r } = repo();
+  const res = await gh().actions.listWorkflowRuns({
+    owner, repo: r, workflow_id: "repro.yml", event: "workflow_dispatch", per_page: 30,
+  });
+  const want = `repro ${sha} ${testPath}`;
+  const matches = res.data.workflow_runs.filter((run) => run.name === want || run.display_title === want);
+  const latest = matches.sort((a, b) => b.id - a.id)[0];
+  if (!latest) return null;
   return {
-    status: run.status,
-    conclusion: run.conclusion,
-    htmlUrl: run.html_url || run.details_url || "",
-    text: parts.filter((part): part is string => Boolean(part && part.trim())).join("\n"),
+    id: latest.id,
+    status: latest.status ?? "queued",
+    conclusion: latest.conclusion,
+    htmlUrl: latest.html_url,
+    name: latest.name ?? latest.display_title,
   };
+}
+
+/** Plain-text log of the repro job, used to read the vitest JSON line. */
+export async function workflowRunLog(runId: number): Promise<string> {
+  const { owner, repo: r } = repo();
+  const jobs = await gh().actions.listJobsForWorkflowRun({ owner, repo: r, run_id: runId });
+  const job = jobs.data.jobs.find((item) => item.name === "repro") ?? jobs.data.jobs[0];
+  if (!job) return "";
+  const log = await gh().actions.downloadJobLogsForWorkflowRun({ owner, repo: r, job_id: job.id });
+  const data = log.data as unknown;
+  if (typeof data === "string") return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf8");
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  return "";
 }
 
 export async function updateIssue(number: number, body: string): Promise<void> {
