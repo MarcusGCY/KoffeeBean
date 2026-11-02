@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@cursor/sdk", "@grok/agent-sdk"],
   // The in-process support agent loads these files from disk at request time.
   outputFileTracingIncludes: {
-    "/api/chat": ["./support-agent/**/*", "./content/faq.md"],
+    "/api/chat": ["./support-agent/**/*", "./content/faq.md", "./src/lib/**", "./src/data/**", "./tsconfig.json"],
   },
   partialPrefetching: true,
   turbopack: {
