@@ -189,6 +189,21 @@ export async function addToCart(
   return snapshot(items, current.coupon);
 }
 
+/** Sets an absolute quantity using addItem and removeItem, so the planted tote rewrite still no-ops. */
+export async function setCartQty(
+  userId: string,
+  productId: string,
+  qty: number,
+  now = new Date(),
+): Promise<CartSnapshot | { error: "qty_limit" } | RateLimited> {
+  if (!validQty(qty)) return { error: "qty_limit" };
+  const current = readCart(await getAppMetadata(userId));
+  const have = current.items.find((item) => item.productId === productId)?.quantity ?? 0;
+  if (qty === have) return snapshot(current.items, current.coupon);
+  if (qty > have) return addToCart(userId, productId, qty - have, now);
+  return removeFromCart(userId, productId, have - qty, now);
+}
+
 export async function removeFromCart(
   userId: string,
   productId: string,

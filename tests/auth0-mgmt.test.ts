@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getAppMetadata, getManagementToken, patchAppMetadata, resetManagementTokenCache } from "@/lib/auth0-mgmt";
+import { MGMT_SCOPES, getAppMetadata, getManagementToken, patchAppMetadata, resetManagementTokenCache } from "@/lib/auth0-mgmt";
 
 const calls: { url: string; method: string; body?: string; auth?: string | null }[] = [];
 
@@ -47,7 +47,9 @@ describe("auth0 management", () => {
       grant_type: "client_credentials",
       client_id: "mgmt-id",
       audience: "https://tenant.example.auth0.com/api/v2/",
+      scope: MGMT_SCOPES,
     });
+    expect(MGMT_SCOPES).toBe("read:users update:users_app_metadata");
   });
 
   it("reads and patches app_metadata, sending only the top-level keys in the patch", async () => {
@@ -55,7 +57,9 @@ describe("auth0 management", () => {
     expect(meta).toEqual({ orders: [{ id: "BB-1" }] });
     await patchAppMetadata("auth0|user", { cart: { items: [], coupon: null } });
     const userCalls = calls.filter((call) => call.url.includes("/api/v2/users/"));
-    expect(userCalls[0]?.url).toBe("https://tenant.example.auth0.com/api/v2/users/auth0%7Cuser");
+    expect(userCalls[0]?.url).toBe(
+      "https://tenant.example.auth0.com/api/v2/users/auth0%7Cuser?fields=app_metadata&include_fields=true",
+    );
     expect(userCalls[1]?.method).toBe("PATCH");
     expect(JSON.parse(userCalls[1]?.body ?? "{}")).toEqual({
       app_metadata: { cart: { items: [], coupon: null } },

@@ -4,6 +4,7 @@ import { askSupportAgent, chatFailureStatus, supportConfigured } from "@/lib/age
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
+import { rememberUserLines } from "@/lib/upstash";
 
 export const maxDuration = 60;
 
@@ -81,6 +82,9 @@ export async function POST(req: Request) {
         },
       );
     }
+
+    const userLines = parsed.data.messages.flatMap((turn) => (turn.role === "user" ? [turn.content] : []));
+    await rememberUserLines(shopper.id, userLines);
 
     const reply = await askSupportAgent({
       userId: shopper.id,

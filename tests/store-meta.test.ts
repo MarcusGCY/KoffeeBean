@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CART_RATE_LIMIT_MESSAGE, CART_WRITE_HOUR_LIMIT } from "@/lib/limits";
-import { addToCart, applyCoupon, getCart, placeOrder, recordAudit } from "@/lib/store-meta";
+import { addToCart, applyCoupon, getCart, placeOrder, recordAudit, setCartQty } from "@/lib/store-meta";
 
 const db = vi.hoisted(() => ({
   meta: {} as Record<string, unknown>,
@@ -111,5 +111,14 @@ describe("store-meta", () => {
     expect(audit[0]?.ts).toBe("t1");
     expect(audit.at(-1)).toMatchObject({ ts: "newest", summary: "x".repeat(80) });
     expect(Object.keys(db.patches[0] ?? {})).toEqual(["audit"]);
+  });
+
+  it("sets a mug quantity and leaves the planted tote add as a no-op", async () => {
+    const now = new Date("2026-10-31T01:00:00.000Z");
+    const tote = await setCartQty("auth0|shopper", "tote", 2, now);
+    expect(tote).toMatchObject({ items: [] });
+    expect(db.patches).toHaveLength(0);
+    const mug = await setCartQty("auth0|shopper", "mug", 2, now);
+    expect(mug).toMatchObject({ items: [{ productId: "mug", qty: 2 }] });
   });
 });

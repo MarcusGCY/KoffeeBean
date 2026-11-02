@@ -10,7 +10,7 @@ const SHOP_HOST: string = "";
 
 export default defineAgent({
   name: "BeanBox support",
-  description: "Read-only BeanBox support for the signed-in shopper.",
+  description: "BeanBox support for the signed-in shopper. Writes wait for Confirm.",
   // No built-in shell or file tools. Server tools still reach the model over MCP.
   // local.sandbox stays off: with it on, MCP tool calls fail closed.
   tools: [],

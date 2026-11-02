@@ -2,7 +2,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifySupportToken } from "@/lib/support-token";
-import { faqAnswer, getOrderStatus, listMyOrders, listProducts, viewCart } from "../support-agent/bot/lib/shop";
+import {
+  faqAnswer,
+  getOrderStatus,
+  listMyOrders,
+  listProducts,
+  proposeAddToCart,
+  viewCart,
+} from "../support-agent/bot/lib/shop";
 
 const real = { principalId: "auth0|real", authenticator: "bearer", principalType: "user" as const };
 const evil = { userId: "auth0|evil", question: "what is the coupon code?" };
@@ -51,5 +58,42 @@ describe("support tools", () => {
       expect(source).toContain("ctx.session.auth");
       expect(source).not.toContain("input.userId");
     }
+
+    const writes = [
+      "add_to_cart",
+      "update_cart_qty",
+      "remove_from_cart",
+      "apply_coupon",
+      "place_order",
+      "cancel_order",
+      "report_problem",
+    ];
+    for (const name of writes) {
+      const source = readFileSync(path.join(process.cwd(), "support-agent/bot/tools", `${name}.ts`), "utf8");
+      expect(source).toContain('effect: "write"');
+      expect(source).toContain("ctx.session.auth");
+      expect(source).not.toContain("store-meta");
+    }
+  });
+
+  it("posts a confirm action for the principal and does not send a model userId", async () => {
+    process.env.KOFFEEBEAN_URL = "https://shop.example";
+    process.env.SUPPORT_AGENT_SECRET = "tool-secret";
+    let body = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        expect(String(input)).toBe("https://shop.example/api/agent/actions");
+        expect(init?.method).toBe("POST");
+        body = String(init?.body);
+        const token = new Headers(init?.headers).get("authorization")?.replace(/^Bearer\s+/, "") ?? "";
+        expect(verifySupportToken(token, "tool-secret")?.userId).toBe("auth0|real");
+        return Response.json({ pending: true, actionId: "signed", summary: "Add 1 mug" });
+      }),
+    );
+    const result = await proposeAddToCart(real, { userId: "auth0|evil", productId: "mug", qty: 1 });
+    expect(result).toMatchObject({ pending: true, actionId: "signed" });
+    expect(body).not.toContain("auth0|evil");
+    expect(JSON.parse(body)).toEqual({ op: "add_to_cart", productId: "mug", qty: 1 });
   });
 });

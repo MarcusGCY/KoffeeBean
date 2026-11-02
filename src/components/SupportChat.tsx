@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 type Turn = { role: "user" | "assistant"; content: string };
+type PendingAction = { actionId: string; summary: string };
 
 const UNAVAILABLE =
   "Support chat is unavailable. Please use the 'Report a problem' button at the bottom right.";
@@ -22,6 +23,7 @@ export function SupportChat() {
   const [pending, setPending] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [continuationToken, setContinuationToken] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -32,6 +34,7 @@ export function SupportChat() {
     setTurns(next);
     setDraft("");
     setNotice(null);
+    setPendingAction(null);
     setPending(true);
 
     try {
@@ -48,15 +51,42 @@ export function SupportChat() {
         reply?: string;
         sessionId?: string;
         continuationToken?: string;
+        pendingAction?: PendingAction;
       } | null;
       if (res.ok && typeof body?.reply === "string" && body.reply) {
         const reply = body.reply;
         if (typeof body.sessionId === "string") setSessionId(body.sessionId);
         if (typeof body.continuationToken === "string") setContinuationToken(body.continuationToken);
+        if (body.pendingAction?.actionId && body.pendingAction.summary) setPendingAction(body.pendingAction);
         setTurns((current) => [...current, { role: "assistant" as const, content: reply }].slice(-6));
         return;
       }
       setNotice(noticeFor(res.status, body?.error));
+    } catch {
+      setNotice(UNAVAILABLE);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function confirm() {
+    if (!pendingAction || pending) return;
+    const action = pendingAction;
+    setPending(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/chat/confirm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actionId: action.actionId }),
+      });
+      const body = (await res.json().catch(() => null)) as { error?: string; message?: string; summary?: string } | null;
+      if (res.ok && body?.summary) {
+        setPendingAction(null);
+        setTurns((current) => [...current, { role: "assistant" as const, content: body.summary ?? "" }].slice(-6));
+        return;
+      }
+      setNotice(noticeFor(res.status, body?.message || body?.error));
     } catch {
       setNotice(UNAVAILABLE);
     } finally {
@@ -104,6 +134,29 @@ export function SupportChat() {
               </p>
             ))}
             {notice && <p className="whitespace-pre-wrap break-words text-sm text-stone-700">{notice}</p>}
+            {pendingAction && (
+              <div className="rounded border border-stone-200 p-2">
+                <p className="whitespace-pre-wrap break-words text-sm text-stone-700">{pendingAction.summary}</p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void confirm()}
+                    disabled={pending}
+                    className="inline-flex min-h-11 items-center justify-center rounded bg-amber-700 px-3 text-sm font-medium text-white disabled:opacity-50"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPendingAction(null)}
+                    disabled={pending}
+                    className="inline-flex min-h-11 items-center justify-center rounded border border-stone-300 px-3 text-sm text-stone-700 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <p className="border-t border-stone-200 px-3 pt-2 text-xs text-stone-500">
             {"Don't share personal info. Chats are processed by Cursor's agent service."}

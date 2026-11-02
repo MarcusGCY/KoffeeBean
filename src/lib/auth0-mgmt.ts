@@ -13,6 +13,13 @@ let cached: CachedToken | undefined;
 
 const REFRESH_EARLY_MS = 60_000;
 
+/**
+ * Minimum scopes for the two calls this module makes.
+ * GET /api/v2/users/{id} accepts `read:users` (not `read:users_app_metadata`).
+ * PATCH of `app_metadata` only accepts `update:users_app_metadata`.
+ */
+export const MGMT_SCOPES = "read:users update:users_app_metadata";
+
 export function resetManagementTokenCache(): void {
   cached = undefined;
 }
@@ -47,6 +54,7 @@ export async function getManagementToken(now = Date.now()): Promise<string> {
         client_id: process.env.AUTH0_MGMT_CLIENT_ID?.trim(),
         client_secret: process.env.AUTH0_MGMT_CLIENT_SECRET?.trim(),
         audience: `https://${domain}/api/v2/`,
+        scope: MGMT_SCOPES,
       }),
     });
   } catch {
@@ -68,12 +76,17 @@ function metadataObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function userUrl(userId: string, method: string | undefined): string {
+  const url = `https://${auth0Domain()}/api/v2/users/${encodeURIComponent(userId)}`;
+  if (method === "PATCH") return url;
+  return `${url}?fields=app_metadata&include_fields=true`;
+}
+
 async function userRequest(userId: string, init?: RequestInit): Promise<Record<string, unknown>> {
-  const domain = auth0Domain();
   const token = await getManagementToken();
   let response: Response;
   try {
-    response = await fetch(`https://${domain}/api/v2/users/${encodeURIComponent(userId)}`, {
+    response = await fetch(userUrl(userId, init?.method), {
       ...init,
       headers: {
         "content-type": "application/json",
