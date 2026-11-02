@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { safeEqual } from "./github-signature";
 
-/** Shopper tokens last five minutes. The agent and `/api/agent` both check `exp`. */
+/** Loopback session tokens last five minutes. The in-process agent checks `exp` and `typ`. */
 export const SUPPORT_TOKEN_TTL_SEC = 300;
 
 type Claims = { typ: "support"; sub: string; exp: number };

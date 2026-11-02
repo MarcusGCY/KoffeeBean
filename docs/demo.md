@@ -10,4 +10,14 @@ Sign in first. The shop is at `/`. Support is the button at the bottom left. Eac
 6. **Cancel.** Ask the bot to cancel that order id. Press **Confirm** while it is still cancellable (placed or packed).
 7. **Report a problem.** Ask the bot to report that Add to cart does nothing for the Canvas Tote Bag. Press **Confirm**. That files feedback through the same path as Report a problem and starts reproduce-first triage.
 
-Prices in the chat come from the catalogue. Quantity has to be from 1 to 99. More than 20 chats in an hour, 30 cart writes in an hour, or 10 order writes in an hour returns a short "try again" message.
+Prices in the chat come from the catalogue. Quantity has to be from 1 to 99. More than 20 chats an hour, 30 cart writes an hour, or 10 order writes an hour returns a short "try again" message.
+
+The support bot runs inside this Next.js app. There is no separate agent deploy. Set these names in Vercel and `.env.local` (no values in git):
+
+`CURSOR_API_KEY`
+`APPROVAL_SECRET`
+`UPSTASH_REDIS_REST_URL`
+`UPSTASH_REDIS_REST_TOKEN`
+`AUTH0_DOMAIN`
+`AUTH0_MGMT_CLIENT_ID`
+`AUTH0_MGMT_CLIENT_SECRET`

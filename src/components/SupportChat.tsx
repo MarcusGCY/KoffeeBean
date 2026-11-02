@@ -9,6 +9,7 @@ const UNAVAILABLE =
   "Support chat is unavailable. Please use the 'Report a problem' button at the bottom right.";
 
 function noticeFor(status: number, error: string | undefined): string {
+  if (status === 504 && error) return error;
   if (status === 429 && error) return error;
   if (status === 503 || error === "unavailable" || status === 502 || status >= 500) return UNAVAILABLE;
   if (error) return error;

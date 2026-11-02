@@ -58,7 +58,7 @@ function money(cents: number): string {
 }
 
 function secret(): string {
-  const value = process.env.SUPPORT_AGENT_SECRET?.trim() ?? "";
+  const value = process.env.APPROVAL_SECRET?.trim() ?? "";
   if (!value) throw new StoreUnavailableError();
   return value;
 }

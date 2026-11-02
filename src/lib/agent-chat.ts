@@ -1,7 +1,48 @@
+import { serve } from "@grok/agent-sdk";
+import os from "node:os";
+import path from "node:path";
 import { confirmedCard } from "./pending-action";
 import { signSupportToken } from "./support-token";
 
 const UNAVAILABLE = "Support chat is unavailable";
+
+/** Stay under the Vercel 300s function limit. */
+export const SUPPORT_RUN_MS = 270_000;
+
+export class SupportTimeoutError extends Error {
+  constructor() {
+    super("timeout");
+    this.name = "SupportTimeoutError";
+  }
+}
+
+let agentUrl: Promise<string> | undefined;
+
+function approvalSecret(): string {
+  return process.env.APPROVAL_SECRET?.trim() ?? "";
+}
+
+function localAgentUrl(): Promise<string> {
+  if (!agentUrl) {
+    agentUrl = serve(path.join(process.cwd(), "support-agent"), {
+      host: "127.0.0.1",
+      port: 0,
+      playground: false,
+      docs: false,
+      schedules: false,
+      reminders: false,
+      apiKey: process.env.CURSOR_API_KEY,
+      stateRoot: path.join(os.tmpdir(), "beanbox-support"),
+      mode: "single",
+    })
+      .then((handle) => (handle.agents[0]?.url ?? handle.url).replace(/\/$/, ""))
+      .catch((err) => {
+        agentUrl = undefined;
+        throw err;
+      });
+  }
+  return agentUrl;
+}
 
 export type AgentTurn = {
   userId: string;
@@ -32,23 +73,19 @@ type AgentEvent = {
   };
 };
 
-function agentBase(): string {
-  return (process.env.SUPPORT_AGENT_URL ?? "").trim().replace(/\/$/, "");
-}
-
 export function supportConfigured(): boolean {
-  return Boolean(agentBase() && process.env.SUPPORT_AGENT_SECRET?.trim());
+  return Boolean(process.env.CURSOR_API_KEY?.trim() && approvalSecret());
 }
 
 function headers(userId: string): Headers {
-  const secret = process.env.SUPPORT_AGENT_SECRET?.trim() ?? "";
-  const headers = new Headers({
-    authorization: `Bearer ${signSupportToken(userId, secret)}`,
+  return new Headers({
+    authorization: `Bearer ${signSupportToken(userId, approvalSecret())}`,
     accept: "application/json",
   });
-  const alias = process.env.SUPPORT_AGENT_ALIAS_TOKEN?.trim();
-  if (alias) headers.set("X-Agent-Alias-Token", alias);
-  return headers;
+}
+
+function timedOut(err: unknown, signal: AbortSignal): boolean {
+  return signal.aborted || (err instanceof Error && err.name === "AbortError") || err instanceof SupportTimeoutError;
 }
 
 async function postJson(url: string, userId: string, body: unknown, signal: AbortSignal): Promise<Response> {
@@ -138,24 +175,23 @@ async function waitForReply(
   userId: string,
   signal: AbortSignal,
 ): Promise<{ reply: string; pendingAction?: PendingAction }> {
-  const url = `${agentBase()}/v1/session/${encodeURIComponent(sessionId)}/events?format=json`;
-  const deadline = Date.now() + 25_000;
+  const url = `${await localAgentUrl()}/v1/session/${encodeURIComponent(sessionId)}/events?format=json`;
+  const deadline = Date.now() + SUPPORT_RUN_MS;
   while (Date.now() < deadline) {
-    if (signal.aborted) throw new Error("aborted");
+    if (signal.aborted) throw new SupportTimeoutError();
     const response = await fetch(url, { headers: headers(userId), signal });
     if (response.ok) {
       const body = (await response.json()) as { events?: AgentEvent[] };
       const events = Array.isArray(body.events) ? body.events : [];
       const reply = replyFrom(events);
       if (reply) {
-        const rawSecret = process.env.SUPPORT_AGENT_SECRET?.trim() ?? "";
-        return { reply, pendingAction: pendingFromEvents(events, userId, rawSecret) };
+        return { reply, pendingAction: pendingFromEvents(events, userId, approvalSecret()) };
       }
       if (reply === null) throw new Error("no_reply");
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  throw new Error("timeout");
+  throw new SupportTimeoutError();
 }
 
 async function openSession(
@@ -164,7 +200,7 @@ async function openSession(
   signal: AbortSignal,
   prior?: { sessionId: string; continuationToken: string },
 ): Promise<{ sessionId: string; continuationToken: string }> {
-  const base = agentBase();
+  const base = await localAgentUrl();
   if (prior) {
     const follow = await postJson(
       `${base}/v1/session/${encodeURIComponent(prior.sessionId)}`,
@@ -193,7 +229,7 @@ async function openSession(
 export async function askSupportAgent(turn: AgentTurn): Promise<AgentReply> {
   if (!supportConfigured()) throw new Error("unconfigured");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 25_000);
+  const timer = setTimeout(() => controller.abort(), SUPPORT_RUN_MS);
   try {
     const prior =
       turn.sessionId && turn.continuationToken
@@ -207,6 +243,9 @@ export async function askSupportAgent(turn: AgentTurn): Promise<AgentReply> {
       continuationToken: session.continuationToken,
       pendingAction: done.pendingAction,
     };
+  } catch (err) {
+    if (timedOut(err, controller.signal)) throw new SupportTimeoutError();
+    throw err;
   } finally {
     clearTimeout(timer);
   }
