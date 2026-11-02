@@ -2,24 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as prepare } from "@/app/api/agent/actions/route";
 import { POST as confirm } from "@/app/api/chat/confirm/route";
 import { signSupportToken } from "@/lib/support-token";
-import { codeAppearsIn, commitAction, proposeAction } from "@/lib/pending-action";
+import { CART_WRITE_HOUR_LIMIT } from "@/lib/limits";
+import { codeAppearsIn, commitAction, proposeAction, textAppearsIn } from "@/lib/pending-action";
 import { pendingFromEvents } from "@/lib/agent-chat";
 import { getShopper } from "@/lib/shopper";
 
 const nonces = vi.hoisted(() => ({ ids: new Set<string>() }));
 const lines = vi.hoisted(() => ({ text: [] as string[] }));
 const filed = vi.hoisted(() => ({ calls: [] as string[] }));
-const db = vi.hoisted(() => ({ meta: {} as Record<string, unknown> }));
+const db = vi.hoisted(() => ({ meta: {} as Record<string, unknown>, pauseMs: 0, writes: 0 }));
 
 vi.mock("@/lib/upstash", () => ({
   issueNonce: async (jti: string) => {
     nonces.ids.add(jti);
   },
-  noncePending: async (jti: string) => nonces.ids.has(jti),
   consumeNonce: async (jti: string) => {
     if (!nonces.ids.has(jti)) return false;
     nonces.ids.delete(jti);
     return true;
+  },
+  rearmNonce: async (jti: string) => {
+    nonces.ids.add(jti);
   },
   rememberedLines: async () => lines.text.slice(),
 }));
@@ -27,6 +30,8 @@ vi.mock("@/lib/upstash", () => ({
 vi.mock("@/lib/auth0-mgmt", () => ({
   getAppMetadata: async () => structuredClone(db.meta),
   patchAppMetadata: async (_userId: string, patch: Record<string, unknown>) => {
+    db.writes += 1;
+    if (db.pauseMs > 0) await new Promise((resolve) => setTimeout(resolve, db.pauseMs));
     db.meta = { ...db.meta, ...patch };
     return structuredClone(db.meta);
   },
@@ -88,6 +93,8 @@ describe("confirm actions", () => {
     lines.text = ["please apply SAVE10"];
     filed.calls = [];
     db.meta = {};
+    db.pauseMs = 0;
+    db.writes = 0;
     process.env.SUPPORT_AGENT_SECRET = "action-secret";
     process.env.APP_BASE_URL = "http://localhost:3000";
     vi.mocked(getShopper).mockResolvedValue(shopper);
@@ -207,7 +214,9 @@ describe("confirm actions", () => {
     const text = "Add to cart does nothing for the Canvas Tote Bag.";
     lines.text = [text];
     const pending = await proposeAction("auth0|shopper", { op: "report_problem", message: text });
-    expect(pending).toMatchObject({ pending: true, summary: text });
+    expect(pending).toMatchObject({ pending: true, summary: `Send report: ${text}` });
+    expect(textAppearsIn("Tote Bag", lines.text)).toBe(false);
+    expect(textAppearsIn("add to cart does nothing for the canvas tote bag.", ["Add to cart", "does nothing for the Canvas Tote Bag."])).toBe(true);
     const invented = await proposeAction("auth0|shopper", {
       op: "report_problem",
       message: "The warehouse is closed on Sundays.",
@@ -216,6 +225,39 @@ describe("confirm actions", () => {
     const long = `${"a".repeat(500)} extra that was not typed`;
     lines.text = ["a".repeat(500)];
     const capped = await proposeAction("auth0|shopper", { op: "report_problem", message: long });
-    expect(capped).toMatchObject({ pending: true, summary: "a".repeat(500) });
+    expect(capped).toMatchObject({ pending: true, summary: `Send report: ${"a".repeat(500)}` });
+  });
+
+  it("lets one of two parallel confirms write and rejects the other", async () => {
+    const pending = await proposeAction("auth0|shopper", { op: "add_to_cart", productId: "mug", qty: 1 });
+    if (!("actionId" in pending)) throw new Error("expected pending");
+    db.writes = 0;
+    db.pauseMs = 40;
+    const [first, second] = await Promise.all([
+      commitAction("auth0|shopper", pending.actionId, shopper),
+      commitAction("auth0|shopper", pending.actionId, shopper),
+    ]);
+    db.pauseMs = 0;
+    const results = [first, second];
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      expect.objectContaining({ ok: false, error: "already_used" }),
+    ]);
+    expect(db.writes).toBe(1);
+  });
+
+  it("puts the confirmation back when the write fails", async () => {
+    db.meta = {
+      chat_limits: {
+        messages: [],
+        cartWrites: Array.from({ length: CART_WRITE_HOUR_LIMIT }, () => Date.now()),
+        orderWrites: [],
+      },
+    };
+    const pending = await proposeAction("auth0|shopper", { op: "add_to_cart", productId: "mug", qty: 1 });
+    if (!("actionId" in pending)) throw new Error("expected pending");
+    const blocked = await commitAction("auth0|shopper", pending.actionId, shopper);
+    expect(blocked).toMatchObject({ ok: false, error: "rate_limited" });
+    expect(nonces.ids.size).toBe(1);
   });
 });

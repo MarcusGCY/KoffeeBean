@@ -112,11 +112,13 @@ export async function issueNonce(jti: string, ttlSec: number): Promise<void> {
   if (result !== "OK") throw new StoreUnavailableError();
 }
 
-export async function noncePending(jti: string): Promise<boolean> {
-  return (await redisCommand(["GET", `kb:act:${jti}`])) === "1";
-}
-
-/** True only the first time this action id is confirmed. */
+/** Atomically takes the nonce. Only one caller gets true. */
 export async function consumeNonce(jti: string): Promise<boolean> {
   return (await redisCommand(["GETDEL", `kb:act:${jti}`])) === "1";
+}
+
+/** Puts a spent nonce back when the write did not succeed. */
+export async function rearmNonce(jti: string, ttlSec: number): Promise<void> {
+  if (ttlSec < 1) return;
+  await redisCommand(["SET", `kb:act:${jti}`, "1", "EX", String(ttlSec), "NX"]);
 }

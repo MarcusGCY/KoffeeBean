@@ -17,7 +17,7 @@ import {
   setCartQty,
 } from "./store-meta";
 import type { CartSnapshot } from "./store-types";
-import { consumeNonce, issueNonce, noncePending, rememberedLines } from "./upstash";
+import { consumeNonce, issueNonce, rearmNonce, rememberedLines } from "./upstash";
 
 /** Confirm tokens last five minutes and can be used once. */
 export const ACTION_TTL_SEC = 300;
@@ -83,11 +83,22 @@ function folded(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-/** True when the report text appears in a line the shopper typed. */
+/**
+ * True when the report text is one whole typed line, or consecutive typed
+ * lines joined in order, after case and whitespace are normalised.
+ */
 export function textAppearsIn(text: string, lines: readonly string[]): boolean {
   const want = folded(text);
   if (want.length < 5) return false;
-  return lines.some((line) => folded(line).includes(want));
+  const typed = lines.map(folded).filter(Boolean);
+  for (let start = 0; start < typed.length; start++) {
+    let joined = "";
+    for (let end = start; end < typed.length; end++) {
+      joined = joined ? `${joined} ${typed[end]}` : typed[end] ?? "";
+      if (joined === want) return true;
+    }
+  }
+  return false;
 }
 
 function cartFingerprint(cart: CartSnapshot): string {
@@ -185,14 +196,17 @@ async function summaryFor(userId: string, action: ShopAction): Promise<string | 
   if (shown.length < 5) return { error: "invalid_body" };
   const lines = await rememberedLines(userId);
   if (!textAppearsIn(shown, lines)) return { error: "report_not_typed" };
-  return shown;
+  return `Send report: ${shown}`;
 }
 
 /** Signs a pending action. Does not change the cart, orders, or feedback. */
 export async function proposeAction(userId: string, action: ShopAction): Promise<PendingAction | { error: string }> {
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
-  const stored: ShopAction = action.op === "report_problem" ? { op: "report_problem", message: summary } : action;
+  const stored: ShopAction =
+    action.op === "report_problem"
+      ? { op: "report_problem", message: action.message.trim().slice(0, 500) }
+      : action;
   const cartHash = action.op === "place_order" ? cartFingerprint(await getCart(userId)) : undefined;
   const claims: SignedAction = {
     typ: "action",
@@ -211,7 +225,7 @@ function cartLine(prefix: string, cart: CartSnapshot): string {
   return `${prefix} Cart total ${money(cart.totalCents)}.`;
 }
 
-/** Checks the signature, the shopper, and one-time use, then writes. The nonce is spent only after the write succeeds. */
+/** Checks the signature and the shopper, claims the nonce, then writes. A failed write puts the nonce back. */
 export async function commitAction(userId: string, actionId: string, shopper: Shopper): Promise<CommitResult> {
   const claims = verifyAction(actionId, secret());
   if (!claims || claims.sub !== userId) return fail(403, "invalid_action", "That confirmation is not valid.");
@@ -233,11 +247,13 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
       return fail(409, "cart_changed", "Your cart changed. Ask again to place the order.");
     }
   }
-  if (!(await noncePending(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
+  if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
 
   const outcome = await perform(userId, claims.action, shopper);
-  if (!outcome.ok) return outcome;
-  await consumeNonce(claims.jti);
+  if (!outcome.ok) {
+    await rearmNonce(claims.jti, claims.exp - Math.floor(Date.now() / 1000));
+    return outcome;
+  }
   return outcome;
 }
 
