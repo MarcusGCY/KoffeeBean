@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { serve } from "@grok/agent-sdk";
 import os from "node:os";
 import path from "node:path";
@@ -22,26 +23,88 @@ function approvalSecret(): string {
   return process.env.APPROVAL_SECRET?.trim() ?? "";
 }
 
+function supportServeOptions() {
+  return {
+    host: "127.0.0.1",
+    port: 0,
+    playground: false,
+    docs: false,
+    schedules: false,
+    reminders: false,
+    apiKey: process.env.CURSOR_API_KEY,
+    stateRoot: path.join(os.tmpdir(), "beanbox-support"),
+    mode: "single" as const,
+  };
+}
+
+/**
+ * Vitest mocks `serve()`. Production runs it in a child process: Next's
+ * module hooks load the agent's TypeScript but drop `defineAgent` /
+ * `defineTool`, and `serve()` then refuses to start. `node --import tsx`
+ * outside those hooks loads the files. HOME is /tmp so the harness does not
+ * write `~/.cache` or `~/.cursor` on a read-only serverless filesystem.
+ */
 function localAgentUrl(): Promise<string> {
   if (!agentUrl) {
-    agentUrl = serve(path.join(process.cwd(), "support-agent"), {
-      host: "127.0.0.1",
-      port: 0,
-      playground: false,
-      docs: false,
-      schedules: false,
-      reminders: false,
-      apiKey: process.env.CURSOR_API_KEY,
-      stateRoot: path.join(os.tmpdir(), "beanbox-support"),
-      mode: "single",
-    })
-      .then((handle) => (handle.agents[0]?.url ?? handle.url).replace(/\/$/, ""))
-      .catch((err) => {
-        agentUrl = undefined;
-        throw err;
-      });
+    const started = process.env.VITEST ? startInProcess() : startChild();
+    agentUrl = started.catch((err) => {
+      agentUrl = undefined;
+      throw err;
+    });
   }
   return agentUrl;
+}
+
+function startInProcess(): Promise<string> {
+  return serve(path.join(process.cwd(), "support-agent"), supportServeOptions()).then((handle) =>
+    (handle.agents[0]?.url ?? handle.url).replace(/\/$/, ""),
+  );
+}
+
+function startChild(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--import", "tsx", path.join(process.cwd(), "scripts/support-serve.mjs")], {
+      cwd: process.cwd(),
+      env: { ...process.env, HOME: os.tmpdir() },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => fail(new Error("support_agent_start_timeout")), 20_000);
+    const ok = (url: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(url);
+    };
+    const fail = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      reject(err);
+    };
+    child.stdout.on("data", (buf: Buffer) => {
+      stdout += buf.toString();
+      const line = stdout.split("\n").find((row) => row.startsWith("SUPPORT_URL="));
+      if (line) ok(line.slice("SUPPORT_URL=".length).trim());
+    });
+    child.stderr.on("data", (buf: Buffer) => {
+      stderr = (stderr + buf.toString()).slice(-2000);
+    });
+    child.on("error", fail);
+    child.on("exit", (code) => {
+      agentUrl = undefined;
+      const detail = stderr
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("Refusing to serve") || line.startsWith("error:") || line.startsWith("Error:"))
+        .join(" ")
+        .slice(0, 500);
+      fail(new Error(detail || `support_agent_exit_${code ?? "unknown"}`));
+    });
+  });
 }
 
 export type AgentTurn = {
@@ -160,7 +223,10 @@ function replyFrom(events: AgentEvent[]): string | null | undefined {
     ) {
       reply = data.text.trim();
     }
-    if (event.type === "turn.failed" || event.type === "session.failed") return null;
+    if (event.type === "turn.failed" || event.type === "session.failed") {
+      console.error("[chat] agent event", event.type, publicEventData(data));
+      return null;
+    }
     if (event.type === "turn.completed") {
       finished = true;
       if (!reply && typeof data.result === "string" && data.result.trim()) reply = data.result.trim();
@@ -290,8 +356,33 @@ export async function askSupportAgent(turn: AgentTurn, timeoutMs = SUPPORT_RUN_M
   }
 }
 
+/** Name, message, code, and a short cause chain. No tokens, headers, or env values. */
+function publicError(err: unknown, depth = 0): { name: string; message: string; code?: string | number; cause?: unknown } {
+  if (!(err instanceof Error) || depth > 2) {
+    return { name: "Error", message: "non-error" };
+  }
+  const code = "code" in err && (typeof err.code === "string" || typeof err.code === "number") ? err.code : undefined;
+  const cause = err.cause === undefined ? undefined : publicError(err.cause, depth + 1);
+  return {
+    name: err.name,
+    message: err.message,
+    ...(code === undefined ? {} : { code }),
+    ...(cause === undefined ? {} : { cause }),
+  };
+}
+
+function publicEventData(data: AgentEvent["data"]): Record<string, string | number> {
+  const source = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  const out: Record<string, string | number> = {};
+  for (const key of ["status", "code", "message", "error", "finishReason"]) {
+    const value = source[key];
+    if (typeof value === "string") out[key] = value.slice(0, 500);
+    else if (typeof value === "number") out[key] = value;
+  }
+  return out;
+}
+
 export function chatFailureStatus(err: unknown): { status: number; error: string } {
-  const name = err instanceof Error ? err.name : "Error";
-  console.error("[chat] request failed", name);
+  console.error("[chat] request failed", publicError(err));
   return { status: 502, error: UNAVAILABLE };
 }
