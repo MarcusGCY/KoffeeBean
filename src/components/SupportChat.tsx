@@ -1,19 +1,35 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { CHAT_DROPPED, CHAT_UNAVAILABLE, noticeFor } from "@/lib/chat-response";
 
 type Turn = { role: "user" | "assistant"; content: string };
 type PendingAction = { actionId: string; summary: string };
 
-const UNAVAILABLE =
-  "Support chat is unavailable. Please use the 'Report a problem' button at the bottom right.";
+const POLL_MS = 1500;
+const POLL_LIMIT = 200;
 
-function noticeFor(status: number, error: string | undefined): string {
-  if (status === 504 && error) return error;
-  if (status === 429 && error) return error;
-  if (status === 503 || error === "unavailable" || status === 502 || status >= 500) return UNAVAILABLE;
-  if (error) return error;
-  return UNAVAILABLE;
+type ChatJson = {
+  status?: unknown;
+  reply?: unknown;
+  error?: unknown;
+  httpStatus?: unknown;
+  turnId?: unknown;
+  pendingAction?: { actionId?: unknown; summary?: unknown };
+};
+
+async function readJson(res: Response): Promise<ChatJson | null> {
+  try {
+    const body = (await res.json()) as unknown;
+    if (!body || typeof body !== "object") {
+      console.error("[chat] unparseable response");
+      return null;
+    }
+    return body as ChatJson;
+  } catch {
+    console.error("[chat] unparseable response");
+    return null;
+  }
 }
 
 export function SupportChat() {
@@ -22,9 +38,15 @@ export function SupportChat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [continuationToken, setContinuationToken] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    const current = generation;
+    return () => {
+      current.current += 1;
+    };
+  }, []);
 
   async function send(e: React.FormEvent) {
     e.preventDefault();
@@ -32,6 +54,7 @@ export function SupportChat() {
     if (!content || pending) return;
 
     const next = [...turns, { role: "user" as const, content }].slice(-6);
+    const mine = ++generation.current;
     setTurns(next);
     setDraft("");
     setNotice(null);
@@ -42,32 +65,57 @@ export function SupportChat() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          messages: next,
-          ...(sessionId && continuationToken ? { sessionId, continuationToken } : {}),
-        }),
+        body: JSON.stringify({ messages: next }),
       });
-      const body = (await res.json().catch(() => null)) as {
-        error?: string;
-        reply?: string;
-        sessionId?: string;
-        continuationToken?: string;
-        pendingAction?: PendingAction;
-      } | null;
-      if (res.ok && typeof body?.reply === "string" && body.reply) {
-        const reply = body.reply;
-        if (typeof body.sessionId === "string") setSessionId(body.sessionId);
-        if (typeof body.continuationToken === "string") setContinuationToken(body.continuationToken);
-        if (body.pendingAction?.actionId && body.pendingAction.summary) setPendingAction(body.pendingAction);
-        setTurns((current) => [...current, { role: "assistant" as const, content: reply }].slice(-6));
+      const started = await readJson(res);
+      if (generation.current !== mine) return;
+      if (!res.ok || !started || typeof started.turnId !== "string") {
+        setNotice(noticeFor(res.status, typeof started?.error === "string" ? started.error : undefined));
         return;
       }
-      setNotice(noticeFor(res.status, body?.error));
+      await pollReply(started.turnId, mine);
     } catch {
-      setNotice(UNAVAILABLE);
+      if (generation.current === mine) setNotice(CHAT_DROPPED);
     } finally {
-      setPending(false);
+      if (generation.current === mine) setPending(false);
     }
+  }
+
+  async function pollReply(turnId: string, mine: number) {
+    for (let attempt = 0; attempt < POLL_LIMIT; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      if (generation.current !== mine) return;
+      let res: Response;
+      try {
+        res = await fetch(`/api/chat/result?id=${encodeURIComponent(turnId)}`);
+      } catch {
+        setNotice(CHAT_DROPPED);
+        return;
+      }
+      const body = await readJson(res);
+      if (generation.current !== mine) return;
+      if (!body) {
+        setNotice(CHAT_UNAVAILABLE);
+        return;
+      }
+      if (body.status === "pending") continue;
+      if (body.status === "ready" && typeof body.reply === "string" && body.reply) {
+        const action = body.pendingAction;
+        if (typeof action?.actionId === "string" && typeof action.summary === "string") {
+          setPendingAction({ actionId: action.actionId, summary: action.summary });
+        }
+        setTurns((current) => [...current, { role: "assistant" as const, content: body.reply as string }].slice(-6));
+        return;
+      }
+      if (body.status === "error") {
+        const status = typeof body.httpStatus === "number" ? body.httpStatus : res.status;
+        setNotice(noticeFor(status, typeof body.error === "string" ? body.error : undefined));
+        return;
+      }
+      setNotice(noticeFor(res.status, typeof body.error === "string" ? body.error : undefined));
+      return;
+    }
+    setNotice(CHAT_UNAVAILABLE);
   }
 
   async function confirm() {
@@ -89,7 +137,7 @@ export function SupportChat() {
       }
       setNotice(noticeFor(res.status, body?.message || body?.error));
     } catch {
-      setNotice(UNAVAILABLE);
+      setNotice(CHAT_DROPPED);
     } finally {
       setPending(false);
     }

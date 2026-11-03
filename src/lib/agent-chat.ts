@@ -57,6 +57,25 @@ function localAgentUrl(): Promise<string> {
   return agentUrl;
 }
 
+const SECRET_ENV = [
+  "CURSOR_API_KEY",
+  "APPROVAL_SECRET",
+  "AUTH0_CLIENT_SECRET",
+  "AUTH0_SECRET",
+  "AUTH0_MGMT_CLIENT_SECRET",
+  "UPSTASH_REDIS_REST_TOKEN",
+  "GITHUB_TOKEN",
+] as const;
+
+function scrubTail(text: string): string {
+  let out = text;
+  for (const key of SECRET_ENV) {
+    const value = process.env[key]?.trim();
+    if (value && value.length >= 8) out = out.split(value).join("[redacted]");
+  }
+  return out.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").slice(-1500);
+}
+
 function startInProcess(): Promise<string> {
   return serve(path.join(process.cwd(), "support-agent"), supportServeOptions()).then((handle) =>
     (handle.agents[0]?.url ?? handle.url).replace(/\/$/, ""),
@@ -73,7 +92,7 @@ function startChild(): Promise<string> {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => fail(new Error("support_agent_start_timeout")), 20_000);
+    let timer: ReturnType<typeof setTimeout>;
     const ok = (url: string) => {
       if (settled) return;
       settled = true;
@@ -87,6 +106,10 @@ function startChild(): Promise<string> {
       child.kill();
       reject(err);
     };
+    timer = setTimeout(() => {
+      console.error("[chat] support child start", scrubTail(stderr));
+      fail(new Error("support_agent_start_timeout"));
+    }, 60_000);
     child.stdout.on("data", (buf: Buffer) => {
       stdout += buf.toString();
       const line = stdout.split("\n").find((row) => row.startsWith("SUPPORT_URL="));
@@ -98,13 +121,8 @@ function startChild(): Promise<string> {
     child.on("error", fail);
     child.on("exit", (code) => {
       agentUrl = undefined;
-      const detail = stderr
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.startsWith("Refusing to serve") || line.startsWith("error:") || line.startsWith("Error:"))
-        .join(" ")
-        .slice(0, 500);
-      fail(new Error(detail || `support_agent_exit_${code ?? "unknown"}`));
+      console.error("[chat] support child exit", scrubTail(stderr));
+      fail(new Error(`support_agent_exit_${code ?? "unknown"}`));
     });
   });
 }

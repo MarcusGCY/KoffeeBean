@@ -1,11 +1,12 @@
-import { NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
+import { after, NextResponse } from "next/server";
 import { z } from "zod";
 import { askSupportAgent, chatFailureStatus, supportConfigured, supportTranscript, SupportTimeoutError } from "@/lib/agent-chat";
 import { confirmedCard } from "@/lib/pending-action";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
-import { rememberUserLines } from "@/lib/upstash";
+import { rememberUserLines, saveChatTurn } from "@/lib/upstash";
 
 export const maxDuration = 300;
 
@@ -69,9 +70,11 @@ export async function POST(req: Request) {
   }
 
   if (!supportConfigured()) {
+    console.error("[chat] unconfigured");
     return NextResponse.json({ error: "unavailable" }, { status: 503 });
   }
 
+  const turnId = randomBytes(16).toString("hex");
   try {
     const limit = await chatLimiter.check(shopper.id);
     if (!limit.ok) {
@@ -86,24 +89,63 @@ export async function POST(req: Request) {
 
     const userLines = parsed.data.messages.flatMap((turn) => (turn.role === "user" ? [turn.content] : []));
     await rememberUserLines(shopper.id, userLines);
-
-    const reply = await askSupportAgent({
-      userId: shopper.id,
-      message,
-    });
-    const rawSecret = process.env.APPROVAL_SECRET?.trim() ?? "";
-    const pendingAction = reply.pendingAction
-      ? confirmedCard(shopper.id, reply.pendingAction.actionId, rawSecret)
-      : undefined;
-    return NextResponse.json({ ...reply, pendingAction });
+    await saveChatTurn(shopper.id, turnId, { userId: shopper.id, status: "pending" });
   } catch (err) {
-    if (err instanceof SupportTimeoutError) {
-      return NextResponse.json({ error: "Support chat timed out. Please try again." }, { status: 504 });
-    }
     if (err instanceof StoreUnavailableError) {
+      console.error("[chat] store unavailable");
       return NextResponse.json({ error: "unavailable" }, { status: 503 });
     }
     const failure = chatFailureStatus(err);
     return NextResponse.json({ error: failure.error }, { status: failure.status });
   }
+
+  const task = completeChatTurn(shopper.id, turnId, message);
+  if (process.env.VITEST) {
+    await task;
+  } else {
+    after(() => task);
+  }
+  return NextResponse.json({ turnId });
+}
+
+async function completeChatTurn(userId: string, turnId: string, message: string): Promise<void> {
+  try {
+    const started = Date.now();
+    const reply = await askSupportAgent({ userId, message });
+    console.log(`[chat] ok ${Date.now() - started}ms reply=${reply.reply.length}`);
+    const rawSecret = process.env.APPROVAL_SECRET?.trim() ?? "";
+    const pendingAction = reply.pendingAction
+      ? confirmedCard(userId, reply.pendingAction.actionId, rawSecret)
+      : undefined;
+    await saveChatTurn(userId, turnId, {
+      userId,
+      status: "ready",
+      reply: reply.reply,
+      ...(pendingAction ? { pendingAction } : {}),
+    });
+  } catch (err) {
+    const failure = chatTurnFailure(err);
+    try {
+      await saveChatTurn(userId, turnId, {
+        userId,
+        status: "error",
+        error: failure.error,
+        httpStatus: failure.status,
+      });
+    } catch (storeErr) {
+      if (storeErr instanceof StoreUnavailableError) console.error("[chat] store unavailable");
+    }
+  }
+}
+
+function chatTurnFailure(err: unknown): { status: number; error: string } {
+  if (err instanceof SupportTimeoutError) {
+    console.error("[chat] timeout");
+    return { status: 504, error: "Support chat timed out. Please try again." };
+  }
+  if (err instanceof StoreUnavailableError) {
+    console.error("[chat] store unavailable");
+    return { status: 503, error: "unavailable" };
+  }
+  return chatFailureStatus(err);
 }

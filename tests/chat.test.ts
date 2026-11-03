@@ -3,6 +3,7 @@ import { CHAT_HOUR_LIMIT, CHAT_RATE_LIMIT_MESSAGE } from "@/lib/chat-rate-limit"
 import { getShopper } from "@/lib/shopper";
 import { verifySupportToken } from "@/lib/support-token";
 import { POST } from "@/app/api/chat/route";
+import { GET as RESULT } from "@/app/api/chat/result/route";
 
 vi.mock("@grok/agent-sdk", () => ({
   serve: async () => ({
@@ -16,7 +17,10 @@ vi.mock("@/lib/shopper", () => ({
   getShopper: vi.fn(),
 }));
 
-const bags = vi.hoisted(() => ({ meta: new Map<string, Record<string, unknown>>() }));
+const bags = vi.hoisted(() => ({
+  meta: new Map<string, Record<string, unknown>>(),
+  turns: new Map<string, string>(),
+}));
 
 const steps = vi.hoisted(() => ({ list: [] as string[], lines: [] as string[], counts: new Map<string, number>() }));
 
@@ -35,6 +39,16 @@ vi.mock("@/lib/upstash", () => ({
   rememberUserLines: async (_userId: string, lines: string[]) => {
     steps.list.push("remember");
     steps.lines.push(...lines);
+  },
+  saveChatTurn: async (userId: string, turnId: string, value: { userId: string }) => {
+    bags.turns.set(`${userId}:${turnId}`, JSON.stringify(value));
+  },
+  readChatTurn: async (userId: string, turnId: string) => {
+    const raw = bags.turns.get(`${userId}:${turnId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { userId?: string };
+    if (parsed.userId !== userId) return null;
+    return parsed;
   },
 }));
 
@@ -62,6 +76,13 @@ function restoreEnv() {
 
 function signIn(id: string) {
   vi.mocked(getShopper).mockResolvedValue({ id, email: "shopper@example.com", name: "Shopper" });
+}
+
+async function resultFor(res: Response) {
+  const json = (await res.json()) as { turnId?: string; error?: string };
+  if (res.status !== 200 || typeof json.turnId !== "string") return { json, result: null, resultBody: null };
+  const result = await RESULT(new Request(`http://localhost/api/chat/result?id=${json.turnId}`));
+  return { json, result, resultBody: (await result.json()) as { status?: string; reply?: string; error?: string; httpStatus?: number } };
 }
 
 function post(body: unknown, extra?: { length?: number }) {
@@ -121,6 +142,7 @@ describe("POST /api/chat", () => {
     process.env.CURSOR_API_KEY = "cursor-test";
     process.env.APPROVAL_SECRET = "test-secret";
     bags.meta.clear();
+    bags.turns.clear();
     seen.length = 0;
     steps.list.length = 0;
     steps.lines.length = 0;
@@ -204,11 +226,9 @@ describe("POST /api/chat", () => {
 
     const first = await post({ messages: history });
     expect(first.status).toBe(200);
-    expect(await first.json()).toEqual({
-      reply: "We sell three coffees.",
-      sessionId: "ses_1",
-      continuationToken: "tok-1",
-    });
+    const firstResult = await resultFor(first);
+    expect(firstResult.json.turnId).toMatch(/^[a-f0-9]{32}$/);
+    expect(firstResult.resultBody).toEqual({ status: "ready", reply: "We sell three coffees." });
 
     const start = seen.find((call) => call.method === "POST" && call.url === `${LOCAL}/v1/session`);
     const startBody = JSON.parse(start?.body ?? "{}") as { message?: string };
@@ -226,7 +246,7 @@ describe("POST /api/chat", () => {
       continuationToken: "tok-1",
     });
     expect(second.status).toBe(200);
-    expect(await second.json()).toMatchObject({ reply: "We sell three coffees." });
+    expect((await resultFor(second)).resultBody).toMatchObject({ status: "ready", reply: "We sell three coffees." });
     expect(seen.map((call) => call.url)).not.toContain(`${LOCAL}/v1/session/ses_1`);
     const fresh = seen.filter((call) => call.method === "POST" && call.url === `${LOCAL}/v1/session`);
     expect(fresh).toHaveLength(2);
@@ -261,8 +281,12 @@ describe("POST /api/chat", () => {
       }),
     );
     const res = await post({ messages: [{ role: "user", content: "Hello" }] });
-    expect(res.status).toBe(504);
-    expect(await res.json()).toEqual({ error: "Support chat timed out. Please try again." });
+    expect(res.status).toBe(200);
+    expect((await resultFor(res)).resultBody).toEqual({
+      status: "error",
+      error: "Support chat timed out. Please try again.",
+      httpStatus: 504,
+    });
   });
 
   it("starts a fresh session when the client sends a dead continuation", async () => {
@@ -274,7 +298,7 @@ describe("POST /api/chat", () => {
       continuationToken: "tok-old",
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ sessionId: "ses_1", continuationToken: "tok-1" });
+    expect((await resultFor(res)).resultBody).toMatchObject({ status: "ready", reply: "We sell three coffees." });
     expect(seen.map((call) => call.url)).not.toContain(`${LOCAL}/v1/session/ses_old`);
     expect(seen.map((call) => call.url)).toContain(`${LOCAL}/v1/session`);
   });
@@ -292,5 +316,14 @@ describe("POST /api/chat", () => {
     const res = await post({ messages: [{ role: "user", content: "hi" }] }, { length: 8 * 1024 + 1 });
     expect(res.status).toBe(413);
     expect(seen).toHaveLength(0);
+  });
+
+  it("does not return another shopper's turn", async () => {
+    signIn("auth0|owner");
+    const res = await post({ messages: [{ role: "user", content: "Hello" }] });
+    const { json } = await resultFor(res);
+    signIn("auth0|other");
+    const stolen = await RESULT(new Request(`http://localhost/api/chat/result?id=${json.turnId}`));
+    expect(stolen.status).toBe(404);
   });
 });
