@@ -112,7 +112,8 @@ async function completeChatTurn(userId: string, turnId: string, message: string)
   try {
     const started = Date.now();
     const reply = await askSupportAgent({ userId, message });
-    console.log(`[chat] ok ${Date.now() - started}ms reply=${reply.reply.length}`);
+    const model = process.env.CHAT_MODEL?.trim() || "composer-2.5";
+    console.log(`[chat] ok ${Date.now() - started}ms reply=${reply.reply.length} model=${model}`);
     const rawSecret = process.env.APPROVAL_SECRET?.trim() ?? "";
     const pendingAction = reply.pendingAction
       ? confirmedCard(userId, reply.pendingAction.actionId, rawSecret)
