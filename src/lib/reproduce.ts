@@ -227,7 +227,10 @@ export async function judgeRepro(
 ): Promise<ReproduceResult> {
   const path = safeTestPath(testPath);
   const ref = safeBranch(branch);
-  if (!path || !ref) return { status: "no-test" };
+  if (!path || !ref) {
+    console.log(`[triage] no-test check=${!path ? "testPath" : "branch"}`);
+    return { status: "no-test" };
+  }
   if (!isTriageBranch(ref)) {
     return {
       status: "error",
@@ -237,9 +240,15 @@ export async function judgeRepro(
     };
   }
   const sha = safeSha(opts?.sha) ?? await gh.branchSha(ref);
-  if (!sha) return { status: "no-test" };
+  if (!sha) {
+    console.log("[triage] no-test check=sha");
+    return { status: "no-test" };
+  }
   const source = await gh.getFile(path, sha);
-  if (source == null || !source.trim()) return { status: "no-test" };
+  if (source == null || !source.trim()) {
+    console.log("[triage] no-test check=file");
+    return { status: "no-test" };
+  }
   const files = await gh.compareFiles("main", sha);
   if (!isSingleReproAdd(files, path)) {
     return {

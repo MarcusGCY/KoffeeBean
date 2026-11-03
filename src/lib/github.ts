@@ -45,6 +45,24 @@ export type WorkflowRunSnapshot = {
   name: string;
 };
 
+export type TriageBranch = { name: string; sha: string; committedAt: number };
+
+/** Branches whose names contain `beanbox-triage`, with the tip commit time. */
+export async function listTriageBranches(): Promise<TriageBranch[]> {
+  const { owner, repo: r } = repo();
+  const listed = await gh().repos.listBranches({ owner, repo: r, per_page: 100 });
+  const names = listed.data.map((item) => item.name).filter((name) => name.includes("beanbox-triage"));
+  const found: TriageBranch[] = [];
+  for (const name of names) {
+    const commit = await gh().repos.getCommit({ owner, repo: r, ref: name });
+    const sha = commit.data.sha.toLowerCase();
+    const when = Date.parse(commit.data.commit.committer?.date ?? commit.data.commit.author?.date ?? "");
+    if (!/^[0-9a-f]{40}$/.test(sha) || !Number.isFinite(when)) continue;
+    found.push({ name, sha, committedAt: when });
+  }
+  return found;
+}
+
 /** Commit at the tip of `branch`, or null when the ref does not exist. */
 export async function branchSha(branch: string): Promise<string | null> {
   const { owner, repo: r } = repo();
