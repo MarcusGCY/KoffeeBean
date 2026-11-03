@@ -2,7 +2,8 @@ import { Agent, type Run, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
-import { branchFromRun, safeTestPath } from "./reproduce";
+import * as gh from "./github";
+import { branchFromRun, isSingleReproAdd, isTriageBranch, safeBranch, safeTestPath } from "./reproduce";
 import { followRun, readFinalAssistantText, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
 const Decision = z.object({
@@ -11,6 +12,7 @@ const Decision = z.object({
   title: z.string(),
   body: z.string(),
   testPath: z.string().optional(),
+  branch: z.string().optional(),
 });
 export type Decision = z.infer<typeof Decision> & { branch?: string };
 
@@ -29,6 +31,7 @@ export async function triageFeedback(
   open: OpenIssue[],
 ): Promise<Decision> {
   const apiKey = env("CURSOR_API_KEY");
+  const startedAt = Date.now();
   const agent = await Agent.create({
     apiKey,
     // Parallel reports must not share one cloud agent name.
@@ -44,7 +47,11 @@ export async function triageFeedback(
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
     const result = await trackTriageRun(run, apiKey, open);
     if (result.status !== "finished") throw triageRunError(result);
-    return parseDecision(result.result, open, result);
+    return parseDecision(result.result, open, result, {
+      startedAt,
+      runId: run.id,
+      agentId: agent.agentId,
+    });
   } finally {
     agent.close();
   }
@@ -98,9 +105,9 @@ function prompt(feedback: string, open: OpenIssue[]): string {
     "- Import app code with the @/ alias. Do not change files under src/ or src/data.",
     "- Commit and push only that new test file. Do not edit .github, src, package.json, or any other file.",
     "- Use a branch whose name contains beanbox-triage (for example beanbox-triage/tote-add). Do not open a pull request.",
-    "- Set testPath to that file.",
+    "- Set testPath to that file and branch to the branch you pushed.",
     "",
-    "If it is a duplicate (action \"merge\"), do not add a test and omit testPath.",
+    "If it is a duplicate (action \"merge\"), do not add a test and omit testPath and branch.",
     "",
     `## New feedback\n${feedback}`,
     "",
@@ -108,14 +115,19 @@ function prompt(feedback: string, open: OpenIssue[]): string {
     "",
     "As your final answer, put one JSON object in a markdown json fenced code block:",
     "```json",
-    '{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts"}',
+    '{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts","branch":"beanbox-triage/<slug>"}',
     "```",
   ].join("\n");
 }
 
-function parseDecision(text: string | undefined, open: OpenIssue[], result: RunResult): Decision {
+function parseDecision(
+  text: string | undefined,
+  open: OpenIssue[],
+  result: RunResult,
+  ctx: { startedAt: number; runId: string; agentId: string },
+): Promise<Decision> {
   const parsed = firstDecision(text, open);
-  if (parsed) return attachRepro(parsed, result);
+  if (parsed) return resolveRepro(parsed, result, ctx);
   const preview = previewResult(text);
   const received = preview ? JSON.stringify(preview) : '"(empty)"';
   throw new Error(
@@ -147,15 +159,105 @@ function firstDecision(text: string | undefined, open: OpenIssue[]): Decision | 
   return undefined;
 }
 
-function attachRepro(d: Decision, result: RunResult): Decision {
+async function resolveRepro(
+  d: Decision,
+  result: RunResult,
+  ctx: { startedAt: number; runId: string; agentId: string },
+): Promise<Decision> {
+  let testPath = safeTestPath(d.testPath);
+  let branch = branchFromRun(result);
+  let rejectedSingleFile = false;
+
+  if (!branch) {
+    const named = safeBranch(d.branch);
+    if (isTriageBranch(named)) {
+      const checked = await confirmBranch(named!, testPath);
+      if (checked) {
+        branch = named;
+        testPath = checked;
+      } else if (testPath) {
+        rejectedSingleFile = true;
+      }
+    }
+  }
+
+  if (!branch && d.action === "create") {
+    const found = await findPushedBranch(ctx, testPath);
+    if (found) {
+      branch = found.branch;
+      testPath = found.testPath;
+    } else if (found === null) {
+      rejectedSingleFile = true;
+    }
+  }
+
+  console.log(`[triage] decision testPath=${testPath ? "ok" : "missing"} branch=${branch ? "ok" : "missing"}`);
+  if (!branch && rejectedSingleFile) console.log("[triage] no-test check=single-file");
+
   const next: Decision = { ...d };
-  const testPath = safeTestPath(d.testPath);
   if (testPath) next.testPath = testPath;
   else delete next.testPath;
-  const branch = branchFromRun(result);
   if (branch) next.branch = branch;
   else delete next.branch;
   return next;
+}
+
+/** A pushed branch must add exactly the one reproduction test. */
+async function confirmBranch(branch: string, testPath: string | undefined): Promise<string | undefined> {
+  let files: gh.ChangedFile[];
+  try {
+    files = await gh.compareFiles("main", branch);
+  } catch {
+    return undefined;
+  }
+  if (!testPath) {
+    if (files.length !== 1 || files[0]?.status !== "added") return undefined;
+    const only = safeTestPath(files[0].filename);
+    if (!only) return undefined;
+    testPath = only;
+  }
+  return isSingleReproAdd(files, testPath) ? testPath : undefined;
+}
+
+/**
+ * `null` means at least one fresh branch was checked and none was a single
+ * reproduction add. `undefined` means there was nothing new to check.
+ */
+async function findPushedBranch(
+  ctx: { startedAt: number; runId: string; agentId: string },
+  testPath: string | undefined,
+): Promise<{ branch: string; testPath: string } | null | undefined> {
+  let listed: gh.TriageBranch[];
+  try {
+    listed = await gh.listTriageBranches();
+  } catch (err) {
+    console.error("[triage] branch lookup failed", err instanceof Error ? err.name : "Error");
+    return undefined;
+  }
+  const fresh = listed.filter((item) => item.committedAt >= ctx.startedAt && isTriageBranch(safeBranch(item.name)));
+  fresh.sort((a, b) => {
+    const score = (name: string) => (mentionsRun(name, ctx) ? 1 : 0);
+    const byId = score(b.name) - score(a.name);
+    if (byId !== 0) return byId;
+    return b.committedAt - a.committedAt;
+  });
+  let sawCandidate = false;
+  for (const item of fresh) {
+    const name = safeBranch(item.name);
+    if (!name) continue;
+    sawCandidate = true;
+    const checked = await confirmBranch(name, testPath);
+    if (checked) return { branch: name, testPath: checked };
+  }
+  return sawCandidate ? null : undefined;
+}
+
+function mentionsRun(name: string, ctx: { runId: string; agentId: string }): boolean {
+  const runId = ctx.runId.trim();
+  const agentId = ctx.agentId.trim();
+  if (runId.length >= 8 && name.includes(runId)) return true;
+  if (agentId.length >= 8 && name.includes(agentId)) return true;
+  return false;
 }
 
 function triageRunError(result: RunResult): Error {
