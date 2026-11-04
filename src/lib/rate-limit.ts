@@ -2,7 +2,7 @@ import { recentReportRecords } from "./github";
 import { reporterIdMarker } from "./shopper";
 
 export const FEEDBACK_WINDOW_MS = 60 * 60 * 1000;
-export const FEEDBACK_LIMIT = 5;
+export const FEEDBACK_LIMIT = 20;
 
 export function countRecentReports(
   userId: string,

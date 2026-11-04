@@ -21,6 +21,8 @@ describe("countRecentReports", () => {
       report(FEEDBACK_WINDOW_MS / 60000 + 5),
     ];
     expect(countRecentReports(USER, records, NOW)).toBe(2);
-    expect(countRecentReports(USER, Array.from({ length: FEEDBACK_LIMIT }, () => report(1)), NOW)).toBe(FEEDBACK_LIMIT);
+    expect(FEEDBACK_LIMIT).toBe(20);
+    expect(FEEDBACK_WINDOW_MS).toBe(60 * 60 * 1000);
+    expect(countRecentReports(USER, Array.from({ length: FEEDBACK_LIMIT }, () => report(1)), NOW)).toBe(20);
   });
 });
