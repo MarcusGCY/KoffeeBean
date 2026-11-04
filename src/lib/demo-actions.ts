@@ -1,7 +1,8 @@
-import { MainMovedError, publicGitHubError, type CommitMeta, type DemoRepo, type MainCommit } from "./demo-repo";
+import { MainMovedError, githubStatus, publicGitHubError, type CommitMeta, type DemoRepo, type MainCommit } from "./demo-repo";
 import {
   DEMO_BUG_COMMIT,
   DEMO_BUG_PATHS,
+  DEMO_SETUP_COMMIT,
   commitIsLive,
   mainIsDeploying,
   pullNumberFromSubject,
@@ -17,6 +18,51 @@ import {
 import { planFileChanges, type FileSnapshot, type PlannedFile } from "./text-patch";
 
 const ATTEMPTS = 3;
+const REPRO_PREFIX = "tests/repro/";
+
+/**
+ * Repro tests added after the setup commit are deleted.
+ * A file that exists in that commit is restored to it.
+ * A 404 means the file is already gone.
+ */
+export async function reproFilesToReset(repo: DemoRepo, head: string): Promise<PlannedFile[]> {
+  const [setupPaths, headPaths] = await Promise.all([
+    repo.pathsUnder(DEMO_SETUP_COMMIT, REPRO_PREFIX),
+    repo.pathsUnder(head, REPRO_PREFIX),
+  ]);
+  const setup = new Set(setupPaths);
+  const onHead = new Set(headPaths);
+  const planned: PlannedFile[] = [];
+  for (const path of headPaths) {
+    if (setup.has(path)) continue;
+    const live = await readOrGone(repo, path, head);
+    if (live === null) continue;
+    planned.push({ path, text: null });
+  }
+  for (const path of setupPaths) {
+    const original = await readOrGone(repo, path, DEMO_SETUP_COMMIT);
+    if (original === null) {
+      if (!onHead.has(path)) continue;
+      const live = await readOrGone(repo, path, head);
+      if (live === null) continue;
+      planned.push({ path, text: null });
+      continue;
+    }
+    const live = onHead.has(path) ? await readOrGone(repo, path, head) : null;
+    if (live === original) continue;
+    planned.push({ path, text: original });
+  }
+  return planned;
+}
+
+async function readOrGone(repo: DemoRepo, path: string, ref: string): Promise<string | null> {
+  try {
+    return await repo.fileAt(path, ref);
+  } catch (error) {
+    if (githubStatus(error) === 404) return null;
+    throw error;
+  }
+}
 
 export type DemoFixRow = {
   issueNumber: number;
@@ -260,15 +306,22 @@ export async function resetDemoBugs(repo: DemoRepo): Promise<DemoActionResult> {
         detail: `Can't restore the demo bugs cleanly. ${plan.path}: ${plan.reason} Nothing was committed.`,
       };
     }
-    if (!plan.changed) {
+    let reproFiles: PlannedFile[];
+    try {
+      reproFiles = await reproFilesToReset(repo, head);
+    } catch (error) {
+      return { flash: "error", detail: publicGitHubError(error) };
+    }
+    const files = [...plan.files, ...reproFiles];
+    if (files.length === 0) {
       const undone = await pullsFullyUndone(repo, head, []);
       const warnings = await closeUndoneIssues(repo, undone, head, true);
       const detail = "The three demo bugs are already in the code on main. Nothing was committed.";
       return { flash: "reset-already", detail: warnings.length ? `${detail} ${warnings.join(" ")}` : detail };
     }
     try {
-      undone = await pullsFullyUndone(repo, head, plan.files);
-      sha = await repo.commitOnMain(head, resetCommitMessage(DEMO_BUG_COMMIT, undone), plan.files);
+      undone = await pullsFullyUndone(repo, head, files);
+      sha = await repo.commitOnMain(head, resetCommitMessage(DEMO_BUG_COMMIT, undone), files);
       break;
     } catch (error) {
       if (error instanceof MainMovedError && attempt < ATTEMPTS - 1) continue;

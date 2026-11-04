@@ -7,6 +7,9 @@ export const DEMO_REVERTED_LABEL = "demo-reverted";
  */
 export const DEMO_BUG_COMMIT = "5cb688963970c83b30bcef265506a58b12084250";
 
+/** Tree the demo was set up from. Repro tests added after this commit are not part of it. */
+export const DEMO_SETUP_COMMIT = "9966d03887c9f6a2c5295abaa11d01d49e29887c";
+
 export const DEMO_BUG_PATHS = [
   "src/lib/images.ts",
   "src/lib/cart.ts",
