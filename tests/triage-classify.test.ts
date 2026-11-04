@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/triage/classify/route";
-import { applyDuplicate, coerceUnitScore, formatZodIssues, ModelOutput } from "@/lib/triage-classify";
+import { applyDuplicate, ClassifyOutput, coerceUnitScore, formatZodIssues, ModelOutput } from "@/lib/triage-classify";
 import { XAI_CHAT_URL } from "@/lib/xai-chat";
 
 const SECRET = "triage-secret";
@@ -308,10 +308,7 @@ describe("POST /api/triage/classify", () => {
     const fraction = { ...valid, confidence: "0.9", duplicate_confidence: 1.2 };
     vi.stubGlobal("fetch", vi.fn(async () => completion(JSON.stringify(fraction))));
     const asFraction = await post({ text: "Add to cart does nothing for the tote." });
-    const fractionBody = (await asFraction.json()) as { confidence: number; duplicate_confidence: number; fallback: boolean };
-    expect(fractionBody.confidence).toBe(0.9);
-    expect(fractionBody.duplicate_confidence).toBeCloseTo(0.012);
-    expect(fractionBody.fallback).toBe(false);
+    expect(await asFraction.json()).toMatchObject({ confidence: 0.9, duplicate_confidence: 1, fallback: false });
 
     const { confidence: _confidence, ...missingScore } = valid;
     vi.stubGlobal("fetch", vi.fn(async () => completion(JSON.stringify(missingScore))));
@@ -369,11 +366,21 @@ describe("triage score coercion and duplicate areas", () => {
     duplicate_confidence: 0.9,
   };
 
-  it("coerces 85, a numeric string, and 1.2, and leaves a missing score untouched", () => {
-    expect(coerceUnitScore(85)).toBe(0.85);
+  it("keeps 0–1, clamps just over 1, and treats 2–100 as a percent", () => {
+    expect(coerceUnitScore(0)).toBe(0);
+    expect(coerceUnitScore(1)).toBe(1);
     expect(coerceUnitScore("0.9")).toBe(0.9);
-    expect(coerceUnitScore(1.2)).toBeCloseTo(0.012);
+    expect(coerceUnitScore(1.2)).toBe(1);
+    expect(coerceUnitScore(1.99)).toBe(1);
+    expect(coerceUnitScore(2)).toBe(0.02);
+    expect(coerceUnitScore(85)).toBe(0.85);
+    expect(coerceUnitScore("85")).toBe(0.85);
+    expect(coerceUnitScore(100)).toBe(1);
     expect(coerceUnitScore(undefined)).toBeUndefined();
+    for (const bad of [101, -0.1, "abc", Number.NaN]) {
+      expect(ClassifyOutput.safeParse({ ...valid, confidence: bad }).success).toBe(false);
+      expect(ClassifyOutput.safeParse({ ...valid, duplicate_confidence: bad }).success).toBe(false);
+    }
   });
 
   it("logs a failing confidence number and never the surrounding text", () => {

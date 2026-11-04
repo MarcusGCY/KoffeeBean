@@ -185,16 +185,16 @@ function wireSchema(schema: z.ZodType): Record<string, unknown> {
 }
 
 /**
- * Accept a 0–1 score, a numeric string, or a percent from 1 to 100.
- * Missing and non-numeric values are left alone so zod still fails.
+ * 0–1 stays, (1, 2) clamps to 1, and 2–100 is a percent.
+ * Anything else is returned unchanged so zod still fails.
  */
 export function coerceUnitScore(value: unknown): unknown {
   const numeric = readNumber(value);
   if (numeric === undefined) return value;
-  const scaled = numeric > 1 && numeric <= 100 ? numeric / 100 : numeric;
-  if (scaled < 0) return 0;
-  if (scaled > 1) return 1;
-  return scaled;
+  if (numeric >= 0 && numeric <= 1) return numeric;
+  if (numeric > 1 && numeric < 2) return 1;
+  if (numeric >= 2 && numeric <= 100) return numeric / 100;
+  return numeric;
 }
 
 function readNumber(value: unknown): number | undefined {
