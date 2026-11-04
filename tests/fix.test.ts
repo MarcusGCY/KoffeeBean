@@ -105,7 +105,9 @@ describe("fixIssue", () => {
 
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
-    expect(handle.send.mock.calls[0][0]).toContain("do not delete it, skip it, or weaken its assertions");
+    expect(handle.send.mock.calls[0][0]).toContain(".cursor/rules/fix.mdc");
+    expect(handle.send.mock.calls[0][0]).toContain("never skip or weaken it (no .skip or .todo)");
+    expect(handle.send.mock.calls[0][0]).toContain("do not edit tests/repro beyond that copy");
     expect(getRun).not.toHaveBeenCalled();
     expect(comment).toHaveBeenCalledWith(14, fixResultComment(`Cursor opened a fix: ${PR}`, {
       prUrl: PR,
