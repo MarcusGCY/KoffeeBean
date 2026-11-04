@@ -150,6 +150,7 @@ function repo(options?: {
     async markIssueReverted(issue) {
       state.marked.push(issue);
     },
+    async deleteTriageBranches() {},
   };
 
   return {

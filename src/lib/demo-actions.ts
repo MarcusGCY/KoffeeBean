@@ -281,6 +281,13 @@ export async function resetDemoBugs(repo: DemoRepo): Promise<DemoActionResult> {
   });
   if (blocked) return { flash: "conflict", detail: `${blocked} Nothing was committed.` };
 
+  try {
+    await repo.deleteTriageBranches();
+  } catch (error) {
+    const status = githubStatus(error);
+    if (status !== 404 && status !== 422) return { flash: "error", detail: publicGitHubError(error) };
+  }
+
   const parent = source.parents[0];
   let sha = "";
   let undone: number[] = [];

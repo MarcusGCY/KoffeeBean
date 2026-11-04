@@ -72,6 +72,8 @@ export interface DemoRepo {
   pull(number: number): Promise<PullInfo | null>;
   commitOnMain(parentSha: string, message: string, files: PlannedFile[]): Promise<string>;
   markIssueReverted(issue: number, body: string): Promise<void>;
+  /** Delete remote beanbox-triage/* refs. A 404 or 422 means that ref is already gone. */
+  deleteTriageBranches(): Promise<void>;
 }
 
 const COMMIT_PAGE = 50;
@@ -308,6 +310,35 @@ export class GithubDemoRepo implements DemoRepo {
       throw error;
     }
     return commit.data.sha;
+  }
+
+  async deleteTriageBranches(): Promise<void> {
+    let refs: { ref: string }[] = [];
+    try {
+      const listed = await this.client.git.listMatchingRefs({
+        owner: this.owner,
+        repo: this.name,
+        ref: "heads/beanbox-triage/",
+      });
+      refs = listed.data;
+    } catch (error) {
+      if (githubStatus(error) === 404 || githubStatus(error) === 422) return;
+      throw error;
+    }
+    for (const item of refs) {
+      if (!item.ref.startsWith("refs/heads/beanbox-triage/")) continue;
+      const ref = item.ref.slice("refs/".length);
+      try {
+        await this.client.git.deleteRef({
+          owner: this.owner,
+          repo: this.name,
+          ref,
+        });
+      } catch (error) {
+        if (githubStatus(error) === 404 || githubStatus(error) === 422) continue;
+        throw error;
+      }
+    }
   }
 
   async markIssueReverted(issue: number, body: string): Promise<void> {

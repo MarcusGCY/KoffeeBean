@@ -76,6 +76,39 @@ export async function branchSha(branch: string): Promise<string | null> {
   }
 }
 
+export type MainCompare = {
+  baseSha: string;
+  ahead: number;
+  behind: number;
+  files: ChangedFile[];
+};
+
+/** Diff `head` against the current main commit, not the name `main`. */
+export async function compareAgainstMain(head: string): Promise<MainCompare | null> {
+  const { owner, repo: r } = repo();
+  try {
+    const main = await gh().git.getRef({ owner, repo: r, ref: "heads/main" });
+    const baseSha = main.data.object.sha.toLowerCase();
+    const res = await gh().repos.compareCommitsWithBasehead({
+      owner,
+      repo: r,
+      basehead: `${baseSha}...${head}`,
+    });
+    return {
+      baseSha: (res.data.base_commit?.sha ?? baseSha).toLowerCase(),
+      ahead: res.data.ahead_by ?? 0,
+      behind: res.data.behind_by ?? 0,
+      files: (res.data.files ?? []).map((file) => ({
+        filename: file.filename,
+        status: file.status ?? "",
+      })),
+    };
+  } catch (error) {
+    if (githubHttpStatus(error) === 404) return null;
+    throw error;
+  }
+}
+
 /** Files changed between base and head. `main...sha` is the triage diff. */
 export async function compareFiles(base: string, head: string): Promise<ChangedFile[]> {
   const { owner, repo: r } = repo();

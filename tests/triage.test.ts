@@ -125,7 +125,9 @@ describe("triageFeedback", () => {
     expect(attempt.send.mock.calls[0][0]).toContain(".cursor/skills/pre-pr-self-check/SKILL.md");
     expect(attempt.send.mock.calls[0][0]).toContain("```json");
     expect(attempt.send.mock.calls[0][0]).toContain("tests/repro/");
-    expect(attempt.send.mock.calls[0][0]).toContain("beanbox-triage");
+    expect(attempt.send.mock.calls[0][0]).toContain("beanbox-triage/<slug>-bc-00000");
+    expect(attempt.send.mock.calls[0][0]).toContain("git fetch origin main");
+    expect(attempt.send.mock.calls[0][0]).toContain("Never reuse or check out an existing branch");
     expect(attempt.send.mock.calls[0][0]).toContain("no edits under src/");
     expect(attempt.send.mock.calls[0][0]).toContain("promo code does nothing");
   });
@@ -179,10 +181,10 @@ describe("triageFeedback", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a safe test path and the branch the agent pushed", async () => {
+  it("uses the exact branch for this run instead of the branch the agent reported", async () => {
     const fenced = [
       "```json",
-      '{"action":"create","title":"Tote","body":"Cart skips the tote.","testPath":"tests/repro/tote-add.test.ts","branch":"ignored-by-server"}',
+      '{"action":"create","title":"Tote","body":"Cart skips the tote.","testPath":"tests/repro/tote-add.test.ts","branch":"beanbox-triage/tote-add"}',
       "```",
     ].join("\n");
     create.mockResolvedValueOnce(fakeAgent({
@@ -196,7 +198,7 @@ describe("triageFeedback", () => {
       title: "Tote",
       body: "Cart skips the tote.",
       testPath: "tests/repro/tote-add.test.ts",
-      branch: "cursor/triage-tote",
+      branch: "beanbox-triage/tote-add-bc-00000",
     });
   });
 
