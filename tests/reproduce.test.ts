@@ -11,7 +11,7 @@ const getIssue = vi.hoisted(() => vi.fn());
 const updateIssue = vi.hoisted(() => vi.fn());
 const setLabels = vi.hoisted(() => vi.fn());
 const branchSha = vi.hoisted(() => vi.fn());
-const compareFiles = vi.hoisted(() => vi.fn());
+const compareAgainstMain = vi.hoisted(() => vi.fn());
 const dispatchRepro = vi.hoisted(() => vi.fn());
 const findReproRun = vi.hoisted(() => vi.fn());
 const workflowRunLog = vi.hoisted(() => vi.fn());
@@ -35,7 +35,7 @@ vi.mock("@/lib/github", async () => {
     updateIssue,
     setLabels,
     branchSha,
-    compareFiles,
+    compareAgainstMain,
     dispatchRepro,
     findReproRun,
     workflowRunLog,
@@ -43,12 +43,13 @@ vi.mock("@/lib/github", async () => {
 });
 
 import { fileFeedback } from "@/lib/file-feedback";
-import { FAILURE_OUTPUT_MAX, parsePending, parseRepro, pendingMarker, reproMarker } from "@/lib/reproduce";
+import { FAILURE_OUTPUT_MAX, judgeRepro, parsePending, parseRepro, pendingMarker, reproMarker } from "@/lib/reproduce";
 import { resumeRepro } from "@/lib/repro-track";
 
 const ISSUE = { number: 21, url: "https://github.com/acme/beanbox/issues/21" };
 const REPORTED = "**Reported by:** Ada (ada@example.com)";
-const BRANCH = "beanbox-triage/tote";
+const BRANCH = "beanbox-triage/tote-add-abcd1234";
+const MAIN = "a".repeat(40);
 const TEST_PATH = "tests/repro/tote-add.test.ts";
 const SHA = "b".repeat(40);
 const CHECK_URL = "https://github.com/acme/beanbox/actions/runs/99";
@@ -91,7 +92,7 @@ beforeEach(() => {
   updateIssue.mockReset();
   setLabels.mockReset();
   branchSha.mockReset();
-  compareFiles.mockReset();
+  compareAgainstMain.mockReset();
   dispatchRepro.mockReset();
   findReproRun.mockReset();
   workflowRunLog.mockReset();
@@ -109,7 +110,12 @@ beforeEach(() => {
   continueTracking.mockResolvedValue(undefined);
   dispatchRepro.mockResolvedValue(undefined);
   branchSha.mockResolvedValue(SHA);
-  compareFiles.mockResolvedValue([{ filename: TEST_PATH, status: "added" }]);
+  compareAgainstMain.mockResolvedValue({
+    baseSha: MAIN,
+    ahead: 1,
+    behind: 0,
+    files: [{ filename: TEST_PATH, status: "added" }],
+  });
   getFile.mockResolvedValue("import { expect, test } from 'vitest';\ntest('tote', () => { expect(true).toBe(false); });\n");
   findReproRun.mockResolvedValue(run());
   workflowRunLog.mockResolvedValue(report(failedAssertion("expected 1 to be 2")));
@@ -188,11 +194,38 @@ describe("fileFeedback reproduce gate", () => {
     expect(requestReview).not.toHaveBeenCalled();
   });
 
+  it("rejects the bare slug and logs a modified file against the current main sha", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const bare = await judgeRepro(TEST_PATH, "beanbox-triage/tote-add");
+    expect(bare.status).toBe("no-test");
+    expect(compareAgainstMain).not.toHaveBeenCalled();
+    expect(log.mock.calls.flat().join("\n")).toContain("no-test reason=branch=missing name=beanbox-triage/tote-add");
+
+    compareAgainstMain.mockResolvedValue({
+      baseSha: MAIN,
+      ahead: 1,
+      behind: 1,
+      files: [{ filename: TEST_PATH, status: "modified" }],
+    });
+    const modified = await judgeRepro(TEST_PATH, BRANCH);
+    expect(modified.status).toBe("no-test");
+    const line = log.mock.calls.flat().join("\n");
+    expect(line).toContain(`file=modified base=${MAIN} path=${TEST_PATH}`);
+    expect(line).toContain("behind=1");
+    expect(line).not.toContain("expected 1 to be 2");
+    log.mockRestore();
+  });
+
   it("labels cannot-reproduce when the triage commit changes another file", async () => {
-    compareFiles.mockResolvedValue([
-      { filename: TEST_PATH, status: "added" },
-      { filename: "src/lib/cart.ts", status: "modified" },
-    ]);
+    compareAgainstMain.mockResolvedValue({
+      baseSha: MAIN,
+      ahead: 1,
+      behind: 0,
+      files: [
+        { filename: TEST_PATH, status: "added" },
+        { filename: "src/lib/cart.ts", status: "modified" },
+      ],
+    });
 
     await fileFeedback("the tote will not add", REPORTED);
 

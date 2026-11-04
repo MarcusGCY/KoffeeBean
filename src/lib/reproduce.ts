@@ -78,6 +78,55 @@ export function isTriageBranch(branch: string | undefined): boolean {
   return Boolean(safe && safe.includes("beanbox-triage"));
 }
 
+/** `tests/repro/<slug>.test.ts` → slug, lowercased. */
+export function slugFromTestPath(testPath: string | undefined): string | undefined {
+  const safe = safeTestPath(testPath);
+  if (!safe) return undefined;
+  const slug = safe.slice("tests/repro/".length, -".test.ts".length).toLowerCase().replace(/[^a-z0-9-]/g, "");
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return undefined;
+  return slug;
+}
+
+/** First 8 characters of a bc- or run id, after dropping characters outside [a-z0-9-]. */
+export function shortRunId(runId: string): string {
+  return runId.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 8);
+}
+
+/** `beanbox-triage/<slug>-<short run id>`. The same inputs always return the same name. */
+export function triageBranchName(slug: string, runId: string): string | undefined {
+  const cleanSlug = slug.toLowerCase().replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  const short = shortRunId(runId);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(cleanSlug) || !short) return undefined;
+  return `beanbox-triage/${cleanSlug}-${short}`;
+}
+
+/** True only for the unique name. The bare `beanbox-triage/<slug>` does not match. */
+export function isExactTriageBranch(branch: string | undefined, testPath: string | undefined): boolean {
+  const ref = safeBranch(branch);
+  const slug = slugFromTestPath(testPath);
+  if (!ref || !slug) return false;
+  const prefix = `beanbox-triage/${slug}-`;
+  if (!ref.startsWith(prefix)) return false;
+  return /^[a-z0-9-]{1,8}$/.test(ref.slice(prefix.length));
+}
+
+/** Why a triage diff is not one new repro file. Paths and SHAs only. */
+export function reproDiffReason(input: {
+  path: string;
+  baseSha: string;
+  behind: number;
+  files: gh.ChangedFile[];
+}): string | undefined {
+  const reasons: string[] = [];
+  if (input.behind > 0) reasons.push(`behind=${input.behind}`);
+  const match = input.files.find((file) => file.filename === input.path);
+  if (match && match.status !== "added") reasons.push(`file=${match.status} base=${input.baseSha} path=${input.path}`);
+  if (input.files.length !== 1) reasons.push(`files=${input.files.length}`);
+  if (reasons.length === 0 && !isSingleReproAdd(input.files, input.path)) reasons.push(`files=${input.files.length}`);
+  if (isSingleReproAdd(input.files, input.path) && input.behind === 0) return undefined;
+  return reasons.join(" ");
+}
+
 export function branchFromRun(result: RunResult): string | undefined {
   for (const item of result.git?.branches ?? []) {
     const branch = safeBranch(item.branch);
@@ -227,30 +276,35 @@ export async function judgeRepro(
 ): Promise<ReproduceResult> {
   const path = safeTestPath(testPath);
   const ref = safeBranch(branch);
-  if (!path || !ref) {
-    console.log(`[triage] no-test check=${!path ? "testPath" : "branch"}`);
+  if (!path || !ref || !isExactTriageBranch(ref, path)) {
+    console.log(`[triage] no-test reason=branch=missing name=${ref ?? ""}`);
     return { status: "no-test" };
-  }
-  if (!isTriageBranch(ref)) {
-    return {
-      status: "error",
-      testPath: path,
-      branch: ref,
-      detail: "The branch name does not contain beanbox-triage, so the reproduction workflow was not started.",
-    };
   }
   const sha = safeSha(opts?.sha) ?? await gh.branchSha(ref);
   if (!sha) {
-    console.log("[triage] no-test check=sha");
+    console.log(`[triage] no-test reason=branch=missing name=${ref}`);
     return { status: "no-test" };
   }
   const source = await gh.getFile(path, sha);
   if (source == null || !source.trim()) {
-    console.log("[triage] no-test check=file");
+    console.log(`[triage] no-test reason=file=missing path=${path}`);
     return { status: "no-test" };
   }
-  const files = await gh.compareFiles("main", sha);
-  if (!isSingleReproAdd(files, path)) {
+  const compared = await gh.compareAgainstMain(ref);
+  if (!compared) {
+    console.log(`[triage] no-test reason=branch=missing name=${ref}`);
+    return { status: "no-test" };
+  }
+  const reason = reproDiffReason({
+    path,
+    baseSha: compared.baseSha,
+    behind: compared.behind,
+    files: compared.files,
+  });
+  if (reason) {
+    console.log(`[triage] no-test reason=${reason}`);
+    const modified = compared.files.some((file) => file.filename === path && file.status !== "added");
+    if (compared.behind > 0 || modified) return { status: "no-test" };
     return {
       status: "error",
       testPath: path,

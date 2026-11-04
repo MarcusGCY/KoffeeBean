@@ -3,8 +3,7 @@ import { z } from "zod";
 import { resolveCursorModel } from "./agent-model";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
-import * as gh from "./github";
-import { branchFromRun, isSingleReproAdd, isTriageBranch, safeBranch, safeTestPath } from "./reproduce";
+import { safeTestPath, shortRunId, slugFromTestPath, triageBranchName } from "./reproduce";
 import { followRun, readFinalAssistantText, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
 const Decision = z.object({
@@ -58,7 +57,7 @@ export async function triageFeedback(
     },
   });
   try {
-    const run = await agent.send(prompt(feedback, open));
+    const run = await agent.send(prompt(feedback, open, shortRunId(agent.agentId)));
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
     const result = await trackTriageRun(run, apiKey, open);
     if (result.status !== "finished") throw triageRunError(result);
@@ -109,10 +108,13 @@ async function hydrateReply(
   return text ? { ...snapshot, result: text } : snapshot;
 }
 
-function prompt(feedback: string, open: OpenIssue[]): string {
+function prompt(feedback: string, open: OpenIssue[], suffix: string): string {
+  const branch = suffix ? `beanbox-triage/<slug>-${suffix}` : "beanbox-triage/<slug>-<8 character run id>";
   return [
     "You triage BeanBox feedback. Follow .cursor/rules/triage.mdc.",
-    "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts on a beanbox-triage/<slug> branch; no edits under src/ and no workflow edits.",
+    "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts; no edits under src/ and no workflow edits.",
+    `The branch name is exactly \`${branch}\`. Run \`git fetch origin main\` and create that branch from the latest origin/main.`,
+    "Never reuse or check out an existing branch. Push only to that name.",
     "Use the write-repro-test and pre-pr-self-check skills (.cursor/skills/write-repro-test/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
     "",
     `## New feedback\n${feedback}`,
@@ -121,7 +123,7 @@ function prompt(feedback: string, open: OpenIssue[]): string {
     "",
     "As your final answer, put one JSON object in a markdown json fenced code block:",
     "```json",
-    '{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts","branch":"beanbox-triage/<slug>"}',
+    `{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts","branch":"${branch}"}`,
     "```",
   ].join("\n");
 }
@@ -170,35 +172,16 @@ async function resolveRepro(
   result: RunResult,
   ctx: { startedAt: number; runId: string; agentId: string },
 ): Promise<Decision> {
+  const id = ctx.agentId.trim() || ctx.runId.trim();
   let testPath = safeTestPath(d.testPath);
-  let branch = branchFromRun(result);
-  let rejectedSingleFile = false;
-
-  if (!branch) {
-    const named = safeBranch(d.branch);
-    if (isTriageBranch(named)) {
-      const checked = await confirmBranch(named!, testPath);
-      if (checked) {
-        branch = named;
-        testPath = checked;
-      } else if (testPath) {
-        rejectedSingleFile = true;
-      }
-    }
+  if (!testPath) {
+    const slug = slugFromReportedBranch(d.branch, id);
+    if (slug) testPath = `tests/repro/${slug}.test.ts`;
   }
-
-  if (!branch && d.action === "create") {
-    const found = await findPushedBranch(ctx, testPath);
-    if (found) {
-      branch = found.branch;
-      testPath = found.testPath;
-    } else if (found === null) {
-      rejectedSingleFile = true;
-    }
-  }
+  const slug = slugFromTestPath(testPath);
+  const branch = slug ? triageBranchName(slug, id) : undefined;
 
   console.log(`[triage] decision testPath=${testPath ? "ok" : "missing"} branch=${branch ? "ok" : "missing"}`);
-  if (!branch && rejectedSingleFile) console.log("[triage] no-test check=single-file");
 
   const next: Decision = { ...d };
   if (testPath) next.testPath = testPath;
@@ -208,62 +191,14 @@ async function resolveRepro(
   return next;
 }
 
-/** A pushed branch must add exactly the one reproduction test. */
-async function confirmBranch(branch: string, testPath: string | undefined): Promise<string | undefined> {
-  let files: gh.ChangedFile[];
-  try {
-    files = await gh.compareFiles("main", branch);
-  } catch {
-    return undefined;
-  }
-  if (!testPath) {
-    if (files.length !== 1 || files[0]?.status !== "added") return undefined;
-    const only = safeTestPath(files[0].filename);
-    if (!only) return undefined;
-    testPath = only;
-  }
-  return isSingleReproAdd(files, testPath) ? testPath : undefined;
-}
-
-/**
- * `null` means at least one fresh branch was checked and none was a single
- * reproduction add. `undefined` means there was nothing new to check.
- */
-async function findPushedBranch(
-  ctx: { startedAt: number; runId: string; agentId: string },
-  testPath: string | undefined,
-): Promise<{ branch: string; testPath: string } | null | undefined> {
-  let listed: gh.TriageBranch[];
-  try {
-    listed = await gh.listTriageBranches();
-  } catch (err) {
-    console.error("[triage] branch lookup failed", err instanceof Error ? err.name : "Error");
-    return undefined;
-  }
-  const fresh = listed.filter((item) => item.committedAt >= ctx.startedAt && isTriageBranch(safeBranch(item.name)));
-  fresh.sort((a, b) => {
-    const score = (name: string) => (mentionsRun(name, ctx) ? 1 : 0);
-    const byId = score(b.name) - score(a.name);
-    if (byId !== 0) return byId;
-    return b.committedAt - a.committedAt;
-  });
-  let sawCandidate = false;
-  for (const item of fresh) {
-    const name = safeBranch(item.name);
-    if (!name) continue;
-    sawCandidate = true;
-    const checked = await confirmBranch(name, testPath);
-    if (checked) return { branch: name, testPath: checked };
-  }
-  return sawCandidate ? null : undefined;
-}
-
-function mentionsRun(name: string, ctx: { runId: string; agentId: string }): boolean {
-  const runId = ctx.runId.trim();
-  const agentId = ctx.agentId.trim();
-  if (runId.length >= 8 && name.includes(runId)) return true;
-  if (agentId.length >= 8 && name.includes(agentId)) return true;
-  return false;
+/** Slug encoded in `beanbox-triage/<slug>-<this run's short id>`, never a bare slug. */
+function slugFromReportedBranch(branch: string | undefined, runId: string): string | undefined {
+  const short = shortRunId(runId);
+  const safe = branch?.trim().replace(/^refs\/heads\//, "");
+  if (!safe || !short || !safe.startsWith("beanbox-triage/") || !safe.endsWith(`-${short}`)) return undefined;
+  const slug = safe.slice("beanbox-triage/".length, -(`-${short}`.length));
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) return undefined;
+  return slug;
 }
 
 function triageRunError(result: RunResult): Error {
