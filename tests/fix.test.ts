@@ -71,6 +71,8 @@ beforeEach(() => {
   process.env.GITHUB_REPO = "acme/beanbox";
   delete process.env.VERCEL;
   delete process.env.CRON_SECRET;
+  delete process.env.TRIAGE_MODEL;
+  delete process.env.FIX_MODEL;
   getIssue.mockImplementation(async () => ({ ...issue, labels: [...labels] }));
   setLabels.mockImplementation(async (_n: number, next: string[]) => {
     labels = [...next];
@@ -106,6 +108,13 @@ describe("fixIssue", () => {
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/rules/fix.mdc");
+    expect(create.mock.calls[0][0].model).toEqual({
+      id: "claude-sonnet-5-5",
+      params: [
+        { id: "reasoning_effort", value: "high" },
+        { id: "context", value: "300k" },
+      ],
+    });
     expect(handle.send.mock.calls[0][0]).toContain("never skip or weaken it (no .skip or .todo)");
     expect(handle.send.mock.calls[0][0]).toContain("do not edit tests/repro beyond that copy");
     expect(getRun).not.toHaveBeenCalled();

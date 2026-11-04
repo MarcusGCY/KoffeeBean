@@ -65,6 +65,8 @@ beforeEach(() => {
   process.env.CURSOR_API_KEY = API_KEY;
   process.env.GITHUB_REPO = "acme/beanbox";
   delete process.env.VERCEL;
+  delete process.env.TRIAGE_MODEL;
+  delete process.env.FIX_MODEL;
 });
 
 afterEach(() => {
@@ -111,6 +113,7 @@ describe("triageFeedback", () => {
     expect(create.mock.calls[0][0].name).toMatch(/^beanbox-triage-\d+-/);
     expect(create.mock.calls[0][0]).toMatchObject({
       apiKey: API_KEY,
+      model: { id: "composer-2.5", params: [{ id: "fast", value: "false" }] },
       mode: "agent",
       cloud: {
         repos: [{ url: "https://github.com/acme/beanbox", startingRef: "main" }],

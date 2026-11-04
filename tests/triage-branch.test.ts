@@ -80,6 +80,8 @@ beforeEach(() => {
   process.env.CURSOR_API_KEY = "test-cursor-key-do-not-log";
   process.env.GITHUB_REPO = "acme/beanbox";
   process.env.APPROVAL_SECRET = "test-secret";
+  delete process.env.TRIAGE_MODEL;
+  delete process.env.FIX_MODEL;
   listOpenFeedbackIssues.mockResolvedValue([]);
   createIssue.mockResolvedValue({ number: 48, url: "https://github.com/acme/beanbox/issues/48" });
   closeIssue.mockResolvedValue(undefined);
