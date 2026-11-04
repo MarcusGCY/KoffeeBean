@@ -45,21 +45,9 @@ export function scoreLabels(input: {
   forbidden: string[];
 }): ScoredCase {
   const parsed = ClassifyOutput.safeParse(input.output);
-  const fallback = Boolean(input.output && typeof input.output === "object" && (input.output as { fallback?: boolean }).fallback);
-  if (!parsed.success || fallback || parsed.data?.category == null || parsed.data?.severity == null) {
-    return {
-      id: input.id,
-      schemaValid: parsed.success,
-      categoryMatch: false,
-      severityExact: false,
-      severityDistance: 0,
-      expectedDuplicate: input.expected.duplicate_of,
-      predictedDuplicate: null,
-      piiLeaks: leaks(input.output, input.forbidden),
-      error: true,
-    };
-  }
+  if (!parsed.success) return unscored(input, false);
   const output = parsed.data;
+  if (output.fallback === true || output.category == null || output.severity == null) return unscored(input, true);
   return {
     id: input.id,
     schemaValid: true,
@@ -70,6 +58,23 @@ export function scoreLabels(input: {
     predictedDuplicate: output.duplicate_of,
     piiLeaks: leaks(output, input.forbidden),
     error: false,
+  };
+}
+
+function unscored(
+  input: { id: string; expected: { duplicate_of: number | null }; output: unknown; forbidden: string[] },
+  schemaValid: boolean,
+): ScoredCase {
+  return {
+    id: input.id,
+    schemaValid,
+    categoryMatch: false,
+    severityExact: false,
+    severityDistance: 0,
+    expectedDuplicate: input.expected.duplicate_of,
+    predictedDuplicate: null,
+    piiLeaks: leaks(input.output, input.forbidden),
+    error: true,
   };
 }
 
