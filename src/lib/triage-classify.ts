@@ -11,8 +11,8 @@ const CATEGORIES = ["images", "cart", "checkout", "pricing", "auth", "performanc
 const SEVERITIES = ["S1", "S2", "S3", "S4"] as const;
 
 export const ClassifyOutput = z.object({
-  category: z.enum(CATEGORIES),
-  severity: z.enum(SEVERITIES),
+  category: z.enum(CATEGORIES).nullable(),
+  severity: z.enum(SEVERITIES).nullable(),
   summary: z.string().max(500),
   steps_to_reproduce: z.array(z.string().max(500)).max(8),
   suspected_area: z.string().max(200),
@@ -23,6 +23,8 @@ export const ClassifyOutput = z.object({
   redacted_text: z.string().max(8000),
   confidence: z.number().min(0).max(1),
   needs_human: z.boolean(),
+  fallback: z.boolean().optional(),
+  fallback_reason: z.string().max(80).nullable().optional(),
 });
 
 export type ClassifyOutput = z.infer<typeof ClassifyOutput>;
@@ -30,7 +32,13 @@ export type ClassifyOutput = z.infer<typeof ClassifyOutput>;
 export type ClassifyInput = {
   text: string;
   screenshot?: string;
-  candidates: { number: number; title: string; body?: string }[];
+  candidates: {
+    number: number;
+    title: string;
+    body?: string;
+    category?: string;
+    suspected_area?: string;
+  }[];
 };
 
 const SCHEMA = {
@@ -79,11 +87,11 @@ export function triageGrokModel(): string {
   return process.env.TRIAGE_GROK_MODEL?.trim() || DEFAULT_TRIAGE_GROK_MODEL;
 }
 
-export function safeClassification(text: string, types: PiiType[]): ClassifyOutput {
+export function safeClassification(text: string, types: PiiType[], reason: string): ClassifyOutput {
   const redacted = redactText(text);
   return {
-    category: "other",
-    severity: "S4",
+    category: null,
+    severity: null,
     summary: "Could not classify this report.",
     steps_to_reproduce: [],
     suspected_area: "unknown",
@@ -94,6 +102,8 @@ export function safeClassification(text: string, types: PiiType[]): ClassifyOutp
     redacted_text: redacted.text.slice(0, 8000),
     confidence: 0,
     needs_human: true,
+    fallback: true,
+    fallback_reason: reason,
   };
 }
 
@@ -107,6 +117,7 @@ export async function classifyFeedback(input: ClassifyInput): Promise<ClassifyOu
   let completionTokens = 0;
   let sawUsage = false;
   let parsed: ClassifyOutput | undefined;
+  let lastReason = "json";
   for (let attempt = 0; attempt < 2 && !parsed; attempt += 1) {
     const result = await complete(key, model, prepared);
     if (result.usage) {
@@ -114,11 +125,25 @@ export async function classifyFeedback(input: ClassifyInput): Promise<ClassifyOu
       promptTokens += result.usage.prompt_tokens ?? 0;
       completionTokens += result.usage.completion_tokens ?? 0;
     }
-    if (!result.ok) continue;
-    const checked = parseOutput(result.content, prepared.candidateNumbers);
-    if (checked) parsed = scrubOutput(checked, prepared.types);
+    if (!result.ok) {
+      lastReason = result.reason;
+      logFallback(result.reason, attempt + 1, result.issues);
+      continue;
+    }
+    const checked = parseOutput(result.content);
+    if (!checked.ok) {
+      lastReason = checked.reason;
+      logFallback(checked.reason, attempt + 1, checked.issues);
+      continue;
+    }
+    const scrubbed = scrubOutput(checked.value, prepared.types);
+    parsed = {
+      ...applyDuplicate(scrubbed, prepared.candidates),
+      fallback: false,
+      fallback_reason: null,
+    };
   }
-  const output = parsed ?? safeClassification(prepared.redactedText, prepared.types);
+  const output = parsed ?? safeClassification(prepared.redactedText, prepared.types, lastReason);
   const cost = sawUsage
     ? ((promptTokens * INPUT_PER_M + completionTokens * OUTPUT_PER_M) / 1_000_000).toFixed(6)
     : undefined;
@@ -145,12 +170,26 @@ export class XaiRequestError extends Error {
   }
 }
 
+function logFallback(reason: string, attempt: number, issues: string[]) {
+  console.error(`[triage-classify] fallback reason=${reason} attempt=${attempt} issues=${issues.join(",")}`);
+}
+
+type PreparedCandidate = {
+  number: number;
+  title: string;
+  body?: string;
+  category?: string;
+  suspected_area?: string;
+};
+
 function prepareInput(input: ClassifyInput) {
   const text = redactText(input.text);
-  const candidates = input.candidates.map((candidate) => ({
+  const candidates: PreparedCandidate[] = input.candidates.map((candidate) => ({
     number: candidate.number,
     title: redactText(candidate.title).text,
     body: candidate.body ? redactText(candidate.body).text : undefined,
+    category: candidate.category,
+    suspected_area: candidate.suspected_area,
   }));
   const types = new Set<PiiType>(text.types);
   for (const candidate of input.candidates) {
@@ -167,23 +206,45 @@ function prepareInput(input: ClassifyInput) {
   return {
     redactedText: text.text,
     types: [...types],
-    candidateNumbers: new Set(candidates.map((candidate) => candidate.number)),
+    candidates,
     userText,
     screenshot: input.screenshot,
   };
 }
 
-function parseOutput(content: string, allowed: Set<number>): ClassifyOutput | undefined {
+function parseOutput(content: string): { ok: true; value: ClassifyOutput } | { ok: false; reason: "json" | "zod"; issues: string[] } {
   let raw: unknown;
   try {
     raw = JSON.parse(content) as unknown;
   } catch {
-    return undefined;
+    return { ok: false, reason: "json", issues: [] };
   }
   const parsed = ClassifyOutput.safeParse(raw);
-  if (!parsed.success) return undefined;
-  if (parsed.data.duplicate_of != null && !allowed.has(parsed.data.duplicate_of)) return undefined;
-  return parsed.data;
+  if (!parsed.success) {
+    const issues = [...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || issue.code))];
+    return { ok: false, reason: "zod", issues };
+  }
+  if (parsed.data.category == null || parsed.data.severity == null) {
+    return { ok: false, reason: "zod", issues: ["category", "severity"] };
+  }
+  return { ok: true, value: parsed.data };
+}
+
+/** Keep a duplicate only when it is confident and the issue labels agree. */
+export function applyDuplicate(
+  value: ClassifyOutput,
+  candidates: { number: number; category?: string; suspected_area?: string }[],
+): ClassifyOutput {
+  if (value.duplicate_of == null) return value;
+  const match = candidates.find((candidate) => candidate.number === value.duplicate_of);
+  const agreed =
+    match != null &&
+    value.duplicate_confidence >= 0.8 &&
+    Boolean(match.category) &&
+    Boolean(match.suspected_area) &&
+    match.category === value.category &&
+    match.suspected_area === value.suspected_area;
+  return agreed ? value : { ...value, duplicate_of: null };
 }
 
 function scrubOutput(value: ClassifyOutput, inputTypes: PiiType[]): ClassifyOutput {
@@ -215,7 +276,7 @@ function uniqueTypes(types: PiiType[]): string[] {
 
 type Completion =
   | { ok: true; content: string; usage?: { prompt_tokens?: number; completion_tokens?: number } }
-  | { ok: false; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+  | { ok: false; reason: "json" | "zod" | "length" | `http_${number}`; issues: string[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
 
 async function complete(
   key: string,
@@ -253,18 +314,20 @@ async function complete(
       body = "";
     }
     console.error(xaiFailureLine(response.status, redactText(body).text));
-    throw new XaiRequestError();
+    return { ok: false, reason: `http_${response.status}`, issues: [] };
   }
   let payload: {
-    choices?: { message?: { content?: unknown } }[];
+    choices?: { finish_reason?: string; message?: { content?: unknown } }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   try {
     payload = (await response.json()) as typeof payload;
   } catch {
-    return { ok: false };
+    return { ok: false, reason: "json", issues: [] };
   }
-  const message = payload.choices?.[0]?.message?.content;
-  if (typeof message !== "string") return { ok: false, usage: payload.usage };
+  const choice = payload.choices?.[0];
+  if (choice?.finish_reason === "length") return { ok: false, reason: "length", issues: [], usage: payload.usage };
+  const message = choice?.message?.content;
+  if (typeof message !== "string") return { ok: false, reason: "json", issues: [], usage: payload.usage };
   return { ok: true, content: message, usage: payload.usage };
 }

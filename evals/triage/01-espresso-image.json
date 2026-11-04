@@ -9,7 +9,7 @@
         "body": "The 1kg tile has no photo."
       }
     ],
-    "screenshot": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    "screenshot": "espresso-missing.png"
   },
   "expected": {
     "category": "images",

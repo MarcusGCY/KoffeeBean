@@ -6,7 +6,8 @@
       {
         "number": 41,
         "title": "Canvas tote never lands in the cart",
-        "body": "Adding the tote does nothing."
+        "category": "cart",
+        "suspected_area": "canvas tote"
       }
     ]
   },

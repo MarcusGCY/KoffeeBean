@@ -12,6 +12,7 @@ import {
   scoreLabels,
   severityExactRate,
   suiteGreen,
+  summarize,
   type ScoredCase,
 } from "@/lib/triage-score";
 
@@ -26,8 +27,9 @@ function row(partial: Partial<ScoredCase> & Pick<ScoredCase, "id">): ScoredCase 
     expectedDuplicate: null,
     predictedDuplicate: null,
     piiLeaks: [],
-    ...partial,
-  };
+      error: false,
+      ...partial,
+    };
 }
 
 describe("triage eval scoring", () => {
@@ -50,11 +52,20 @@ describe("triage eval scoring", () => {
       severityExact: 0.8,
       maxSeverityDistance: 1,
       duplicatePrecision: 0.9,
+      errorCount: 0,
+      errorRate: 0,
     };
     expect(decide(cases, gates)).toBe("GO");
     expect(decide(cases, { ...gates, maxSeverityDistance: 2 })).toBe("NO-GO");
     expect(decide(cases, { ...gates, duplicatePrecision: 0.5 })).toBe("NO-GO");
     expect(decide(cases, { ...gates, piiClean: false })).toBe("NO-GO");
+    const withError = summarize(
+      [row({ id: "ok", severityDistance: 0 }), row({ id: "bad", error: true, severityDistance: 99, schemaValid: false })],
+      { repro: { status: "na", detail: "n/a" }, skips: [], testsGreen: true },
+    );
+    expect(withError.maxSeverityDistance).toBe(0);
+    expect(withError.errorCount).toBe(1);
+    expect(withError.decision).toBe("NO-GO");
   });
 
   it("treats a missing repro pair as n/a and requires a fail then a pass", () => {

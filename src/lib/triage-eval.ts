@@ -68,7 +68,7 @@ export async function runTriageEval(options: {
       try {
         output = await classifyFeedback({
           text: item.input.text,
-          screenshot: item.input.screenshot,
+          screenshot: await screenshotFor(item.input.screenshot, options.casesDir),
           candidates: item.input.candidates ?? [],
         });
       } catch {
@@ -117,6 +117,14 @@ export async function runTriageEval(options: {
   writeFileSync(path.join(options.outputDir, "latest.json"), JSON.stringify(report, null, 2));
   if (!options.quiet) printScorecard(report);
   return report;
+}
+
+function screenshotFor(value: string | undefined, casesDir: string): string | undefined {
+  if (!value) return undefined;
+  if (value.startsWith("data:") || value.startsWith("https://")) return value;
+  const file = path.resolve(casesDir, value);
+  const bytes = readFileSync(file);
+  return `data:image/png;base64,${bytes.toString("base64")}`;
 }
 
 function loadCases(dir: string): EvalCaseFile[] {
@@ -199,6 +207,7 @@ export function printScorecard(report: EvalReport) {
   console.log(`severity exact ${pct(gates.severityExact)} (target 80%), max off ${gates.maxSeverityDistance}`);
   console.log(`duplicate precision ${pct(gates.duplicatePrecision)} (target 90%)`);
   console.log(`schema ${gates.schemaValid ? "100%" : "FAIL"}  pii ${gates.piiClean ? "clean" : "LEAK"}`);
+  console.log(`errors ${gates.errorCount} (${pct(gates.errorRate)} gate 0%)`);
   console.log(`repro before/after: ${gates.repro.status} (${gates.repro.detail})`);
   console.log(`skipped tests: ${gates.skips.length ? gates.skips.join(", ") : "none"}`);
   console.log(`npm test: ${gates.testsGreen ? "green" : "FAIL"}`);
