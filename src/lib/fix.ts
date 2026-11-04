@@ -1,4 +1,5 @@
-import { Agent, type Run, type RunResult } from "@cursor/sdk";
+import { Agent, type ModelSelection, type Run, type RunResult } from "@cursor/sdk";
+import { resolveCursorModel } from "./agent-model";
 import { env, repo } from "./env";
 import {
   BEANBOX_ISSUE_METADATA,
@@ -24,6 +25,15 @@ import {
 
 type IssueRef = { number: number; title: string; url: string };
 
+// Fix is rare, runs only after approval and is correctness-critical, so it uses a stronger model.
+const FIX_MODEL: ModelSelection = {
+  id: "claude-sonnet-5-5",
+  params: [
+    { id: "reasoning_effort", value: "high" },
+    { id: "context", value: "300k" },
+  ],
+};
+
 /**
  * Launch a Cursor cloud agent that fixes the issue and opens a PR.
  *
@@ -38,8 +48,15 @@ export async function fixIssue(number: number) {
 
   const apiKey = env("CURSOR_API_KEY");
   const startedAt = Date.now();
+  const model = await resolveCursorModel({
+    kind: "fix",
+    envName: "FIX_MODEL",
+    fallback: FIX_MODEL,
+    apiKey,
+  });
   const agent = await Agent.create({
     apiKey,
+    model,
     name: `beanbox-fix-#${number}`,
     cloud: {
       repos: [{ url: repo().url }],

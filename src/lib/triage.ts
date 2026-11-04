@@ -1,5 +1,6 @@
-import { Agent, type Run, type RunResult } from "@cursor/sdk";
+import { Agent, type ModelSelection, type Run, type RunResult } from "@cursor/sdk";
 import { z } from "zod";
+import { resolveCursorModel } from "./agent-model";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
 import * as gh from "./github";
@@ -18,6 +19,13 @@ export type Decision = z.infer<typeof Decision> & { branch?: string };
 
 const PREVIEW_MAX = 160;
 
+// Triage runs on every feedback submission and is tightly constrained
+// (one failing test, single-file check), so it uses a cheap model.
+const TRIAGE_MODEL: ModelSelection = {
+  id: "composer-2.5",
+  params: [{ id: "fast", value: "false" }],
+};
+
 /**
  * Ask a Cursor agent to decide whether a feedback report duplicates an open
  * issue. A new bug is a failing vitest file pushed on a beanbox-triage branch.
@@ -32,8 +40,15 @@ export async function triageFeedback(
 ): Promise<Decision> {
   const apiKey = env("CURSOR_API_KEY");
   const startedAt = Date.now();
+  const model = await resolveCursorModel({
+    kind: "triage",
+    envName: "TRIAGE_MODEL",
+    fallback: TRIAGE_MODEL,
+    apiKey,
+  });
   const agent = await Agent.create({
     apiKey,
+    model,
     // Parallel reports must not share one cloud agent name.
     name: `beanbox-triage-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
     mode: "agent",
