@@ -69,7 +69,48 @@ export function scrubSecrets(text: string): string {
     const value = process.env[key]?.trim();
     if (value && value.length >= 8) out = out.split(value).join("[redacted]");
   }
-  return out.replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+  return out.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").replace(/xai-[A-Za-z0-9_-]+/g, "[redacted]");
+}
+
+/** One log line for a non-2xx xAI response. Code and error only, scrubbed, about 200 characters. */
+export function xaiFailureLine(status: number, body: string): string {
+  const fields = readXaiError(body);
+  const detail = scrubSecrets(`code=${fields.code} error=${fields.error}`).replace(/\s+/g, " ").trim();
+  const prefix = `[chat] xai ${status} `;
+  const room = 200 - prefix.length;
+  const clipped = detail.length > room ? `${detail.slice(0, Math.max(0, room - 1))}…` : detail;
+  return `${prefix}${clipped}`;
+}
+
+function readXaiError(body: string): { code: string; error: string } {
+  const text = body.replace(/\s+/g, " ").trim();
+  if (!text) return { code: "", error: "" };
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { code: "", error: text };
+    const row = parsed as Record<string, unknown>;
+    let code = asText(row.code);
+    let error = asText(row.error);
+    if (row.error && typeof row.error === "object" && !Array.isArray(row.error)) {
+      const nested = row.error as Record<string, unknown>;
+      if (!code) code = asText(nested.code);
+      if (typeof nested.message === "string") error = nested.message;
+    }
+    return { code, error };
+  } catch {
+    return { code: "", error: text };
+  }
+}
+
+function asText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
 }
 
 export function chatFailureStatus(err: unknown): { status: number; error: string } {
@@ -231,7 +272,16 @@ async function complete(messages: ApiMessage[], tools: boolean, signal: AbortSig
       ...(tools ? { tools: CHAT_TOOLS } : {}),
     }),
   });
-  if (!response.ok) throw new Error(`xai_${response.status}`);
+  if (!response.ok) {
+    let body = "";
+    try {
+      body = await response.text();
+    } catch {
+      body = "";
+    }
+    console.error(xaiFailureLine(response.status, body));
+    throw new Error(`xai_${response.status}`);
+  }
   try {
     return (await response.json()) as Completion;
   } catch {
