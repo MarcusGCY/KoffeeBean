@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { listDemoFixes, resetDemoBugs, revertMergedFix } from "@/lib/demo-actions";
 import { MainMovedError, type CommitMeta, type DemoRepo, type MainCommit } from "@/lib/demo-repo";
-import { DEMO_BUG_COMMIT, parseResetMarker, parseRevertMarker } from "@/lib/demo-status";
+import { DEMO_BUG_COMMIT, DEMO_SETUP_COMMIT, parseResetMarker, parseRevertMarker } from "@/lib/demo-status";
 
 const PARENT = "b".repeat(40);
 const MERGE = "c".repeat(40);
@@ -16,7 +16,13 @@ const BAD_CART = "export function addItem(id) {\n  return id.replace(\"tote\", \
 const CHEAP = "{ \"id\": \"tee\", \"price\": 2500 }\n";
 const PRICEY = "{ \"id\": \"tee\", \"price\": 25000 }\n";
 
-function repo(options?: { currentImages?: string; moveMain?: boolean; conflict?: boolean }): DemoRepo & {
+function repo(options?: {
+  currentImages?: string;
+  moveMain?: boolean;
+  conflict?: boolean;
+  seed?: (put: (ref: string, path: string, text: string | null) => void) => void;
+  fileAt?: (path: string, ref: string, read: () => string | null) => Promise<string | null>;
+}): DemoRepo & {
   commits: MainCommit[];
   marked: number[];
   commitCount: number;
@@ -42,6 +48,7 @@ function repo(options?: { currentImages?: string; moveMain?: boolean; conflict?:
   put(DEMO_BUG_COMMIT, "src/lib/images.ts", BUGGY);
   put(DEMO_BUG_COMMIT, "src/lib/cart.ts", BAD_CART);
   put(DEMO_BUG_COMMIT, "src/data/products.json", PRICEY);
+  options?.seed?.(put);
 
   const state = {
     head: HEAD,
@@ -100,8 +107,17 @@ function repo(options?: { currentImages?: string; moveMain?: boolean; conflict?:
       }
       throw new Error(`unknown commit ${sha}`);
     },
+    async pathsUnder(ref: string, prefix: string) {
+      const tree = files.get(ref);
+      if (!tree) return [];
+      return [...tree.entries()]
+        .filter(([path, text]) => text !== null && path.startsWith(prefix))
+        .map(([path]) => path);
+    },
     async fileAt(path: string, ref: string) {
-      return files.get(ref)?.get(path) ?? null;
+      const read = () => files.get(ref)?.get(path) ?? null;
+      if (options?.fileAt) return options.fileAt(path, ref, read);
+      return read();
     },
     async onMain() {
       return true;
@@ -226,5 +242,64 @@ describe("resetDemoBugs", () => {
     expect(result.flash).toBe("reset-already");
     expect(source.commitCount).toBe(0);
     expect(source.marked).toEqual([22]);
+  });
+
+  it("deletes a repro file added after the setup commit and does not fetch it there", async () => {
+    const added = "tests/repro/house-espresso-image.test.ts";
+    const reads: string[] = [];
+    const source = repo({
+      seed: (put) => put(HEAD, added, "it('fails', () => {})\n"),
+      fileAt: async (path, ref, read) => {
+        if (path === added) reads.push(ref);
+        return read();
+      },
+    });
+    const result = await resetDemoBugs(source);
+    expect(result.flash).toBe("reset");
+    expect(reads).not.toContain(DEMO_SETUP_COMMIT);
+    const committed = source.commits[0];
+    expect(await source.fileAt(added, committed.sha)).toBeNull();
+    expect(await source.fileAt("src/lib/cart.ts", committed.sha)).toBe(BAD_CART);
+    expect(await source.fileAt("src/data/products.json", committed.sha)).toBe(PRICEY);
+  });
+
+  it("restores a repro file from the setup commit and keeps one that already matches", async () => {
+    const kept = "tests/repro/kept.test.ts";
+    const edited = "tests/repro/old.test.ts";
+    const original = "it('original', () => {})\n";
+    const source = repo({
+      seed: (put) => {
+        put(DEMO_SETUP_COMMIT, kept, original);
+        put(HEAD, kept, original);
+        put(DEMO_SETUP_COMMIT, edited, original);
+        put(HEAD, edited, "it('edited', () => {})\n");
+      },
+    });
+    const result = await resetDemoBugs(source);
+    expect(result.flash).toBe("reset");
+    const sha = source.commits[0].sha;
+    expect(await source.fileAt(kept, sha)).toBe(original);
+    expect(await source.fileAt(edited, sha)).toBe(original);
+  });
+
+  it("treats a 404 for an already deleted repro file as gone and still resets", async () => {
+    const added = "tests/repro/house-espresso-image.test.ts";
+    const reads: string[] = [];
+    const source = repo({
+      currentImages: BUGGY,
+      seed: (put) => put(HEAD, added, "it('fails', () => {})\n"),
+      fileAt: async (path, ref, read) => {
+        if (path === added) {
+          reads.push(ref);
+          throw Object.assign(new Error("Not Found"), { status: 404 });
+        }
+        return read();
+      },
+    });
+    const result = await resetDemoBugs(source);
+    expect(result.flash).toBe("reset-already");
+    expect(result.detail).not.toMatch(/could not find/i);
+    expect(reads).not.toContain(DEMO_SETUP_COMMIT);
+    expect(source.commitCount).toBe(0);
   });
 });

@@ -61,6 +61,8 @@ export interface DemoRepo {
   headSha(): Promise<string>;
   commitMeta(sha: string): Promise<CommitMeta>;
   fileAt(path: string, ref: string): Promise<string | null>;
+  /** Blob paths under `prefix` at `ref`. A missing tree is an empty list. */
+  pathsUnder(ref: string, prefix: string): Promise<string[]>;
   /** True when `sha` is main or an ancestor of main. */
   onMain(sha: string): Promise<boolean>;
   /**
@@ -79,16 +81,22 @@ export function githubDemoRepo(): DemoRepo {
   return new GithubDemoRepo();
 }
 
-class GithubDemoRepo implements DemoRepo {
-  private readonly client = new Octokit({ auth: env("GITHUB_TOKEN") });
+export class GithubDemoRepo implements DemoRepo {
+  private readonly client: Octokit;
   private readonly owner: string;
   private readonly name: string;
   private pullsDenied = false;
 
-  constructor() {
-    const parsed = repo();
-    this.owner = parsed.owner;
-    this.name = parsed.repo;
+  constructor(client?: Octokit, owner?: string, name?: string) {
+    this.client = client ?? new Octokit({ auth: env("GITHUB_TOKEN") });
+    if (owner && name) {
+      this.owner = owner;
+      this.name = name;
+    } else {
+      const parsed = repo();
+      this.owner = parsed.owner;
+      this.name = parsed.repo;
+    }
   }
 
   repoFullName(): string {
@@ -205,6 +213,28 @@ class GithubDemoRepo implements DemoRepo {
     }
   }
 
+  async pathsUnder(ref: string, prefix: string): Promise<string[]> {
+    try {
+      const commit = await this.client.git.getCommit({
+        owner: this.owner,
+        repo: this.name,
+        commit_sha: ref,
+      });
+      const tree = await this.client.git.getTree({
+        owner: this.owner,
+        repo: this.name,
+        tree_sha: commit.data.tree.sha,
+        recursive: "1",
+      });
+      return tree.data.tree
+        .filter((item) => item.type === "blob" && typeof item.path === "string" && item.path.startsWith(prefix))
+        .map((item) => item.path as string);
+    } catch (error) {
+      if (githubStatus(error) === 404) return [];
+      throw error;
+    }
+  }
+
   async onMain(sha: string): Promise<boolean> {
     const res = await this.client.repos.compareCommitsWithBasehead({
       owner: this.owner,
@@ -290,6 +320,7 @@ class GithubDemoRepo implements DemoRepo {
         description: "Fix was reverted on main so the BeanBox demo can run again",
       });
     } catch (error) {
+      // POST /repos/{owner}/{repo}/labels returns 422 when the label already exists.
       if (githubStatus(error) !== 422) throw error;
     }
     await this.client.issues.addLabels({
@@ -314,9 +345,10 @@ class GithubDemoRepo implements DemoRepo {
 }
 
 export function githubStatus(error: unknown): number | undefined {
-  if (typeof error === "object" && error && "status" in error && typeof error.status === "number") {
-    return error.status;
-  }
+  if (typeof error !== "object" || !error) return undefined;
+  const record = error as { status?: unknown; response?: { status?: unknown } };
+  if (typeof record.status === "number") return record.status;
+  if (typeof record.response?.status === "number") return record.response.status;
   return undefined;
 }
 
