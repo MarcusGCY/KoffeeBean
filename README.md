@@ -283,21 +283,23 @@ Auth0 merges only top-level keys. A patch sends the full value of each key it ch
 
 The Management API uses a separate machine-to-machine application (not the Regular Web Application used for login). In the Auth0 dashboard, create an application of type **Machine to Machine**, authorize the **Auth0 Management API**, and grant `read:users` and `update:users_app_metadata`. `read:users_app_metadata` does not authorize `GET /api/v2/users/{id}` (Auth0 expects `read:users` for that call). `update:users_app_metadata` is enough for a patch that sends only `app_metadata`. The token request asks for those two scopes, and the GET asks for `fields=app_metadata` only. Copy the client id and secret into `AUTH0_MGMT_CLIENT_ID` and `AUTH0_MGMT_CLIENT_SECRET`. The audience is `https://<AUTH0_DOMAIN>/api/v2/`. If those values are missing, cart routes return 503 and the shop shows a short notice.
 
-Cart and order write quotas stay on the `chat_limits` key: 30 cart writes an hour and 10 order writes an hour. Chat message quotas are separate: 20 an hour and 60 a day, counted with an atomic Upstash Redis `INCR` and `EXPIRE` before the agent run starts. A shopper who passes a limit gets HTTP 429 and a short message. Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from the Upstash console (free tier, REST only, no SDK). If Redis is missing, chat returns 503.
+Cart and order write quotas stay on the `chat_limits` key: 30 cart writes an hour and 10 order writes an hour. Chat message quotas are separate: 20 an hour and 60 a day, counted with an atomic Upstash Redis `INCR` and `EXPIRE` before the xAI call. A shopper who passes a limit gets HTTP 429 and a short message. Set `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` from the Upstash console (free tier, REST only, no SDK). If Redis is missing, chat returns 503.
 
 ## Support chat
 
-Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` runs the Cursor Agent SDK support agent in this Next.js server. It does not call a hosted agent URL. `CURSOR_API_KEY` stays on the server. Read tools use the approved FAQ (`content/faq.md`), the catalog, and this shopper's cart and orders. The shopper id comes from the server session. Write tools (`add_to_cart`, `update_cart_qty`, `remove_from_cart`, `apply_coupon`, `place_order`, `cancel_order`, `report_problem`) do not change state. Each one returns a pending action signed with `APPROVAL_SECRET`, bound to that shopper, expiring in 5 minutes, and usable once. The chat shows **Confirm** and **Cancel**. Only Confirm calls `POST /api/chat/confirm`, which checks the signature, the shopper, and one-time use, then writes through `store-meta`. Prices come from the catalogue. A coupon is applied only when that code appears in a message the shopper typed in this chat. The bot does not list, reveal, or guess codes. `report_problem` files through the existing feedback path after Confirm, which starts reproduce-first triage. A short click-through is in `docs/demo.md`.
+Signed-in shoppers get a **Support** button at the bottom left of the shop. Report a problem stays at the bottom right. `POST /api/chat` streams Server-Sent Events from xAI chat completions (`https://api.x.ai/v1/chat/completions`) with function calling. The model is `XAI_MODEL`, or `grok-4.20-0309-non-reasoning` when that is unset. `XAI_API_KEY` stays on the server and is never logged.
 
-The chat route allows 300 seconds. The agent run stops at 270 seconds and the bubble says the chat timed out. Each shopper can send 20 messages an hour and 60 a day. Those counts live in Upstash, not in Auth0. If `CURSOR_API_KEY` or `APPROVAL_SECRET` is missing, the bubble says support chat is unavailable.
+Tools are `search_products`, `get_cart`, `get_order`, `propose_cart_change`, and `reorder`. The shopper id comes from the Auth0 session, never from tool arguments. Product cards are built from the catalog by id. `propose_cart_change` and `reorder` only return a pending action signed with `APPROVAL_SECRET`. Nothing is written until the shopper presses **Confirm**, which calls `POST /api/chat/confirm`. Add on a product card calls the cart API directly. A coupon is applied only when that code appears in a message the shopper typed in this chat. The bot does not list, reveal, or guess codes. Prices come from the catalogue. A short click-through is in `docs/demo.md`.
 
-Chats are processed by Cursor's agent service. The app does not store the message text. Customers should not share personal details.
+The route allows 60 seconds. The turn stops at 45 seconds and the stream says the chat timed out. A status event is sent immediately, and a heartbeat comment every 10 seconds, so a phone browser does not treat the request as silent. Each shopper can send 20 messages an hour and 60 a day. Those counts live in Upstash, not in Auth0. If `XAI_API_KEY` or `APPROVAL_SECRET` is missing, the bubble says support chat is unavailable.
+
+`CURSOR_API_KEY` is still required for triage and fixes. It is not used by support chat. Chats are processed by xAI. Customers should not share personal details.
 
 ## Deploy to Vercel
 
 Production deploys from `main` through the Vercel GitHub integration. The app is a Next.js App Router
 project (`npm run build`). Set the Node.js version to 22.x (also declared in `package.json` `engines`).
-`@cursor/sdk` and `@grok/agent-sdk` stay in `serverExternalPackages` so the server function loads them with Node rather than bundling them. The support chat route runs on the Node runtime.
+`@cursor/sdk` stays in `serverExternalPackages` so triage and fix calls load it with Node rather than bundling it. Support chat does not start a child process.
 
 Vercel kills work inside `after()` when the function hits `maxDuration`. These routes export
 `maxDuration = 300`, the Hobby ceiling with Fluid compute. Triage and a fast fix can finish in that
@@ -323,7 +325,9 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 
 | Variable | On Vercel |
 |---|---|
-| `CURSOR_API_KEY` | Same value as local |
+| `CURSOR_API_KEY` | Same value as local. Used by triage and fixes, not by support chat. |
+| `XAI_API_KEY` | Server-only key for support chat. Never expose it to the browser. |
+| `XAI_MODEL` | Optional. Defaults to `grok-4.20-0309-non-reasoning`. |
 | `GITHUB_REPO` | Same `owner/name` |
 | `GITHUB_TOKEN` | Same token. Fine-grained PAT: **Contents** read/write, **Pull requests** read/write, **Issues** read/write, **Actions** read and write. No new variable. Actions write dispatches the reproduction workflow on `main`. Actions read fetches its log. Pull requests write squash-merges the fix and is required for GraphQL `markPullRequestReadyForReview`. Contents write also commits demo reverts. Issues write comments, closes, and labels. |
 | `AUTH0_ROLES_CLAIM` | Leave unset. Delete `ADMIN_EMAILS` if a previous deploy set it. Set this only to override `https://beanbox/roles` |

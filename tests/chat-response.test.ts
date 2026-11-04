@@ -1,20 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { acceptsDirectChatReply, CHAT_UNAVAILABLE, noticeFor } from "@/lib/chat-response";
+import { CHAT_UNAVAILABLE, followUps, noticeFor, takeSseEvents } from "@/lib/chat-response";
 
-describe("POST /api/chat body after PR 45", () => {
-  it("is a 200 the support chat client already accepts", () => {
-    const reply = "We sell three coffees: House, Decaf, and Espresso.";
-    const body = {
-      reply,
-      sessionId: `ses_${"a".repeat(24)}`,
-      continuationToken: `v1.${"b".repeat(180)}`,
-    };
-    const raw = JSON.stringify(body);
-    // Prod logged 200 responses of 312 B and 428 B with no errors. A short reply
-    // plus the session fields lands in that range, and the client shows `reply`.
-    expect(raw.length).toBeGreaterThan(250);
-    expect(raw.length).toBeLessThan(500);
-    expect(acceptsDirectChatReply(200, JSON.parse(raw) as { reply?: string })).toBe(true);
+describe("support chat stream", () => {
+  it("reads typed events and skips heartbeat comments", () => {
+    const raw = [
+      `event: status`,
+      `data: {"text":"Looking that up…"}`,
+      ``,
+      `: heartbeat`,
+      ``,
+      `event: text`,
+      `data: {"delta":"We sell three coffees."}`,
+      ``,
+      ``,
+    ].join("\n");
+    const taken = takeSseEvents(raw);
+    expect(taken.events.map((event) => event.event)).toEqual(["status", "text"]);
+    expect(taken.events[1]?.data).toContain("We sell three coffees.");
+    expect(followUps("chat")).toHaveLength(3);
+    expect(followUps("products")).toHaveLength(3);
+    expect(noticeFor(503, "unavailable")).toBe(CHAT_UNAVAILABLE);
     expect(noticeFor(200, undefined)).toBe(CHAT_UNAVAILABLE);
   });
 });

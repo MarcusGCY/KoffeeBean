@@ -1,14 +1,23 @@
-import { randomBytes } from "node:crypto";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { z } from "zod";
-import { askSupportAgent, chatFailureStatus, supportConfigured, supportTranscript, SupportTimeoutError } from "@/lib/agent-chat";
-import { confirmedCard } from "@/lib/pending-action";
+import { CHAT_TIMEOUT, CHAT_UNAVAILABLE } from "@/lib/chat-response";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
-import { rememberUserLines, saveChatTurn } from "@/lib/upstash";
+import { rememberUserLines } from "@/lib/upstash";
+import {
+  CHAT_TIMEOUT_MS,
+  HEARTBEAT_MS,
+  cappedTurns,
+  chatFailureStatus,
+  chatOkLine,
+  runXaiChat,
+  scrubSecrets,
+  supportConfigured,
+  vitestMs,
+} from "@/lib/xai-chat";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const MAX_CHARS = 500;
 const MAX_BODY_BYTES = 8 * 1024;
@@ -64,8 +73,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That message could not be sent." }, { status: 400 });
   }
 
-  const message = supportTranscript(parsed.data.messages);
-  if (!message) {
+  const turns = cappedTurns(parsed.data.messages);
+  if (turns.length === 0) {
     return NextResponse.json({ error: "That message could not be sent." }, { status: 400 });
   }
 
@@ -74,7 +83,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unavailable" }, { status: 503 });
   }
 
-  const turnId = randomBytes(16).toString("hex");
   try {
     const limit = await chatLimiter.check(shopper.id);
     if (!limit.ok) {
@@ -86,10 +94,8 @@ export async function POST(req: Request) {
         },
       );
     }
-
     const userLines = parsed.data.messages.flatMap((turn) => (turn.role === "user" ? [turn.content] : []));
     await rememberUserLines(shopper.id, userLines);
-    await saveChatTurn(shopper.id, turnId, { userId: shopper.id, status: "pending" });
   } catch (err) {
     if (err instanceof StoreUnavailableError) {
       console.error("[chat] store unavailable");
@@ -99,54 +105,71 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: failure.error }, { status: failure.status });
   }
 
-  const task = completeChatTurn(shopper.id, turnId, message);
-  if (process.env.VITEST) {
-    await task;
-  } else {
-    after(() => task);
-  }
-  return NextResponse.json({ turnId });
-}
+  const started = Date.now();
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      let closed = false;
+      const sendRaw = (chunk: string) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(chunk));
+        } catch {
+          closed = true;
+        }
+      };
+      const send = (event: string, data: unknown) => {
+        sendRaw(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+      send("status", { text: "Looking that up…" });
+      const heartbeat = setInterval(() => sendRaw(`: heartbeat\n\n`), vitestMs("CHAT_HEARTBEAT_MS", HEARTBEAT_MS));
+      const controllerAbort = new AbortController();
+      const timer = setTimeout(() => controllerAbort.abort(), vitestMs("CHAT_TIMEOUT_MS", CHAT_TIMEOUT_MS));
+      try {
+        const result = await runXaiChat({
+          userId: shopper.id,
+          turns,
+          signal: controllerAbort.signal,
+          sink: {
+            status: (text) => send("status", { text }),
+            products: (products) => send("products", { products }),
+            text: (delta) => send("text", { delta }),
+            confirm: (card) => send("confirm", card),
+            order: (order) => send("order", order),
+            error: (message, retry) => send("error", { message, ...(retry ? { retry: true } : {}) }),
+          },
+        });
+        if (result.ok) {
+          console.log(scrubSecrets(chatOkLine(Date.now() - started, result.reply.length, result.model, result)));
+          send("done", { suggestions: result.suggestions });
+        }
+      } catch (err) {
+        if (controllerAbort.signal.aborted) {
+          console.error("[chat] timeout");
+          send("error", { message: CHAT_TIMEOUT, retry: true });
+        } else if (err instanceof StoreUnavailableError) {
+          console.error("[chat] store unavailable");
+          send("error", { message: CHAT_UNAVAILABLE });
+        } else {
+          const failure = chatFailureStatus(err);
+          send("error", { message: failure.status === 504 ? CHAT_TIMEOUT : CHAT_UNAVAILABLE, retry: true });
+        }
+      } finally {
+        clearInterval(heartbeat);
+        clearTimeout(timer);
+        if (!closed) {
+          closed = true;
+          controller.close();
+        }
+      }
+    },
+  });
 
-async function completeChatTurn(userId: string, turnId: string, message: string): Promise<void> {
-  try {
-    const started = Date.now();
-    const reply = await askSupportAgent({ userId, message });
-    const model = process.env.CHAT_MODEL?.trim() || "composer-2.5";
-    console.log(`[chat] ok ${Date.now() - started}ms reply=${reply.reply.length} model=${model}`);
-    const rawSecret = process.env.APPROVAL_SECRET?.trim() ?? "";
-    const pendingAction = reply.pendingAction
-      ? confirmedCard(userId, reply.pendingAction.actionId, rawSecret)
-      : undefined;
-    await saveChatTurn(userId, turnId, {
-      userId,
-      status: "ready",
-      reply: reply.reply,
-      ...(pendingAction ? { pendingAction } : {}),
-    });
-  } catch (err) {
-    const failure = chatTurnFailure(err);
-    try {
-      await saveChatTurn(userId, turnId, {
-        userId,
-        status: "error",
-        error: failure.error,
-        httpStatus: failure.status,
-      });
-    } catch (storeErr) {
-      if (storeErr instanceof StoreUnavailableError) console.error("[chat] store unavailable");
-    }
-  }
-}
-
-function chatTurnFailure(err: unknown): { status: number; error: string } {
-  if (err instanceof SupportTimeoutError) {
-    console.error("[chat] timeout");
-    return { status: 504, error: "Support chat timed out. Please try again." };
-  }
-  if (err instanceof StoreUnavailableError) {
-    console.error("[chat] store unavailable");
-    return { status: 503, error: "unavailable" };
-  }
-  return chatFailureStatus(err);
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+    },
+  });
 }

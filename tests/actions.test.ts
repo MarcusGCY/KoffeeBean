@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as confirm } from "@/app/api/chat/confirm/route";
 import { CART_WRITE_HOUR_LIMIT } from "@/lib/limits";
 import { codeAppearsIn, commitAction, proposeAction, textAppearsIn } from "@/lib/pending-action";
-import { pendingFromEvents } from "@/lib/agent-chat";
 import { getShopper } from "@/lib/shopper";
 
 const nonces = vi.hoisted(() => ({ ids: new Set<string>() }));
@@ -144,40 +143,6 @@ describe("confirm actions", () => {
     expect(sent.status).toBe(200);
     expect(filed.calls).toEqual(["Add to cart does nothing for the Canvas Tote Bag."]);
     expect(db.meta.cart).toBeUndefined();
-  });
-
-  it("uses this turn's signed summary and ignores an older action and the agent's text", async () => {
-    const prepared = await proposeAction("auth0|shopper", { op: "add_to_cart", productId: "mug", qty: 1 });
-    if (!("actionId" in prepared)) throw new Error("expected pending");
-    const events = [
-      {
-        type: "action.result",
-        turnId: "turn-old",
-        data: { output: { pending: true, actionId: prepared.actionId, summary: "old card" } },
-      },
-      { type: "message.completed", turnId: "turn-old", data: { text: "old", finishReason: "stop" } },
-      { type: "message.completed", turnId: "turn-new", data: { text: "Added nothing yet.", finishReason: "stop" } },
-      {
-        type: "action.result",
-        turnId: "turn-new",
-        data: { output: { pending: true, actionId: prepared.actionId, summary: "AGENT TEXT" } },
-      },
-    ];
-    const found = pendingFromEvents(events, "auth0|shopper", "action-secret");
-    expect(found?.actionId).toBe(prepared.actionId);
-    expect(found?.summary).toBe(prepared.summary);
-    expect(found?.summary).not.toContain("AGENT TEXT");
-    expect(pendingFromEvents(events, "auth0|other", "action-secret")).toBeUndefined();
-    expect(
-      pendingFromEvents(
-        [
-          events[0]!,
-          { type: "message.completed", turnId: "turn-new", data: { text: "No change.", finishReason: "stop" } },
-        ],
-        "auth0|shopper",
-        "action-secret",
-      ),
-    ).toBeUndefined();
   });
 
   it("rejects place_order when the cart changed and keeps the confirmation", async () => {

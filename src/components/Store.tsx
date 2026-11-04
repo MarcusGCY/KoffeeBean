@@ -33,6 +33,23 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
+    const refresh = () => {
+      void fetch("/api/cart")
+        .then(async (res) => {
+          if (!res.ok) return;
+          const body = (await res.json()) as CartSnapshot;
+          if (body && Array.isArray(body.items)) {
+            setCart(body);
+            setCode(body.coupon ?? "");
+          }
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("beanbox-cart", refresh);
+    return () => window.removeEventListener("beanbox-cart", refresh);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
