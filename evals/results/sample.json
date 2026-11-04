@@ -1,0 +1,19 @@
+{
+  "generatedAt": "2026-11-04T00:00:00.000Z",
+  "live": false,
+  "model": "grok-4.20-0309-non-reasoning",
+  "decision": "GO",
+  "gates": {
+    "schemaValid": true,
+    "piiClean": true,
+    "repro": { "status": "na", "detail": "no base/head vitest reports" },
+    "skips": [],
+    "testsGreen": true,
+    "categoryAccuracy": 1,
+    "severityExact": 1,
+    "maxSeverityDistance": 0,
+    "duplicatePrecision": 1,
+    "decision": "GO"
+  },
+  "cases": []
+}

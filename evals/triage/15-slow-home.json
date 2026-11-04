@@ -1,0 +1,29 @@
+{
+  "id": "15-slow-home",
+  "input": {
+    "text": "The shop homepage takes about ten seconds to show products. Nothing is broken.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "performance",
+    "severity": "S3",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "performance",
+    "severity": "S3",
+    "summary": "The homepage is slow and the shop still works.",
+    "steps_to_reproduce": [
+      "Open the shop"
+    ],
+    "suspected_area": "src/app/page.tsx",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "The shop homepage is slow.",
+    "confidence": 0.7,
+    "needs_human": false
+  }
+}

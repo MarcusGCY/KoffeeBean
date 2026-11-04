@@ -1,0 +1,29 @@
+{
+  "id": "14-auth-loop",
+  "input": {
+    "text": "Sign-in sends me back to the login page every time.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "auth",
+    "severity": "S2",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "auth",
+    "severity": "S2",
+    "summary": "Sign-in never completes.",
+    "steps_to_reproduce": [
+      "Press Sign in"
+    ],
+    "suspected_area": "src/lib/auth0.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "Sign-in sends me back to the login page.",
+    "confidence": 0.9,
+    "needs_human": false
+  }
+}

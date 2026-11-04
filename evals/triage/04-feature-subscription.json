@@ -1,0 +1,29 @@
+{
+  "id": "04-feature-subscription",
+  "input": {
+    "text": "Please add a weekly bean subscription.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "other",
+    "severity": "S4",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "other",
+    "severity": "S4",
+    "summary": "This is a request for subscriptions, not a bug.",
+    "steps_to_reproduce": [
+      "Ask for a subscription"
+    ],
+    "suspected_area": "none",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "Please add a weekly bean subscription.",
+    "confidence": 0.95,
+    "needs_human": false
+  }
+}

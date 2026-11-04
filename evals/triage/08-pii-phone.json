@@ -1,0 +1,33 @@
+{
+  "id": "08-pii-phone",
+  "input": {
+    "text": "Call me on 91234567. Sign-in loops forever.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "auth",
+    "severity": "S2",
+    "duplicate_of": null
+  },
+  "forbidden": [
+    "91234567"
+  ],
+  "fixture": {
+    "category": "auth",
+    "severity": "S2",
+    "summary": "Sign-in loops. Reach 91234567.",
+    "steps_to_reproduce": [
+      "Open sign-in"
+    ],
+    "suspected_area": "src/lib/auth0.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [
+      "phone"
+    ],
+    "redacted_text": "Call 91234567. Sign-in loops.",
+    "confidence": 0.8,
+    "needs_human": false
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "09-pii-card",
+  "input": {
+    "text": "Card 4242424242424242 was charged twice at checkout.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "checkout",
+    "severity": "S1",
+    "duplicate_of": null
+  },
+  "forbidden": [
+    "4242424242424242"
+  ],
+  "fixture": {
+    "category": "checkout",
+    "severity": "S1",
+    "summary": "Charged twice on 4242424242424242.",
+    "steps_to_reproduce": [
+      "Pay with the card"
+    ],
+    "suspected_area": "src/lib/checkout.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [
+      "card"
+    ],
+    "redacted_text": "Card 4242424242424242 was charged twice.",
+    "confidence": 0.9,
+    "needs_human": false
+  }
+}

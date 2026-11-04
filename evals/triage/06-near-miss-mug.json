@@ -1,0 +1,36 @@
+{
+  "id": "06-near-miss-mug",
+  "input": {
+    "text": "The ceramic mug will not add to the cart.",
+    "candidates": [
+      {
+        "number": 41,
+        "title": "Canvas tote never lands in the cart",
+        "body": "Adding the tote does nothing."
+      }
+    ]
+  },
+  "expected": {
+    "category": "cart",
+    "severity": "S2",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "cart",
+    "severity": "S2",
+    "summary": "The mug cannot be added. This is not the tote bug.",
+    "steps_to_reproduce": [
+      "Open merch",
+      "Add the ceramic mug"
+    ],
+    "suspected_area": "src/lib/cart.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "The ceramic mug will not add to the cart.",
+    "confidence": 0.8,
+    "needs_human": false
+  }
+}
