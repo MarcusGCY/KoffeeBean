@@ -210,6 +210,36 @@ describe("POST /api/triage/classify", () => {
     expect(JSON.stringify(parts)).toContain("<<<FEEDBACK>>>");
   });
 
+  it("sends the candidate title, category, and area, and tells the model when a duplicate counts", async () => {
+    const res = await post({
+      text: "Adding the canvas tote still does nothing.",
+      candidates: [{ number: 41, title: "Canvas tote never lands in the cart", category: "cart", suspected_area: "src/lib/cart.ts" }],
+    });
+    expect(res.status).toBe(200);
+    const body = seen[0]?.body ?? "";
+    expect(body).toContain("#41 Canvas tote never lands in the cart");
+    expect(body).toContain("category: cart");
+    expect(body).toContain("suspected_area: src/lib/cart.ts");
+    expect(body).not.toContain("body:");
+    expect(body).toContain("same bug");
+    expect(body).toContain("different product");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(_input), body: init?.body == null ? null : String(init.body), auth: null });
+        return completion(JSON.stringify(valid));
+      }),
+    );
+    await post({
+      text: "The ceramic mug will not add to the cart.",
+      candidates: [{ number: 41, title: "Canvas tote never lands in the cart", body: "The button does nothing.", category: "cart", suspected_area: "canvas tote" }],
+    });
+    const mug = seen.at(-1)?.body ?? "";
+    expect(mug).toContain("suspected_area: canvas tote");
+    expect(mug).toContain("body: The button does nothing.");
+  });
+
   it("keeps the category when the model invents a duplicate id", async () => {
     const invented = {
       ...valid,

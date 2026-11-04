@@ -213,6 +213,9 @@ export function printScorecard(report: EvalReport) {
   console.log(`category ${pct(gates.categoryAccuracy)} (target 90%)`);
   console.log(`severity exact ${pct(gates.severityExact)} (target 80%), max off ${gates.maxSeverityDistance}`);
   console.log(`duplicate precision ${pct(gates.duplicatePrecision)} (target 90%)`);
+  console.log(
+    `duplicate recall ${pct(gates.duplicateRecall)} (target 80%), false positives ${gates.duplicateFalsePositives}`,
+  );
   console.log(`schema ${gates.schemaValid ? "100%" : "FAIL"}  pii ${gates.piiClean ? "clean" : "LEAK"}`);
   console.log(`errors ${gates.errorCount} (${pct(gates.errorRate)} gate 0%)`);
   console.log(`repro before/after: ${gates.repro.status} (${gates.repro.detail})`);

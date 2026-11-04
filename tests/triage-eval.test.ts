@@ -6,7 +6,9 @@ import { printScorecard, runTriageEval } from "@/lib/triage-eval";
 import {
   categoryAccuracy,
   decide,
+  duplicateFalsePositives,
   duplicatePrecision,
+  duplicateRecall,
   hasSkippedOrWeakenedTest,
   reproGate,
   scoreLabels,
@@ -42,6 +44,8 @@ describe("triage eval scoring", () => {
     expect(categoryAccuracy(cases)).toBeCloseTo(2 / 3);
     expect(severityExactRate(cases)).toBeCloseTo(2 / 3);
     expect(duplicatePrecision(cases)).toBeCloseTo(0.5);
+    expect(duplicateRecall(cases)).toBe(1);
+    expect(duplicateFalsePositives(cases)).toBe(1);
     const gates = {
       schemaValid: true,
       piiClean: true,
@@ -66,6 +70,29 @@ describe("triage eval scoring", () => {
     expect(withError.maxSeverityDistance).toBe(0);
     expect(withError.errorCount).toBe(1);
     expect(withError.decision).toBe("NO-GO");
+  });
+
+  it("scores duplicate recall as a target and counts false positives beside it", () => {
+    const cases = [
+      row({ id: "hit", expectedDuplicate: 41, predictedDuplicate: 41 }),
+      row({ id: "miss", expectedDuplicate: 41, predictedDuplicate: null }),
+      row({ id: "fp", expectedDuplicate: null, predictedDuplicate: 9 }),
+      row({ id: "err", expectedDuplicate: 7, predictedDuplicate: null, error: true, schemaValid: false }),
+    ];
+    expect(duplicateRecall(cases)).toBeCloseTo(1 / 3);
+    expect(duplicateFalsePositives(cases)).toBe(1);
+    expect(duplicateRecall([row({ id: "none" })])).toBe(1);
+    const lowRecall = summarize(
+      [
+        row({ id: "hit", expectedDuplicate: 41, predictedDuplicate: 41 }),
+        row({ id: "miss", expectedDuplicate: 41, predictedDuplicate: null }),
+      ],
+      { repro: { status: "na", detail: "n/a" }, skips: [], testsGreen: true },
+    );
+    expect(lowRecall.duplicateRecall).toBeCloseTo(0.5);
+    expect(lowRecall.duplicateFalsePositives).toBe(0);
+    expect(lowRecall.duplicatePrecision).toBe(1);
+    expect(lowRecall.decision).toBe("GO");
   });
 
   it("treats a missing repro pair as n/a and requires a fail then a pass", () => {
@@ -106,6 +133,8 @@ describe("triage eval scoring", () => {
     expect(report.gates.severityExact).toBeGreaterThanOrEqual(0.8);
     expect(report.gates.maxSeverityDistance).toBeLessThanOrEqual(1);
     expect(report.gates.duplicatePrecision).toBeGreaterThanOrEqual(0.9);
+    expect(report.gates.duplicateRecall).toBe(1);
+    expect(report.gates.duplicateFalsePositives).toBe(0);
     expect(report.decision).toBe("GO");
     expect(report.live).toBe(false);
     expect(report.cases.every((row) => row.costUsd == null && row.latencyMs == null && row.attempts === 1)).toBe(true);
