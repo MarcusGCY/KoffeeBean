@@ -32,4 +32,4 @@ Yes. Sign in to browse beans and merch, use your cart, and report a problem. Cli
 ### How do I log out?
 Click "Log out" at the top right of the shop.
 ### How do I report a problem or give feedback?
-While signed in, click "Report a problem" at the bottom right of the shop, describe the issue, and click "Send feedback". You can send up to 5 reports per hour.
+While signed in, click "Report a problem" at the bottom right of the shop, describe the issue, and click "Send feedback". You can send up to 20 reports per hour.

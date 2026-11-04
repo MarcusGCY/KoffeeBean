@@ -82,7 +82,7 @@ uses `@auth0/nextjs-auth0` v4. `src/proxy.ts` mounts the SDK routes:
 - `GET /auth/callback` — Auth0 redirects here after login
 
 Feedback issues include the reporter's Auth0 user id and email when a session is present.
-`POST /api/feedback` rejects anonymous callers. Each signed-in shopper can file 5 reports per hour;
+`POST /api/feedback` rejects anonymous callers. Each signed-in shopper can file 20 reports per hour;
 the count is read from recent GitHub issue bodies and comments, so it holds across serverless instances.
 
 ### Create the Auth0 application
