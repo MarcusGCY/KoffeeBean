@@ -99,6 +99,24 @@ export function errorRate(cases: ScoredCase[]): number {
   return cases.filter((row) => row.error).length / cases.length;
 }
 
+/**
+ * Share of cases with an expected duplicate id that returned that same id.
+ * No such cases counts as 1. An error did not return the id, so it counts as a miss.
+ */
+export function duplicateRecall(cases: ScoredCase[]): number {
+  const relevant = cases.filter((row) => row.expectedDuplicate != null);
+  if (!relevant.length) return 1;
+  const hits = relevant.filter((row) => !row.error && row.schemaValid && row.predictedDuplicate === row.expectedDuplicate);
+  return hits.length / relevant.length;
+}
+
+/** Predicted duplicate ids that are not the expected id. */
+export function duplicateFalsePositives(cases: ScoredCase[]): number {
+  return cases.filter(
+    (row) => !row.error && row.schemaValid && row.predictedDuplicate != null && row.predictedDuplicate !== row.expectedDuplicate,
+  ).length;
+}
+
 /** Precision of predicted duplicates. No positive predictions counts as 1. */
 export function duplicatePrecision(cases: ScoredCase[]): number {
   let tp = 0;
@@ -205,12 +223,14 @@ export type GateReport = {
   severityExact: number;
   maxSeverityDistance: number;
   duplicatePrecision: number;
+  duplicateRecall: number;
+  duplicateFalsePositives: number;
   errorCount: number;
   errorRate: number;
   decision: "GO" | "NO-GO";
 };
 
-export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" | "categoryAccuracy" | "severityExact" | "maxSeverityDistance" | "duplicatePrecision" | "errorCount" | "errorRate"> & {
+export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" | "categoryAccuracy" | "severityExact" | "maxSeverityDistance" | "duplicatePrecision" | "duplicateRecall" | "duplicateFalsePositives" | "errorCount" | "errorRate"> & {
   categoryAccuracy: number;
   severityExact: number;
   maxSeverityDistance: number;
@@ -239,6 +259,8 @@ export function summarize(cases: ScoredCase[], extra: { repro: ReproGate; skips:
   const severityExact = severityExactRate(cases);
   const maxSeverityDistance = scored.reduce((max, row) => Math.max(max, row.severityDistance), 0);
   const precision = duplicatePrecision(cases);
+  const recall = duplicateRecall(cases);
+  const falsePositives = duplicateFalsePositives(cases);
   const errors = cases.filter((row) => row.error).length;
   const partial = {
     schemaValid: cases.length > 0 && cases.every((row) => row.schemaValid),
@@ -250,6 +272,8 @@ export function summarize(cases: ScoredCase[], extra: { repro: ReproGate; skips:
     severityExact,
     maxSeverityDistance,
     duplicatePrecision: precision,
+    duplicateRecall: recall,
+    duplicateFalsePositives: falsePositives,
     errorCount: errors,
     errorRate: errorRate(cases),
   };
