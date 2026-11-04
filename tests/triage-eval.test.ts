@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { runTriageEval } from "@/lib/triage-eval";
+import { describe, expect, it, vi } from "vitest";
+import { printScorecard, runTriageEval } from "@/lib/triage-eval";
 import {
   categoryAccuracy,
   decide,
@@ -108,7 +108,86 @@ describe("triage eval scoring", () => {
     expect(report.gates.duplicatePrecision).toBeGreaterThanOrEqual(0.9);
     expect(report.decision).toBe("GO");
     expect(report.live).toBe(false);
-    expect(report.cases.every((row) => row.costUsd == null && row.latencyMs == null)).toBe(true);
+    expect(report.cases.every((row) => row.costUsd == null && row.latencyMs == null && row.attempts === 1)).toBe(true);
+  });
+
+  it("sums cost and latency across attempts and prints the attempt count", async () => {
+    const casesDir = mkdtempSync(path.join(tmpdir(), "triage-case-"));
+    const outputDir = mkdtempSync(path.join(tmpdir(), "triage-live-"));
+    writeFileSync(
+      path.join(casesDir, "02-checkout-down.json"),
+      JSON.stringify({
+        id: "02-checkout-down",
+        input: { text: "Checkout does nothing." },
+        expected: { category: "checkout", severity: "S1", duplicate_of: null },
+        forbidden: [],
+        fixture: {
+          category: "checkout",
+          severity: "S1",
+          summary: "Checkout is down.",
+          steps_to_reproduce: ["Pay"],
+          suspected_area: "src/lib/checkout.ts",
+          duplicate_of: null,
+          duplicate_confidence: 0,
+          screenshot_findings: null,
+          pii_found: [],
+          redacted_text: "Checkout does nothing.",
+          confidence: 0.9,
+          needs_human: false,
+        },
+      }),
+    );
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        n += 1;
+        if (n === 1) {
+          return Response.json({
+            choices: [{ message: { content: "not json" } }],
+            usage: { prompt_tokens: 600, completion_tokens: 10 },
+          });
+        }
+        return Response.json({
+          choices: [{ message: { content: JSON.stringify({
+            category: "checkout",
+            severity: "S1",
+            summary: "Checkout is down.",
+            steps_to_reproduce: ["Pay"],
+            suspected_area: "src/lib/checkout.ts",
+            duplicate_of: null,
+            duplicate_confidence: 0,
+            screenshot_findings: null,
+            pii_found: [],
+            redacted_text: "Checkout does nothing.",
+            confidence: 0.9,
+            needs_human: false,
+          }) } }],
+          usage: { prompt_tokens: 600, completion_tokens: 20 },
+        });
+      }),
+    );
+    process.env.XAI_API_KEY = "eval-live-test-key";
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const report = await runTriageEval({
+      casesDir,
+      outputDir,
+      live: true,
+      testsDir: path.join(process.cwd(), "tests"),
+      testResultPath: path.join(process.cwd(), "evals/samples/vitest-green.json"),
+      quiet: true,
+    });
+    delete process.env.XAI_API_KEY;
+    const row = report.cases[0];
+    expect(row?.attempts).toBe(2);
+    expect(row?.latencyMs).toEqual(expect.any(Number));
+    expect(row?.costUsd).toBeCloseTo((1200 * 1.25 + 30 * 2.5) / 1_000_000);
+    printScorecard(report);
+    const text = log.mock.calls.flat().map(String).join("\n");
+    expect(text).toContain("attempts");
+    expect(text).toContain("0.001575");
+    log.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("flags leaked PII in a labelled output", () => {
