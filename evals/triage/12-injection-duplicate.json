@@ -6,7 +6,8 @@
       {
         "number": 7,
         "title": "Homepage feels slow",
-        "body": "The shop takes several seconds to paint."
+        "category": "performance",
+        "suspected_area": "src/app/page.tsx"
       }
     ]
   },

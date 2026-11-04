@@ -28,6 +28,7 @@ export type ScoredCase = {
   expectedDuplicate: number | null;
   predictedDuplicate: number | null;
   piiLeaks: string[];
+  error: boolean;
 };
 
 export function severityDistance(expected: string, actual: string): number {
@@ -44,19 +45,9 @@ export function scoreLabels(input: {
   forbidden: string[];
 }): ScoredCase {
   const parsed = ClassifyOutput.safeParse(input.output);
-  if (!parsed.success) {
-    return {
-      id: input.id,
-      schemaValid: false,
-      categoryMatch: false,
-      severityExact: false,
-      severityDistance: 99,
-      expectedDuplicate: input.expected.duplicate_of,
-      predictedDuplicate: null,
-      piiLeaks: leaks(input.output, input.forbidden),
-    };
-  }
+  if (!parsed.success) return unscored(input, false);
   const output = parsed.data;
+  if (output.fallback === true || output.category == null || output.severity == null) return unscored(input, true);
   return {
     id: input.id,
     schemaValid: true,
@@ -66,17 +57,46 @@ export function scoreLabels(input: {
     expectedDuplicate: input.expected.duplicate_of,
     predictedDuplicate: output.duplicate_of,
     piiLeaks: leaks(output, input.forbidden),
+    error: false,
   };
 }
 
+function unscored(
+  input: { id: string; expected: { duplicate_of: number | null }; output: unknown; forbidden: string[] },
+  schemaValid: boolean,
+): ScoredCase {
+  return {
+    id: input.id,
+    schemaValid,
+    categoryMatch: false,
+    severityExact: false,
+    severityDistance: 0,
+    expectedDuplicate: input.expected.duplicate_of,
+    predictedDuplicate: null,
+    piiLeaks: leaks(input.output, input.forbidden),
+    error: true,
+  };
+}
+
+function scoredCases(cases: ScoredCase[]): ScoredCase[] {
+  return cases.filter((row) => !row.error && row.schemaValid);
+}
+
 export function categoryAccuracy(cases: ScoredCase[]): number {
-  if (!cases.length) return 0;
-  return cases.filter((row) => row.schemaValid && row.categoryMatch).length / cases.length;
+  const scored = scoredCases(cases);
+  if (!scored.length) return 0;
+  return scored.filter((row) => row.categoryMatch).length / scored.length;
 }
 
 export function severityExactRate(cases: ScoredCase[]): number {
+  const scored = scoredCases(cases);
+  if (!scored.length) return 0;
+  return scored.filter((row) => row.severityExact).length / scored.length;
+}
+
+export function errorRate(cases: ScoredCase[]): number {
   if (!cases.length) return 0;
-  return cases.filter((row) => row.schemaValid && row.severityExact).length / cases.length;
+  return cases.filter((row) => row.error).length / cases.length;
 }
 
 /** Precision of predicted duplicates. No positive predictions counts as 1. */
@@ -84,7 +104,7 @@ export function duplicatePrecision(cases: ScoredCase[]): number {
   let tp = 0;
   let fp = 0;
   for (const row of cases) {
-    if (!row.schemaValid || row.predictedDuplicate == null) continue;
+    if (row.error || !row.schemaValid || row.predictedDuplicate == null) continue;
     if (row.predictedDuplicate === row.expectedDuplicate) tp += 1;
     else fp += 1;
   }
@@ -185,14 +205,18 @@ export type GateReport = {
   severityExact: number;
   maxSeverityDistance: number;
   duplicatePrecision: number;
+  errorCount: number;
+  errorRate: number;
   decision: "GO" | "NO-GO";
 };
 
-export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" | "categoryAccuracy" | "severityExact" | "maxSeverityDistance" | "duplicatePrecision"> & {
+export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" | "categoryAccuracy" | "severityExact" | "maxSeverityDistance" | "duplicatePrecision" | "errorCount" | "errorRate"> & {
   categoryAccuracy: number;
   severityExact: number;
   maxSeverityDistance: number;
   duplicatePrecision: number;
+  errorCount: number;
+  errorRate: number;
 }): "GO" | "NO-GO" {
   const hard =
     gates.schemaValid &&
@@ -200,6 +224,7 @@ export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" |
     gates.repro.status !== "fail" &&
     gates.skips.length === 0 &&
     gates.testsGreen &&
+    gates.errorRate === 0 &&
     gates.categoryAccuracy >= 0.9 &&
     gates.severityExact >= 0.8 &&
     gates.maxSeverityDistance <= 1 &&
@@ -209,10 +234,12 @@ export function decide(cases: ScoredCase[], gates: Omit<GateReport, "decision" |
 }
 
 export function summarize(cases: ScoredCase[], extra: { repro: ReproGate; skips: string[]; testsGreen: boolean }): GateReport {
+  const scored = cases.filter((row) => !row.error && row.schemaValid);
   const categoryAccuracyRate = categoryAccuracy(cases);
   const severityExact = severityExactRate(cases);
-  const maxSeverityDistance = cases.reduce((max, row) => Math.max(max, row.severityDistance), 0);
+  const maxSeverityDistance = scored.reduce((max, row) => Math.max(max, row.severityDistance), 0);
   const precision = duplicatePrecision(cases);
+  const errors = cases.filter((row) => row.error).length;
   const partial = {
     schemaValid: cases.length > 0 && cases.every((row) => row.schemaValid),
     piiClean: cases.every((row) => row.piiLeaks.length === 0),
@@ -223,6 +250,8 @@ export function summarize(cases: ScoredCase[], extra: { repro: ReproGate; skips:
     severityExact,
     maxSeverityDistance,
     duplicatePrecision: precision,
+    errorCount: errors,
+    errorRate: errorRate(cases),
   };
   return { ...partial, decision: decide(cases, partial) };
 }

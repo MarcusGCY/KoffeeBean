@@ -25,6 +25,7 @@ export type EvalCaseFile = {
 };
 
 export type CaseRow = ScoredCase & {
+  attempts?: number;
   latencyMs?: number;
   costUsd?: number | null;
 };
@@ -60,15 +61,17 @@ export async function runTriageEval(options: {
       const started = Date.now();
       const seen: { prompt_tokens: number; completion_tokens: number } = { prompt_tokens: 0, completion_tokens: 0 };
       let sawUsage = false;
+      let attempts = 0;
       const inner = live ? previousFetch : mockFetch(item.fixture);
-      globalThis.fetch = observeUsage(inner, () => {
-        sawUsage = true;
-      }, seen);
+      globalThis.fetch = observeUsage(inner, seen, (hadUsage) => {
+        attempts += 1;
+        if (hadUsage) sawUsage = true;
+      });
       let output: unknown;
       try {
         output = await classifyFeedback({
           text: item.input.text,
-          screenshot: item.input.screenshot,
+          screenshot: await screenshotFor(item.input.screenshot, options.casesDir),
           candidates: item.input.candidates ?? [],
         });
       } catch {
@@ -86,6 +89,7 @@ export async function runTriageEval(options: {
         : null;
       rows.push({
         ...scored,
+        attempts,
         ...(live ? { latencyMs, costUsd } : {}),
       });
     }
@@ -119,6 +123,14 @@ export async function runTriageEval(options: {
   return report;
 }
 
+function screenshotFor(value: string | undefined, casesDir: string): string | undefined {
+  if (!value) return undefined;
+  if (value.startsWith("data:") || value.startsWith("https://")) return value;
+  const file = path.resolve(casesDir, value);
+  const bytes = readFileSync(file);
+  return `data:image/png;base64,${bytes.toString("base64")}`;
+}
+
 function loadCases(dir: string): EvalCaseFile[] {
   return readdirSync(dir)
     .filter((name) => name.endsWith(".json"))
@@ -141,11 +153,12 @@ function mockFetch(fixture: unknown): typeof fetch {
 
 function observeUsage(
   inner: typeof fetch,
-  note: () => void,
   seen: { prompt_tokens: number; completion_tokens: number },
+  onCall: (hadUsage: boolean) => void,
 ): typeof fetch {
   return (async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await inner(input, init);
+    let hadUsage = false;
     try {
       const payload = (await response.clone().json()) as {
         usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -153,11 +166,12 @@ function observeUsage(
       if (payload.usage) {
         seen.prompt_tokens += payload.usage.prompt_tokens ?? 0;
         seen.completion_tokens += payload.usage.completion_tokens ?? 0;
-        note();
+        hadUsage = true;
       }
     } catch {
       // Error bodies are not usage JSON.
     }
+    onCall(hadUsage);
     return response;
   }) as typeof fetch;
 }
@@ -172,7 +186,7 @@ function pct(rate: number): string {
 }
 
 export function printScorecard(report: EvalReport) {
-  const headers = ["case", "category", "severity", "dup", "schema", "pii"];
+  const headers = ["case", "category", "severity", "dup", "schema", "pii", "attempts"];
   const body = report.cases.map((row) => [
     row.id,
     row.categoryMatch ? "ok" : "miss",
@@ -180,6 +194,7 @@ export function printScorecard(report: EvalReport) {
     row.predictedDuplicate == null ? "none" : `#${row.predictedDuplicate}`,
     row.schemaValid ? "ok" : "bad",
     row.piiLeaks.length ? "LEAK" : "ok",
+    String(row.attempts ?? ""),
   ]);
   if (report.live) {
     headers.push("ms", "cost");
@@ -199,6 +214,7 @@ export function printScorecard(report: EvalReport) {
   console.log(`severity exact ${pct(gates.severityExact)} (target 80%), max off ${gates.maxSeverityDistance}`);
   console.log(`duplicate precision ${pct(gates.duplicatePrecision)} (target 90%)`);
   console.log(`schema ${gates.schemaValid ? "100%" : "FAIL"}  pii ${gates.piiClean ? "clean" : "LEAK"}`);
+  console.log(`errors ${gates.errorCount} (${pct(gates.errorRate)} gate 0%)`);
   console.log(`repro before/after: ${gates.repro.status} (${gates.repro.detail})`);
   console.log(`skipped tests: ${gates.skips.length ? gates.skips.join(", ") : "none"}`);
   console.log(`npm test: ${gates.testsGreen ? "green" : "FAIL"}`);
