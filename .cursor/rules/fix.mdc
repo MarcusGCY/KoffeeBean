@@ -11,3 +11,11 @@ Make the smallest change that fixes the root cause of the GitHub issue.
 - Do not edit `tests/repro` beyond that copy.
 
 Run `npm test`. `tests/cart.test.ts` and `tests/images.test.ts` must pass. `productImageUrl` for a bean id must return the path that exists under `public/` (bean files are in `public/images/beans/`).
+
+Hard bans:
+
+- The copied repro test must be byte-identical. If the test is truly wrong, stop and report instead of editing it.
+- No `.skip`, `.only`, `.todo`, `try/catch` around asserts, loosened matchers, or longer timeouts.
+- No new mocks of the code under fix.
+- No edits to test config, CI or workflow files, package scripts, or snapshots.
+- Never weaken validation, auth, the signed confirm, or user scoping.

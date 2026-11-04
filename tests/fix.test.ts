@@ -108,6 +108,8 @@ describe("fixIssue", () => {
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/rules/fix.mdc");
+    expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/minimal-fix/SKILL.md");
+    expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/pre-pr-self-check/SKILL.md");
     expect(create.mock.calls[0][0].model).toEqual({
       id: "claude-sonnet-5-5",
       params: [

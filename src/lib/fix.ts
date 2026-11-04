@@ -72,6 +72,7 @@ export async function fixIssue(number: number) {
         issue.body,
         "",
         "Follow .cursor/rules/fix.mdc. Hard rules: copy the repro test into the PR and make it pass; never skip or weaken it (no .skip or .todo); do not edit tests/repro beyond that copy.",
+        "Use the minimal-fix and pre-pr-self-check skills (.cursor/skills/minimal-fix/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
         `Reference "Fixes #${number}" in the PR description.`,
       ].join("\n"),
     );
