@@ -1,13 +1,11 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import {
-  classifyFeedbackRun,
-  DEFAULT_TRIAGE_GROK_MODEL,
-  TRIAGE_INPUT_PER_M,
-  TRIAGE_OUTPUT_PER_M,
-  type ClassifyInput,
-} from "@/lib/triage-classify";
+import { classifyFeedback, DEFAULT_TRIAGE_GROK_MODEL, type ClassifyInput } from "@/lib/triage-classify";
+
+/** Same published rate as grok-4.20-0309-non-reasoning under 200k tokens. */
+const INPUT_PER_M = 1.25;
+const OUTPUT_PER_M = 2.5;
 import {
   reproGate,
   scanSkippedTests,
@@ -60,19 +58,19 @@ export async function runTriageEval(options: {
   try {
     for (const item of cases) {
       const started = Date.now();
-      if (!live) {
-        globalThis.fetch = mockFetch(item.fixture);
-      }
+      const seen: { prompt_tokens: number; completion_tokens: number } = { prompt_tokens: 0, completion_tokens: 0 };
+      let sawUsage = false;
+      const inner = live ? previousFetch : mockFetch(item.fixture);
+      globalThis.fetch = observeUsage(inner, () => {
+        sawUsage = true;
+      }, seen);
       let output: unknown;
-      let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
       try {
-        const run = await classifyFeedbackRun({
+        output = await classifyFeedback({
           text: item.input.text,
           screenshot: item.input.screenshot,
           candidates: item.input.candidates ?? [],
         });
-        output = run.output;
-        usage = run.usage;
       } catch {
         output = null;
       }
@@ -83,10 +81,9 @@ export async function runTriageEval(options: {
         forbidden: item.forbidden ?? [],
       });
       const latencyMs = Date.now() - started;
-      const costUsd =
-        live && usage
-          ? (usage.prompt_tokens * TRIAGE_INPUT_PER_M + usage.completion_tokens * TRIAGE_OUTPUT_PER_M) / 1_000_000
-          : null;
+      const costUsd = live && sawUsage
+        ? (seen.prompt_tokens * INPUT_PER_M + seen.completion_tokens * OUTPUT_PER_M) / 1_000_000
+        : null;
       rows.push({
         ...scored,
         ...(live ? { latencyMs, costUsd } : {}),
@@ -140,6 +137,29 @@ function mockFetch(fixture: unknown): typeof fetch {
       choices: [{ message: { content } }],
       usage: { prompt_tokens: 80, completion_tokens: 30 },
     })) as typeof fetch;
+}
+
+function observeUsage(
+  inner: typeof fetch,
+  note: () => void,
+  seen: { prompt_tokens: number; completion_tokens: number },
+): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await inner(input, init);
+    try {
+      const payload = (await response.clone().json()) as {
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      if (payload.usage) {
+        seen.prompt_tokens += payload.usage.prompt_tokens ?? 0;
+        seen.completion_tokens += payload.usage.completion_tokens ?? 0;
+        note();
+      }
+    } catch {
+      // Error bodies are not usage JSON.
+    }
+    return response;
+  }) as typeof fetch;
 }
 
 function runNpmTest(cwd: string): number {
