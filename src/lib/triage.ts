@@ -113,6 +113,7 @@ function prompt(feedback: string, open: OpenIssue[]): string {
   return [
     "You triage BeanBox feedback. Follow .cursor/rules/triage.mdc.",
     "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts on a beanbox-triage/<slug> branch; no edits under src/ and no workflow edits.",
+    "Use the write-repro-test and pre-pr-self-check skills (.cursor/skills/write-repro-test/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
     "",
     `## New feedback\n${feedback}`,
     "",

@@ -121,6 +121,8 @@ describe("triageFeedback", () => {
       },
     });
     expect(attempt.send.mock.calls[0][0]).toContain(".cursor/rules/triage.mdc");
+    expect(attempt.send.mock.calls[0][0]).toContain(".cursor/skills/write-repro-test/SKILL.md");
+    expect(attempt.send.mock.calls[0][0]).toContain(".cursor/skills/pre-pr-self-check/SKILL.md");
     expect(attempt.send.mock.calls[0][0]).toContain("```json");
     expect(attempt.send.mock.calls[0][0]).toContain("tests/repro/");
     expect(attempt.send.mock.calls[0][0]).toContain("beanbox-triage");
