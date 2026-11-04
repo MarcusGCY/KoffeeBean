@@ -3,7 +3,7 @@ import { POST } from "@/app/api/chat/route";
 import { POST as reorder } from "@/app/api/chat/reorder/route";
 import { GET as usual } from "@/app/api/chat/usual/route";
 import { CHAT_HOUR_LIMIT, CHAT_RATE_LIMIT_MESSAGE } from "@/lib/chat-rate-limit";
-import { takeSseEvents } from "@/lib/chat-response";
+import { CHAT_UNAVAILABLE, takeSseEvents } from "@/lib/chat-response";
 import { getShopper } from "@/lib/shopper";
 import { verifyAction } from "@/lib/pending-action";
 import { XAI_CHAT_URL, cappedTurns } from "@/lib/xai-chat";
@@ -500,6 +500,48 @@ describe("POST /api/chat", () => {
     const raw = await (await post({ messages: [{ role: "user", content: "Hello" }] })).text();
     expect(raw).not.toContain(KEY);
     expect(errorSpy.mock.calls.flat().map(String).join("\n")).not.toContain(KEY);
+  });
+
+  it("logs xAI status, code, and error without the key", async () => {
+    signIn("auth0|bad-key");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const secret = `Bearer ${KEY} and xai-other-secret`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            code: "invalid_api_key",
+            error: `Incorrect API key ${KEY} ${secret} ${"x".repeat(400)}`,
+          }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const raw = await (await post({ messages: [{ role: "user", content: "Hello" }] })).text();
+    expect(raw).toContain(CHAT_UNAVAILABLE);
+    expect(raw).not.toContain("invalid_api_key");
+    expect(raw).not.toContain(KEY);
+    const line = errorSpy.mock.calls.map((call) => call.map(String).join(" ")).find((entry) => entry.startsWith("[chat] xai 400"));
+    expect(line).toBeTruthy();
+    expect(line).toContain("code=invalid_api_key");
+    expect(line).toContain("error=Incorrect API key");
+    expect(line).not.toContain(KEY);
+    expect(line).not.toContain("xai-other-secret");
+    expect(line!.length).toBeLessThanOrEqual(200);
+
+    errorSpy.mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(`not json ${KEY}`, { status: 502 })),
+    );
+    const plain = await (await post({ messages: [{ role: "user", content: "Hello again" }] })).text();
+    expect(plain).toContain(CHAT_UNAVAILABLE);
+    const plainLine = errorSpy.mock.calls.map((call) => call.map(String).join(" ")).find((entry) => entry.startsWith("[chat] xai 502"));
+    expect(plainLine).toContain("code=");
+    expect(plainLine).toContain("error=not json");
+    expect(plainLine).not.toContain(KEY);
+    expect(plain).not.toContain(KEY);
   });
 
   it("uses XAI_MODEL when it is set", async () => {
