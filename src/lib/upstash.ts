@@ -122,35 +122,3 @@ export async function rearmNonce(jti: string, ttlSec: number): Promise<void> {
   if (ttlSec < 1) return;
   await redisCommand(["SET", `kb:act:${jti}`, "1", "EX", String(ttlSec), "NX"]);
 }
-
-const TURN_TTL_SEC = 5 * 60;
-
-export type StoredChatTurn = {
-  userId: string;
-  status: "pending" | "ready" | "error";
-  reply?: string;
-  pendingAction?: { actionId: string; summary: string };
-  error?: string;
-  httpStatus?: number;
-};
-
-function turnKey(userId: string, turnId: string): string {
-  return `kb:chat:turn:${userId}:${turnId}`;
-}
-
-/** Reply for one chat turn. The key includes the shopper id so another user cannot read it. */
-export async function saveChatTurn(userId: string, turnId: string, value: StoredChatTurn): Promise<void> {
-  await redisCommand(["SET", turnKey(userId, turnId), JSON.stringify({ ...value, userId }), "EX", String(TURN_TTL_SEC)]);
-}
-
-export async function readChatTurn(userId: string, turnId: string): Promise<StoredChatTurn | null> {
-  const raw = await redisCommand(["GET", turnKey(userId, turnId)]);
-  if (typeof raw !== "string" || !raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as StoredChatTurn;
-    if (!parsed || parsed.userId !== userId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
