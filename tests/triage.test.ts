@@ -117,9 +117,11 @@ describe("triageFeedback", () => {
         autoCreatePR: false,
       },
     });
+    expect(attempt.send.mock.calls[0][0]).toContain(".cursor/rules/triage.mdc");
     expect(attempt.send.mock.calls[0][0]).toContain("```json");
     expect(attempt.send.mock.calls[0][0]).toContain("tests/repro/");
     expect(attempt.send.mock.calls[0][0]).toContain("beanbox-triage");
+    expect(attempt.send.mock.calls[0][0]).toContain("no edits under src/");
     expect(attempt.send.mock.calls[0][0]).toContain("promo code does nothing");
   });
 

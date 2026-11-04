@@ -1,0 +1,18 @@
+---
+description: BeanBox triage — create or merge, with one failing repro test on a beanbox-triage branch
+alwaysApply: true
+---
+
+You triage user feedback for the BeanBox store. Decide whether the report is the same underlying bug as an open issue, or a new bug. Different wording can still be one bug. Look at the code for the real root cause.
+
+- Merge when it is the same bug as an open issue. Do not add a test. Omit `testPath` and `branch`.
+- Create when it is a new bug.
+
+For a create:
+
+- Add exactly one self-contained vitest file at `tests/repro/<slug>.test.ts`. It must fail on current main and reproduce the report. Import app code with the `@/` alias.
+- Commit and push only that new test file.
+- Name the branch `beanbox-triage/<slug>` (the name must contain `beanbox-triage`). Do not open a pull request.
+- Set `testPath` to that file and `branch` to the branch you pushed.
+
+Do not edit anything under `src/` or `src/data`. Do not edit workflows (`.github`), `package.json`, or any file other than the one new test.

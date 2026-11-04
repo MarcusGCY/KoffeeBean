@@ -96,18 +96,8 @@ async function hydrateReply(
 
 function prompt(feedback: string, open: OpenIssue[]): string {
   return [
-    "You triage user feedback for the BeanBox online store (Next.js, code in src/lib and src/components).",
-    "Decide if the feedback describes the SAME underlying bug as one of the open issues below.",
-    "Look at the code to find the real root cause; different wording can be one bug.",
-    "",
-    "If it is a new bug (action \"create\"):",
-    "- Add one self-contained vitest test at tests/repro/<short-slug>.test.ts that fails on current main and reproduces the report.",
-    "- Import app code with the @/ alias. Do not change files under src/ or src/data.",
-    "- Commit and push only that new test file. Do not edit .github, src, package.json, or any other file.",
-    "- Use a branch whose name contains beanbox-triage (for example beanbox-triage/tote-add). Do not open a pull request.",
-    "- Set testPath to that file and branch to the branch you pushed.",
-    "",
-    "If it is a duplicate (action \"merge\"), do not add a test and omit testPath and branch.",
+    "You triage BeanBox feedback. Follow .cursor/rules/triage.mdc.",
+    "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts on a beanbox-triage/<slug> branch; no edits under src/ and no workflow edits.",
     "",
     `## New feedback\n${feedback}`,
     "",
