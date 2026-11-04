@@ -1,0 +1,30 @@
+{
+  "id": "02-checkout-down",
+  "input": {
+    "text": "Checkout does nothing. I cannot pay.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "checkout",
+    "severity": "S1",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "checkout",
+    "severity": "S1",
+    "summary": "Checkout does not complete payment.",
+    "steps_to_reproduce": [
+      "Add a mug",
+      "Press Checkout"
+    ],
+    "suspected_area": "src/app/api/orders/route.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "Checkout does nothing. I cannot pay.",
+    "confidence": 0.92,
+    "needs_human": false
+  }
+}

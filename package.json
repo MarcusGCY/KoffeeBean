@@ -10,7 +10,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval": "tsx scripts/triage-eval.ts"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.31.1",

@@ -4,8 +4,8 @@ import { redactText, type PiiType } from "@/lib/triage-redact";
 
 /** Text and image in, structured output. $1.25 / $2.50 per 1M tokens under 200k. */
 export const DEFAULT_TRIAGE_GROK_MODEL = "grok-4.20-0309-non-reasoning";
-const INPUT_PER_M = 1.25;
-const OUTPUT_PER_M = 2.5;
+export const TRIAGE_INPUT_PER_M = 1.25;
+export const TRIAGE_OUTPUT_PER_M = 2.5;
 
 const CATEGORIES = ["images", "cart", "checkout", "pricing", "auth", "performance", "other"] as const;
 const SEVERITIES = ["S1", "S2", "S3", "S4"] as const;
@@ -98,6 +98,14 @@ export function safeClassification(text: string, types: PiiType[]): ClassifyOutp
 }
 
 export async function classifyFeedback(input: ClassifyInput): Promise<ClassifyOutput> {
+  return (await classifyFeedbackRun(input)).output;
+}
+
+export async function classifyFeedbackRun(input: ClassifyInput): Promise<{
+  output: ClassifyOutput;
+  model: string;
+  usage?: { prompt_tokens: number; completion_tokens: number };
+}> {
   const key = process.env.XAI_API_KEY?.trim() ?? "";
   if (!key) throw new XaiUnconfiguredError();
   const prepared = prepareInput(input);
@@ -120,7 +128,7 @@ export async function classifyFeedback(input: ClassifyInput): Promise<ClassifyOu
   }
   const output = parsed ?? safeClassification(prepared.redactedText, prepared.types);
   const cost = sawUsage
-    ? ((promptTokens * INPUT_PER_M + completionTokens * OUTPUT_PER_M) / 1_000_000).toFixed(6)
+    ? ((promptTokens * TRIAGE_INPUT_PER_M + completionTokens * TRIAGE_OUTPUT_PER_M) / 1_000_000).toFixed(6)
     : undefined;
   const usage = sawUsage ? ` in=${promptTokens} out=${completionTokens}${cost ? ` cost=${cost}` : ""}` : "";
   console.log(
@@ -128,7 +136,11 @@ export async function classifyFeedback(input: ClassifyInput): Promise<ClassifyOu
       `[triage-classify] ok model=${model} ms=${Date.now() - started} category=${output.category} severity=${output.severity}${usage}`,
     ),
   );
-  return output;
+  return {
+    output,
+    model,
+    ...(sawUsage ? { usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens } } : {}),
+  };
 }
 
 export class XaiUnconfiguredError extends Error {

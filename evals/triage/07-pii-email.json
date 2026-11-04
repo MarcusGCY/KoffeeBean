@@ -1,0 +1,33 @@
+{
+  "id": "07-pii-email",
+  "input": {
+    "text": "My email is shopper@example.com and the tote will not add.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "cart",
+    "severity": "S2",
+    "duplicate_of": null
+  },
+  "forbidden": [
+    "shopper@example.com"
+  ],
+  "fixture": {
+    "category": "cart",
+    "severity": "S2",
+    "summary": "Email shopper@example.com says the tote will not add.",
+    "steps_to_reproduce": [
+      "Add the tote"
+    ],
+    "suspected_area": "src/lib/cart.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [
+      "email"
+    ],
+    "redacted_text": "shopper@example.com tote will not add.",
+    "confidence": 0.84,
+    "needs_human": false
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "05-duplicate-tote",
+  "input": {
+    "text": "Adding the canvas tote still does nothing.",
+    "candidates": [
+      {
+        "number": 41,
+        "title": "Canvas tote never lands in the cart",
+        "body": "Adding the tote does nothing."
+      }
+    ]
+  },
+  "expected": {
+    "category": "cart",
+    "severity": "S2",
+    "duplicate_of": 41
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "cart",
+    "severity": "S2",
+    "summary": "The tote still cannot be added.",
+    "steps_to_reproduce": [
+      "Open merch",
+      "Add the canvas tote"
+    ],
+    "suspected_area": "src/lib/cart.ts",
+    "duplicate_of": 41,
+    "duplicate_confidence": 0.9,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "Adding the canvas tote still does nothing.",
+    "confidence": 0.93,
+    "needs_human": false
+  }
+}

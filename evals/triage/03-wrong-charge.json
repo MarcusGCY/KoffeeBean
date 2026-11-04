@@ -1,0 +1,30 @@
+{
+  "id": "03-wrong-charge",
+  "input": {
+    "text": "I was charged S$40 for a S$14 mug.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "checkout",
+    "severity": "S1",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "checkout",
+    "severity": "S1",
+    "summary": "The charge does not match the mug price.",
+    "steps_to_reproduce": [
+      "Add the mug",
+      "Pay"
+    ],
+    "suspected_area": "src/lib/checkout.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "Charged the wrong amount for a mug.",
+    "confidence": 0.88,
+    "needs_human": false
+  }
+}

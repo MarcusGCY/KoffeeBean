@@ -1,0 +1,29 @@
+{
+  "id": "13-pricing-label",
+  "input": {
+    "text": "The Ethiopia bag label shows the wrong dollars, but checkout still charges the catalogue price.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "pricing",
+    "severity": "S3",
+    "duplicate_of": null
+  },
+  "forbidden": [],
+  "fixture": {
+    "category": "pricing",
+    "severity": "S3",
+    "summary": "The label is wrong and the charge is not.",
+    "steps_to_reproduce": [
+      "Open Ethiopia 250g"
+    ],
+    "suspected_area": "src/data/products.json",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [],
+    "redacted_text": "The Ethiopia label shows the wrong dollars.",
+    "confidence": 0.75,
+    "needs_human": false
+  }
+}

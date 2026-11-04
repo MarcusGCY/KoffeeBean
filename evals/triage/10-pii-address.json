@@ -1,0 +1,35 @@
+{
+  "id": "10-pii-address",
+  "input": {
+    "text": "Ship the replacement to 10 Orchard Road, Singapore 238801. Checkout failed.",
+    "candidates": []
+  },
+  "expected": {
+    "category": "checkout",
+    "severity": "S1",
+    "duplicate_of": null
+  },
+  "forbidden": [
+    "10 Orchard Road",
+    "238801"
+  ],
+  "fixture": {
+    "category": "checkout",
+    "severity": "S1",
+    "summary": "Checkout failed for 10 Orchard Road, Singapore 238801.",
+    "steps_to_reproduce": [
+      "Try to check out"
+    ],
+    "suspected_area": "src/lib/checkout.ts",
+    "duplicate_of": null,
+    "duplicate_confidence": 0.2,
+    "screenshot_findings": null,
+    "pii_found": [
+      "address",
+      "postal"
+    ],
+    "redacted_text": "10 Orchard Road, Singapore 238801 checkout failed.",
+    "confidence": 0.86,
+    "needs_human": false
+  }
+}
