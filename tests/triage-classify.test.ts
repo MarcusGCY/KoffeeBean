@@ -73,6 +73,24 @@ describe("POST /api/triage/classify", () => {
     vi.restoreAllMocks();
   });
 
+  it("accepts number plus a file path, and rejects a string number or an extra key", async () => {
+    const ok = await post({
+      text: "The House Espresso photo is broken.",
+      candidates: [{ number: 72, suspected_area: "src/lib/images.ts" }],
+    });
+    expect(ok.status).toBe(200);
+    const named = await post({
+      text: "The House Espresso photo is broken.",
+      candidates: [{ number: "72", suspected_area: "src/lib/images.ts" }],
+    });
+    expect(named.status).toBe(400);
+    const extra = await post({
+      text: "The House Espresso photo is broken.",
+      candidates: [{ number: 72, suspected_area: "src/lib/images.ts", label: "catalog images" }],
+    });
+    expect(extra.status).toBe(400);
+  });
+
   it("returns schema-valid output and logs tokens without the key or the report", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const res = await post({
@@ -458,5 +476,19 @@ describe("triage score coercion and duplicate areas", () => {
       [{ number: 7, category: "performance", suspected_area: "src/app/page.tsx" }],
     );
     expect(injected.duplicate_of).toBeNull();
+  });
+
+  it("matches a file path when the candidate has no category, and rejects a plain label", () => {
+    const image = applyDuplicate(
+      { ...labelled, category: "images", suspected_area: "src/lib/images.ts", duplicate_of: 72, duplicate_confidence: 0.9 },
+      [{ number: 72, suspected_area: "src/lib/images.ts" }],
+    );
+    expect(image.duplicate_of).toBe(72);
+
+    const label = applyDuplicate(
+      { ...labelled, category: "images", suspected_area: "src/lib/images.ts", duplicate_of: 72, duplicate_confidence: 0.95 },
+      [{ number: 72, suspected_area: "catalog images" }],
+    );
+    expect(label.duplicate_of).toBeNull();
   });
 });

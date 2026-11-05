@@ -98,6 +98,46 @@ export async function notifyFixCompleted(event: GrokIssue & {
   });
 }
 
+/**
+ * Lead signal for every classified report. No new issue number.
+ * Nothing is emailed; this is the same webhook as the other bot pings.
+ * `known_case_url` is set when `duplicate_of` is set, including a regression of a closed issue.
+ */
+export async function notifyIntakeClassification(event: {
+  action: "hold" | "file";
+  reason: "s4" | "duplicate" | "bug" | "regression" | "classify_failed";
+  severity: string | null;
+  duplicate_of: number | null;
+  fallback: boolean;
+  needs_human: boolean;
+  category: string | null;
+  summary: string | null;
+  confidence: number | null;
+  duplicate_confidence: number | null;
+  suspected_area: string | null;
+  redacted_text: string | null;
+  reportedBy: string;
+  known_case_url?: string;
+}): Promise<void> {
+  await postGrokQuietly({
+    type: "intake_classification",
+    action: event.action,
+    reason: event.reason,
+    severity: event.severity,
+    duplicate_of: event.duplicate_of,
+    fallback: event.fallback,
+    needs_human: event.needs_human,
+    category: event.category,
+    summary: event.summary,
+    confidence: event.confidence,
+    duplicate_confidence: event.duplicate_confidence,
+    suspected_area: event.suspected_area,
+    redacted_text: event.redacted_text,
+    reportedBy: event.reportedBy,
+    ...(event.known_case_url ? { known_case_url: event.known_case_url } : {}),
+  });
+}
+
 /** Ping the bot after the signed link squash-merges the fix. */
 export async function notifyFixMerged(event: GrokIssue & {
   prNumber: number;

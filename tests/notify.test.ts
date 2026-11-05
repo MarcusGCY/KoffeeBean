@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifyMergeToken } from "@/lib/merge-link";
-import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, requestReview } from "@/lib/notify";
+import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, notifyIntakeClassification, requestReview } from "@/lib/notify";
 
 const issue = {
   number: 7,
@@ -243,6 +243,78 @@ describe("fix progress webhooks", () => {
       url: "https://github.com/example/beanbox/issues/7",
     })).resolves.toBeUndefined();
     expect(err).toHaveBeenCalled();
+  });
+
+  it("posts intake_classification with the Lead fields and no new issue", async () => {
+    stubWebhook("Authorization: Bearer secret");
+    await notifyIntakeClassification({
+      action: "hold",
+      reason: "duplicate",
+      severity: "S2",
+      duplicate_of: 25,
+      fallback: false,
+      needs_human: false,
+      category: "cart",
+      summary: "The tote still cannot be added.",
+      confidence: 0.93,
+      duplicate_confidence: 0.9,
+      suspected_area: "src/lib/cart",
+      redacted_text: "Adding the canvas tote still does nothing.",
+      reportedBy: "**Reported by:** Marcus",
+      known_case_url: "https://github.com/acme/beanbox/issues/25",
+    });
+    expect(authHeader()).toBe("Bearer secret");
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body));
+    expect(body).toEqual({
+      type: "intake_classification",
+      action: "hold",
+      reason: "duplicate",
+      severity: "S2",
+      duplicate_of: 25,
+      fallback: false,
+      needs_human: false,
+      category: "cart",
+      summary: "The tote still cannot be added.",
+      confidence: 0.93,
+      duplicate_confidence: 0.9,
+      suspected_area: "src/lib/cart",
+      redacted_text: "Adding the canvas tote still does nothing.",
+      reportedBy: "**Reported by:** Marcus",
+      known_case_url: "https://github.com/acme/beanbox/issues/25",
+    });
+    expect(body.issue).toBeUndefined();
+  });
+
+  it("posts the same fields when an S1–S3 report is filed, with null duplicate_of", async () => {
+    stubWebhook();
+    await notifyIntakeClassification({
+      action: "file",
+      reason: "bug",
+      severity: "S2",
+      duplicate_of: null,
+      fallback: false,
+      needs_human: false,
+      category: "images",
+      summary: "House Espresso photo is broken.",
+      confidence: 0.91,
+      duplicate_confidence: 0.1,
+      suspected_area: "src/lib/images.ts",
+      redacted_text: "The House Espresso photo is broken.",
+      reportedBy: "**Reported by:** Marcus",
+    });
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body));
+    expect(body.type).toBe("intake_classification");
+    expect(body.action).toBe("file");
+    expect(body.reason).toBe("bug");
+    expect(body.severity).toBe("S2");
+    expect(body.duplicate_of).toBeNull();
+    expect(body.fallback).toBe(false);
+    expect(body.needs_human).toBe(false);
+    expect(body.category).toBe("images");
+    expect(body.summary).toBe("House Espresso photo is broken.");
+    expect(body.confidence).toBe(0.91);
+    expect(body.issue).toBeUndefined();
+    expect(body.known_case_url).toBeUndefined();
   });
 
   it("logs and resolves when the webhook returns a non-ok status", async () => {

@@ -47,7 +47,7 @@ export type ClassifyInput = {
   screenshot?: string;
   candidates: {
     number: number;
-    title: string;
+    title?: string;
     body?: string;
     category?: string;
     suspected_area?: string;
@@ -235,7 +235,7 @@ function receivedType(value: unknown): string {
 
 type PreparedCandidate = {
   number: number;
-  title: string;
+  title?: string;
   body?: string;
   category?: string;
   suspected_area?: string;
@@ -245,14 +245,14 @@ function prepareInput(input: ClassifyInput) {
   const text = redactText(input.text);
   const candidates: PreparedCandidate[] = input.candidates.map((candidate) => ({
     number: candidate.number,
-    title: redactText(candidate.title).text,
+    title: candidate.title ? redactText(candidate.title).text : undefined,
     body: candidate.body ? redactText(candidate.body).text : undefined,
     category: candidate.category,
     suspected_area: candidate.suspected_area,
   }));
   const types = new Set<PiiType>(text.types);
   for (const candidate of input.candidates) {
-    for (const kind of redactText(`${candidate.title}\n${candidate.body ?? ""}`).types) types.add(kind);
+    for (const kind of redactText(`${candidate.title ?? ""}\n${candidate.body ?? ""}`).types) types.add(kind);
   }
   const candidateBlock = candidates.length ? candidates.map(formatCandidate).join("\n\n") : "(none)";
   const userText = [`<<<FEEDBACK>>>`, text.text, `<<<END_FEEDBACK>>>`, "", `<<<CANDIDATES>>>`, candidateBlock, `<<<END_CANDIDATES>>>`].join(
@@ -268,7 +268,7 @@ function prepareInput(input: ClassifyInput) {
 }
 
 function formatCandidate(candidate: PreparedCandidate): string {
-  const lines = [`#${candidate.number} ${candidate.title}`];
+  const lines = [candidate.title ? `#${candidate.number} ${candidate.title}` : `#${candidate.number}`];
   if (candidate.category) lines.push(`category: ${candidate.category}`);
   if (candidate.suspected_area) lines.push(`suspected_area: ${candidate.suspected_area}`);
   if (candidate.body) lines.push(`body: ${candidate.body}`);
@@ -296,6 +296,9 @@ function parseOutput(content: string): { ok: true; value: ClassifyOutput } | { o
   return { ok: true, value: parsed.data };
 }
 
+/** Same bar `applyDuplicate` requires before it will keep `duplicate_of`. */
+export const DUPLICATE_CONFIDENCE_MIN = 0.8;
+
 /** Keep a duplicate only when it is confident and the issue labels agree. */
 export function applyDuplicate(
   value: ClassifyOutput,
@@ -305,14 +308,15 @@ export function applyDuplicate(
   const match = candidates.find((candidate) => candidate.number === value.duplicate_of);
   const area = match?.suspected_area;
   const category = match?.category;
+  // A candidate with no category still matches on the file path. A category
+  // that is present must agree, so a different product is not a duplicate.
+  const categoryAgrees = category == null || category === value.category;
   const agreed =
     match != null &&
     area != null &&
-    category != null &&
     area !== "" &&
-    category !== "" &&
-    value.duplicate_confidence >= 0.8 &&
-    category === value.category &&
+    value.duplicate_confidence >= DUPLICATE_CONFIDENCE_MIN &&
+    categoryAgrees &&
     areasMatch(area, value.suspected_area);
   return agreed ? value : { ...value, duplicate_of: null };
 }

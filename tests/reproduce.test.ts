@@ -19,7 +19,7 @@ const requestReview = vi.hoisted(() => vi.fn());
 const continueTracking = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/triage", () => ({ triageFeedback }));
-vi.mock("@/lib/notify", () => ({ requestReview }));
+vi.mock("@/lib/notify", () => ({ requestReview, notifyIntakeClassification: vi.fn() }));
 vi.mock("@/lib/fix", () => ({ continueTracking }));
 vi.mock("@/lib/github", async () => {
   const actual = await vi.importActual<typeof import("@/lib/github")>("@/lib/github");

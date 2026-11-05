@@ -31,7 +31,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Could not accept feedback right now." }, { status: 503 });
   }
 
-  // Triage runs after the response so the shopper is not kept waiting.
+  // The shopper gets the thanks response before classify and triage.
+  // fileFeedback classifies first, then opens an issue or starts the agent.
   // On Vercel the callback must finish inside maxDuration. A reproduction
   // check that is still running resumes from /api/fix-status, like a fix.
   after(async () => {
