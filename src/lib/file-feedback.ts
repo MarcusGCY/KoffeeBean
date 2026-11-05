@@ -6,9 +6,10 @@ import { triageFeedback } from "./triage";
 
 /**
  * Classify, then triage. S4 and a duplicate of an open issue stop here: no
- * issue and no cloud agent. A duplicate of a closed issue is a regression and
- * continues into triage. The shopper already received the thanks response. A
- * classify failure still files, and the issue body says the classify step failed.
+ * issue and no cloud agent. A duplicate of an issue closed as completed is a
+ * regression and continues into triage. Any other close, or a state read that
+ * fails, is filed as a bug. The shopper already received the thanks response.
+ * A classify failure still files, and the issue body says the classify step failed.
  */
 export async function fileFeedback(feedback: string, reportedBy: string): Promise<void> {
   const open = await gh.listOpenFeedbackIssues();
@@ -42,7 +43,11 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
   });
 }
 
-/** Hold a duplicate only while that GitHub issue is still open. */
+/**
+ * Hold a duplicate only while that GitHub issue is still open.
+ * A closed issue is a regression only when GitHub's state_reason is completed.
+ * not_planned, duplicate, a missing reason, or a failed read is filed as a bug.
+ */
 async function resolveDuplicate(decision: IntakeDecision): Promise<IntakeDecision> {
   if (decision.action !== "hold" || decision.reason !== "duplicate") return decision;
   const number = decision.classification.duplicate_of;
@@ -50,7 +55,9 @@ async function resolveDuplicate(decision: IntakeDecision): Promise<IntakeDecisio
   try {
     const issue = await gh.getIssue(number);
     if (issue.state === "open") return decision;
-    if (issue.state === "closed") return { action: "file", reason: "regression", classification: decision.classification };
+    if (issue.state === "closed" && issue.stateReason === "completed") {
+      return { action: "file", reason: "regression", classification: decision.classification };
+    }
   } catch (err) {
     console.error("[feedback] duplicate issue state check failed", err instanceof Error ? err.name : "Error");
   }

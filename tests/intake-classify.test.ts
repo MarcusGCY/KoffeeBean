@@ -322,7 +322,7 @@ describe("intake classify on the real route", () => {
   });
 
   it("files a House Espresso regression when issue 72 is closed", async () => {
-    getIssue.mockResolvedValue({ state: "closed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
+    getIssue.mockResolvedValue({ state: "closed", stateReason: "completed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
     reply = () => JSON.stringify(classified({
       category: "images",
       severity: "S2",

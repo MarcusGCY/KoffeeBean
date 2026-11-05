@@ -205,6 +205,7 @@ export async function getIssue(number: number) {
   return {
     number, title: res.data.title, body: res.data.body ?? "", url: res.data.html_url,
     state: res.data.state,
+    stateReason: res.data.state_reason ?? null,
     labels: res.data.labels.map((l) => (typeof l === "string" ? l : l.name ?? "")),
   };
 }

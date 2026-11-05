@@ -282,8 +282,8 @@ describe("fileFeedback intake gate", () => {
     expect(getIssue).toHaveBeenCalledWith(41);
   });
 
-  it("files a regression when the matched issue is already closed", async () => {
-    getIssue.mockResolvedValue({ state: "closed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
+  it("files a regression only when the matched issue was closed as completed", async () => {
+    getIssue.mockResolvedValue({ state: "closed", stateReason: "completed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
     classifyPost.mockResolvedValue(NextResponse.json(classified({
       category: "images",
       severity: "S2",
@@ -308,6 +308,31 @@ describe("fileFeedback intake gate", () => {
       fallback: false,
       needs_human: false,
     }));
+  });
+
+  it("files as a bug when a closed issue was not completed", async () => {
+    const closes = ["not_planned", "duplicate", null] as const;
+    for (const stateReason of closes) {
+      getIssue.mockResolvedValueOnce({ state: "closed", stateReason, number: 72, title: "House espresso", body: "", url: "", labels: [] });
+      classifyPost.mockResolvedValueOnce(NextResponse.json(classified({
+        category: "images",
+        severity: "S2",
+        suspected_area: "src/lib/images.ts",
+        duplicate_of: 72,
+        duplicate_confidence: 0.92,
+      })));
+      triageFeedback.mockResolvedValueOnce({ action: "create", title: "House espresso", body: "Photo is broken." });
+      await fileFeedback("The House Espresso photo is broken.", REPORTED);
+    }
+    expect(triageFeedback).toHaveBeenCalledTimes(closes.length);
+    expect(createIssue).toHaveBeenCalledTimes(closes.length);
+    for (const call of notifyIntakeClassification.mock.calls) {
+      expect(call[0]).toMatchObject({ action: "file", reason: "bug", duplicate_of: 72 });
+      expect(call[0].reason).not.toBe("regression");
+    }
+    for (const call of createIssue.mock.calls) {
+      expect(call[1]).not.toContain("Intake classify failed");
+    }
   });
 
   it("files when the matched issue state cannot be read", async () => {
