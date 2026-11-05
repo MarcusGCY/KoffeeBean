@@ -98,6 +98,39 @@ export async function notifyFixCompleted(event: GrokIssue & {
   });
 }
 
+/**
+ * Lead signal for a report that was not filed. No new issue number.
+ * Nothing is emailed; this is the same webhook as the other bot pings.
+ */
+export async function notifyIntakeOnly(event: {
+  reason: "s4" | "duplicate";
+  reportedBy: string;
+  classification: {
+    category: string | null;
+    severity: string | null;
+    summary: string;
+    steps_to_reproduce: string[];
+    suspected_area: string;
+    duplicate_of: number | null;
+    duplicate_confidence: number;
+    confidence: number;
+    redacted_text: string;
+    needs_human: boolean;
+    pii_found: string[];
+  };
+  knownCaseUrl?: string;
+}): Promise<void> {
+  const duplicateOf = event.classification.duplicate_of;
+  await postGrokQuietly({
+    type: "intake_only",
+    reason: event.reason,
+    reportedBy: event.reportedBy,
+    classification: event.classification,
+    ...(duplicateOf != null ? { duplicate_of: duplicateOf } : {}),
+    ...(event.knownCaseUrl ? { known_case_url: event.knownCaseUrl } : {}),
+  });
+}
+
 /** Ping the bot after the signed link squash-merges the fix. */
 export async function notifyFixMerged(event: GrokIssue & {
   prNumber: number;

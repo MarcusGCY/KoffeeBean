@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifyMergeToken } from "@/lib/merge-link";
-import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, requestReview } from "@/lib/notify";
+import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, notifyIntakeOnly, requestReview } from "@/lib/notify";
 
 const issue = {
   number: 7,
@@ -243,6 +243,63 @@ describe("fix progress webhooks", () => {
       url: "https://github.com/example/beanbox/issues/7",
     })).resolves.toBeUndefined();
     expect(err).toHaveBeenCalled();
+  });
+
+  it("posts intake_only with classification fields and no new issue", async () => {
+    stubWebhook("Authorization: Bearer secret");
+    await notifyIntakeOnly({
+      reason: "duplicate",
+      reportedBy: "**Reported by:** Marcus",
+      classification: {
+        category: "cart",
+        severity: "S2",
+        summary: "The tote still cannot be added.",
+        steps_to_reproduce: ["Open merch", "Add the canvas tote"],
+        suspected_area: "src/lib/cart.ts",
+        duplicate_of: 41,
+        duplicate_confidence: 0.9,
+        confidence: 0.93,
+        redacted_text: "Adding the canvas tote still does nothing.",
+        needs_human: false,
+        pii_found: [],
+      },
+      knownCaseUrl: "https://github.com/acme/beanbox/issues/41",
+    });
+    expect(authHeader()).toBe("Bearer secret");
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body));
+    expect(body.type).toBe("intake_only");
+    expect(body.issue).toBeUndefined();
+    expect(body.reason).toBe("duplicate");
+    expect(body.duplicate_of).toBe(41);
+    expect(body.known_case_url).toBe("https://github.com/acme/beanbox/issues/41");
+    expect(body.classification).toMatchObject({ severity: "S2", duplicate_of: 41 });
+  });
+
+  it("omits duplicate_of and known_case_url for an S4 intake signal", async () => {
+    stubWebhook();
+    await notifyIntakeOnly({
+      reason: "s4",
+      reportedBy: "**Reported by:** Marcus",
+      classification: {
+        category: "other",
+        severity: "S4",
+        summary: "This is a request for subscriptions, not a bug.",
+        steps_to_reproduce: ["Ask for a subscription"],
+        suspected_area: "none",
+        duplicate_of: null,
+        duplicate_confidence: 0.2,
+        confidence: 0.95,
+        redacted_text: "Please add a weekly bean subscription.",
+        needs_human: false,
+        pii_found: [],
+      },
+    });
+    const body = JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body));
+    expect(body).toMatchObject({ type: "intake_only", reason: "s4" });
+    expect(body.issue).toBeUndefined();
+    expect(body.duplicate_of).toBeUndefined();
+    expect(body.known_case_url).toBeUndefined();
+    expect(body.classification.severity).toBe("S4");
   });
 
   it("logs and resolves when the webhook returns a non-ok status", async () => {

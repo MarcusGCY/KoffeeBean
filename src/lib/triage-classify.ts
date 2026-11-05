@@ -296,6 +296,9 @@ function parseOutput(content: string): { ok: true; value: ClassifyOutput } | { o
   return { ok: true, value: parsed.data };
 }
 
+/** Same bar `applyDuplicate` requires before it will keep `duplicate_of`. */
+export const DUPLICATE_CONFIDENCE_MIN = 0.8;
+
 /** Keep a duplicate only when it is confident and the issue labels agree. */
 export function applyDuplicate(
   value: ClassifyOutput,
@@ -311,7 +314,7 @@ export function applyDuplicate(
     category != null &&
     area !== "" &&
     category !== "" &&
-    value.duplicate_confidence >= 0.8 &&
+    value.duplicate_confidence >= DUPLICATE_CONFIDENCE_MIN &&
     category === value.category &&
     areasMatch(area, value.suspected_area);
   return agreed ? value : { ...value, duplicate_of: null };
