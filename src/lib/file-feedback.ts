@@ -1,6 +1,6 @@
 import * as gh from "./github";
-import { classifyForIntake, intakeFailureNote, signalClassification } from "./intake-gate";
-import { notifyIntakeOnly } from "./notify";
+import { classifyForIntake, intakeFailureNote, intakeWebhook } from "./intake-gate";
+import { notifyIntakeClassification } from "./notify";
 import { settleNewReport } from "./repro-track";
 import { triageFeedback } from "./triage";
 
@@ -11,15 +11,12 @@ import { triageFeedback } from "./triage";
  */
 export async function fileFeedback(feedback: string, reportedBy: string): Promise<void> {
   const open = await gh.listOpenFeedbackIssues();
-  const intake = await classifyForIntake(feedback, open);
+  const intake = await classifyForIntake(feedback);
+  const duplicateOf = intake.classification?.duplicate_of ?? null;
+  await notifyIntakeClassification(
+    intakeWebhook(intake, reportedBy, duplicateOf != null ? knownCaseUrl(duplicateOf) : undefined),
+  );
   if (intake.action === "hold") {
-    const duplicateOf = intake.classification.duplicate_of;
-    await notifyIntakeOnly({
-      reason: intake.reason,
-      reportedBy,
-      classification: signalClassification(intake.classification),
-      knownCaseUrl: duplicateOf != null ? knownCaseUrl(duplicateOf) : undefined,
-    });
     console.log(
       `[feedback] intake only reason=${intake.reason} severity=${intake.classification.severity ?? "none"}`,
     );

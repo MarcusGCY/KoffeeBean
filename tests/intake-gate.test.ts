@@ -8,12 +8,12 @@ const createIssue = vi.hoisted(() => vi.fn());
 const appendReport = vi.hoisted(() => vi.fn());
 const closeIssue = vi.hoisted(() => vi.fn());
 const ensureLabel = vi.hoisted(() => vi.fn());
-const notifyIntakeOnly = vi.hoisted(() => vi.fn());
+const notifyIntakeClassification = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
 
 vi.mock("@/app/api/triage/classify/route", () => ({ POST: classifyPost }));
 vi.mock("@/lib/triage", () => ({ triageFeedback }));
-vi.mock("@/lib/notify", () => ({ notifyIntakeOnly, requestReview }));
+vi.mock("@/lib/notify", () => ({ notifyIntakeClassification, requestReview }));
 vi.mock("@/lib/fix", () => ({ continueTracking: vi.fn() }));
 vi.mock("@/lib/github", async () => {
   const actual = await vi.importActual<typeof import("@/lib/github")>("@/lib/github");
@@ -27,7 +27,7 @@ vi.mock("@/lib/github", async () => {
   };
 });
 
-import { classifyForIntake, decideIntake } from "@/lib/intake-gate";
+import { classifyForIntake, decideIntake, intakeCandidates } from "@/lib/intake-gate";
 import { fileFeedback } from "@/lib/file-feedback";
 
 const SECRET = "intake-triage-secret-do-not-log";
@@ -62,7 +62,7 @@ beforeEach(() => {
   appendReport.mockReset();
   closeIssue.mockReset();
   ensureLabel.mockReset();
-  notifyIntakeOnly.mockReset();
+  notifyIntakeClassification.mockReset();
   requestReview.mockReset();
   delete process.env.TRIAGE_API_SECRET;
   delete process.env.GITHUB_REPO;
@@ -71,7 +71,7 @@ beforeEach(() => {
   closeIssue.mockResolvedValue(undefined);
   ensureLabel.mockResolvedValue(undefined);
   appendReport.mockResolvedValue(undefined);
-  notifyIntakeOnly.mockResolvedValue(undefined);
+  notifyIntakeClassification.mockResolvedValue(undefined);
   triageFeedback.mockRejectedValue(new Error("agent should not start"));
 });
 
@@ -130,20 +130,21 @@ describe("decideIntake", () => {
       duplicate_of: 41,
       duplicate_confidence: 0.79,
     }));
-    expect(weakBug).toEqual({ action: "file" });
+    expect(weakBug).toMatchObject({ action: "file" });
+    expect(weakBug).not.toHaveProperty("failure");
     expect(weakRequest).toMatchObject({ action: "hold", reason: "s4" });
   });
 
   it("files S1–S3, including a regression", () => {
-    expect(decideIntake(classified({ category: "checkout", severity: "S1" }))).toEqual({ action: "file" });
+    expect(decideIntake(classified({ category: "checkout", severity: "S1" }))).toMatchObject({ action: "file" });
     expect(decideIntake(classified({
       summary: "House Espresso image regressed after the last fix.",
-    }))).toEqual({ action: "file" });
+    }))).toMatchObject({ action: "file" });
     expect(decideIntake(classified({
       category: "other",
       severity: "S3",
       summary: "Spacing regressed on the bag label.",
-    }))).toEqual({ action: "file" });
+    }))).toMatchObject({ action: "file" });
   });
 
   it("fails open on fallback, needs_human, and an unusable payload", () => {
@@ -153,14 +154,14 @@ describe("decideIntake", () => {
       fallback: true,
       fallback_reason: "json",
       needs_human: true,
-    }))).toEqual({ action: "file", failure: "fallback_json" });
+    }))).toMatchObject({ action: "file", failure: "fallback_json", classification: { severity: "S4", fallback: true } });
     expect(decideIntake(classified({
       severity: "S4",
       category: "other",
       needs_human: true,
       duplicate_of: 41,
       duplicate_confidence: 0.99,
-    }))).toEqual({ action: "file", failure: "needs_human" });
+    }))).toMatchObject({ action: "file", failure: "needs_human" });
     expect(decideIntake({ severity: "nope" })).toEqual({ action: "file", failure: "error" });
   });
 });
@@ -175,18 +176,33 @@ describe("fileFeedback intake gate", () => {
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    const decision = await classifyForIntake("Please add a weekly bean subscription.", []);
+    const decision = await classifyForIntake("Please add a weekly bean subscription.");
     expect(decision).toMatchObject({ action: "hold", reason: "s4" });
     expect(auth).toBe(`Bearer ${SECRET}`);
     expect([...log.mock.calls, ...err.mock.calls].flat().join("\n")).not.toContain(SECRET);
   });
 
-  it("passes open issues as candidates and holds S4 without an issue or agent", async () => {
+  it("sends known-bug candidates with an integer number and a file path only", () => {
+    expect(intakeCandidates()).toEqual([
+      { number: 72, suspected_area: "src/lib/images.ts" },
+      { number: 14, suspected_area: "src/lib/checkout.ts" },
+      { number: 4, suspected_area: "src/lib/cart" },
+      { number: 25, suspected_area: "src/lib/cart" },
+      { number: 31, suspected_area: "src/data/products.json" },
+    ]);
+    for (const candidate of intakeCandidates()) {
+      expect(Object.keys(candidate).sort()).toEqual(["number", "suspected_area"]);
+      expect(Number.isInteger(candidate.number)).toBe(true);
+      expect(candidate.suspected_area).not.toContain(" ");
+    }
+  });
+
+  it("passes those candidates and holds S4 without an issue or agent", async () => {
     process.env.TRIAGE_API_SECRET = SECRET;
     listOpenFeedbackIssues.mockResolvedValue([
       { number: 41, title: "Canvas tote never lands in the cart", body: "The button does nothing." },
     ]);
-    let payload: { text?: string; candidates?: { number: number; title: string; category?: string }[] } = {};
+    let payload: { text?: string; candidates?: Record<string, unknown>[] } = {};
     classifyPost.mockImplementation(async (req: Request) => {
       payload = await req.json();
       return NextResponse.json(classified({
@@ -195,6 +211,8 @@ describe("fileFeedback intake gate", () => {
         summary: "This is a request for subscriptions, not a bug.",
         redacted_text: "Please add a weekly bean subscription.",
         duplicate_confidence: 0.2,
+        fallback: false,
+        needs_human: false,
       }));
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -202,23 +220,27 @@ describe("fileFeedback intake gate", () => {
     await fileFeedback(RAW, REPORTED);
 
     expect(payload.text).toBe(RAW);
-    expect(payload.candidates).toEqual([
-      { number: 41, title: "Canvas tote never lands in the cart", body: "The button does nothing." },
-    ]);
-    expect(payload.candidates?.[0]).not.toHaveProperty("category");
+    expect(payload.candidates).toEqual(intakeCandidates());
+    expect(payload.candidates?.some((candidate) => "title" in candidate || "body" in candidate || "category" in candidate)).toBe(false);
     expect(triageFeedback).not.toHaveBeenCalled();
     expect(createIssue).not.toHaveBeenCalled();
     expect(appendReport).not.toHaveBeenCalled();
-    expect(notifyIntakeOnly).toHaveBeenCalledTimes(1);
-    const signal = notifyIntakeOnly.mock.calls[0][0];
-    expect(signal.reason).toBe("s4");
-    expect(signal.issue).toBeUndefined();
-    expect(signal.knownCaseUrl).toBeUndefined();
-    expect(signal.classification).toMatchObject({
+    expect(notifyIntakeClassification).toHaveBeenCalledTimes(1);
+    const signal = notifyIntakeClassification.mock.calls[0][0];
+    expect(signal).toMatchObject({
+      action: "hold",
+      reason: "s4",
       severity: "S4",
+      duplicate_of: null,
+      fallback: false,
+      needs_human: false,
       category: "other",
+      summary: "This is a request for subscriptions, not a bug.",
+      confidence: 0.9,
       redacted_text: "Please add a weekly bean subscription.",
     });
+    expect(signal.issue).toBeUndefined();
+    expect(signal.known_case_url).toBeUndefined();
     expect(JSON.stringify(signal)).not.toContain("shopper@example.com");
     expect(log.mock.calls.flat().join("\n")).not.toContain("shopper@example.com");
     expect(log.mock.calls.flat().join("\n")).not.toContain(SECRET);
@@ -241,12 +263,17 @@ describe("fileFeedback intake gate", () => {
     expect(triageFeedback).not.toHaveBeenCalled();
     expect(createIssue).not.toHaveBeenCalled();
     expect(appendReport).not.toHaveBeenCalled();
-    expect(notifyIntakeOnly).toHaveBeenCalledWith(expect.objectContaining({
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "hold",
       reason: "duplicate",
-      knownCaseUrl: "https://github.com/acme/beanbox/issues/41",
-      classification: expect.objectContaining({ duplicate_of: 41, severity: "S2" }),
+      severity: "S2",
+      duplicate_of: 41,
+      fallback: false,
+      needs_human: false,
+      category: "cart",
+      known_case_url: "https://github.com/acme/beanbox/issues/41",
     }));
-    expect(notifyIntakeOnly.mock.calls[0][0].issue).toBeUndefined();
+    expect(notifyIntakeClassification.mock.calls[0][0].issue).toBeUndefined();
   });
 
   it("omits the known-case link when GITHUB_REPO is not set", async () => {
@@ -257,8 +284,8 @@ describe("fileFeedback intake gate", () => {
       duplicate_confidence: 0.9,
     })));
     await fileFeedback("Adding the canvas tote still does nothing.", REPORTED);
-    expect(notifyIntakeOnly.mock.calls[0][0].knownCaseUrl).toBeUndefined();
-    expect(notifyIntakeOnly.mock.calls[0][0].classification.duplicate_of).toBe(41);
+    expect(notifyIntakeClassification.mock.calls[0][0].known_case_url).toBeUndefined();
+    expect(notifyIntakeClassification.mock.calls[0][0].duplicate_of).toBe(41);
     expect(createIssue).not.toHaveBeenCalled();
   });
 
@@ -279,7 +306,17 @@ describe("fileFeedback intake gate", () => {
     expect(triageFeedback).toHaveBeenCalledTimes(1);
     expect(createIssue).toHaveBeenCalledTimes(1);
     expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
-    expect(notifyIntakeOnly).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "bug",
+      severity: "S3",
+      duplicate_of: null,
+      fallback: false,
+      needs_human: false,
+      category: "images",
+      summary: "House Espresso spacing regressed.",
+    }));
+    expect(notifyIntakeClassification.mock.calls[0][0].issue).toBeUndefined();
   });
 
   it("fails open on 401 and 503 and marks the issue", async () => {
@@ -293,7 +330,16 @@ describe("fileFeedback intake gate", () => {
     expect(createIssue.mock.calls[0][1]).toContain("Intake classify failed");
     expect(createIssue.mock.calls[0][1]).toContain("(http_401)");
     expect(createIssue.mock.calls[1][1]).toContain("(http_503)");
-    expect(notifyIntakeOnly).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledTimes(2);
+    expect(notifyIntakeClassification.mock.calls[0][0]).toMatchObject({
+      action: "file",
+      reason: "classify_failed",
+      severity: null,
+      duplicate_of: null,
+      fallback: true,
+      needs_human: true,
+    });
+    expect(notifyIntakeClassification.mock.calls[1][0].reason).toBe("classify_failed");
   });
 
   it("fails open when classify throws and does not log the error text", async () => {

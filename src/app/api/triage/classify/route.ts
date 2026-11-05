@@ -16,7 +16,7 @@ const Body = z.strictObject({
     .array(
       z.strictObject({
         number: z.number().int().positive(),
-        title: z.string().max(300),
+        title: z.string().max(300).optional(),
         body: z.string().max(4_000).optional(),
         category: z.string().max(40).optional(),
         suspected_area: z.string().max(200).optional(),

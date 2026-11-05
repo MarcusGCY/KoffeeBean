@@ -1,30 +1,30 @@
 import { POST as classifyPost } from "@/app/api/triage/classify/route";
-import type { OpenIssue } from "@/lib/github";
 import { ClassifyOutput, DUPLICATE_CONFIDENCE_MIN, type ClassifyOutput as Classification } from "@/lib/triage-classify";
 
 export type IntakeDecision =
   | { action: "hold"; reason: "s4" | "duplicate"; classification: Classification }
-  | { action: "file"; failure?: string };
+  | { action: "file"; failure?: string; classification?: Classification };
+
+/** Known bugs the Lead tracks. Only `number` and a file-path `suspected_area`. */
+export const INTAKE_CANDIDATES: { number: number; suspected_area: string }[] = [
+  { number: 72, suspected_area: "src/lib/images.ts" },
+  { number: 14, suspected_area: "src/lib/checkout.ts" },
+  { number: 4, suspected_area: "src/lib/cart" },
+  { number: 25, suspected_area: "src/lib/cart" },
+  { number: 31, suspected_area: "src/data/products.json" },
+];
+
+export function intakeCandidates(): { number: number; suspected_area: string }[] {
+  return INTAKE_CANDIDATES.map((candidate) => ({
+    number: candidate.number,
+    suspected_area: candidate.suspected_area,
+  }));
+}
 
 const NOTE = "Intake classify failed. This report was filed anyway so a real bug is not dropped.";
 
 export function intakeFailureNote(failure: string): string {
   return `**${NOTE}** (${failureCode(failure)})`;
-}
-
-/**
- * Open feedback issues are the known bugs available server-side (number, title, body).
- * category and suspected_area are not stored, so applyDuplicate will not keep
- * duplicate_of until they are. Follow-up: persist both and pass them here.
- */
-export function candidatesFromOpenIssues(open: OpenIssue[]) {
-  return open.slice(0, 30).flatMap((issue) => {
-    if (!Number.isInteger(issue.number) || issue.number <= 0) return [];
-    const title = issue.title.trim().slice(0, 300);
-    if (!title) return [];
-    const body = issue.body.trim().slice(0, 4000);
-    return [{ number: issue.number, title, ...(body ? { body } : {}) }];
-  });
 }
 
 /** Map a classify result onto file vs hold. Customer text is not read here. */
@@ -35,32 +35,55 @@ export function decideIntake(raw: unknown): IntakeDecision {
   if (classification.fallback === true) {
     const reason = classification.fallback_reason?.trim() || "fallback";
     const labeled = reason === "fallback" || reason.startsWith("fallback_") ? reason : `fallback_${reason}`;
-    return { action: "file", failure: failureCode(labeled) };
+    return { action: "file", failure: failureCode(labeled), classification };
   }
-  if (classification.needs_human) return { action: "file", failure: "needs_human" };
+  if (classification.needs_human) return { action: "file", failure: "needs_human", classification };
   if (classification.duplicate_of != null && classification.duplicate_confidence >= DUPLICATE_CONFIDENCE_MIN) {
     return { action: "hold", reason: "duplicate", classification };
   }
   if (classification.severity === "S4") return { action: "hold", reason: "s4", classification };
   if (classification.severity === "S1" || classification.severity === "S2" || classification.severity === "S3") {
-    return { action: "file" };
+    return { action: "file", classification };
   }
-  return { action: "file", failure: "error" };
+  return { action: "file", failure: "error", classification };
 }
 
-export function signalClassification(value: Classification) {
+export type IntakeWebhook = {
+  action: "hold" | "file";
+  reason: "s4" | "duplicate" | "bug" | "classify_failed";
+  severity: string | null;
+  duplicate_of: number | null;
+  fallback: boolean;
+  needs_human: boolean;
+  category: string | null;
+  summary: string | null;
+  confidence: number | null;
+  duplicate_confidence: number | null;
+  suspected_area: string | null;
+  redacted_text: string | null;
+  reportedBy: string;
+  known_case_url?: string;
+};
+
+/** Flat fields the Lead webhook posts. No new issue number. */
+export function intakeWebhook(decision: IntakeDecision, reportedBy: string, knownCaseUrl?: string): IntakeWebhook {
+  const found = decision.classification;
+  const failed = decision.action === "file" && decision.failure != null;
   return {
-    category: value.category,
-    severity: value.severity,
-    summary: value.summary,
-    steps_to_reproduce: value.steps_to_reproduce,
-    suspected_area: value.suspected_area,
-    duplicate_of: value.duplicate_of,
-    duplicate_confidence: value.duplicate_confidence,
-    confidence: value.confidence,
-    redacted_text: value.redacted_text,
-    needs_human: value.needs_human,
-    pii_found: value.pii_found,
+    action: decision.action,
+    reason: decision.action === "hold" ? decision.reason : failed ? "classify_failed" : "bug",
+    severity: found?.severity ?? null,
+    duplicate_of: found?.duplicate_of ?? null,
+    fallback: found ? found.fallback === true : true,
+    needs_human: found ? found.needs_human : true,
+    category: found?.category ?? null,
+    summary: found?.summary ?? null,
+    confidence: found?.confidence ?? null,
+    duplicate_confidence: found?.duplicate_confidence ?? null,
+    suspected_area: found?.suspected_area ?? null,
+    redacted_text: found?.redacted_text ?? null,
+    reportedBy,
+    ...(knownCaseUrl ? { known_case_url: knownCaseUrl } : {}),
   };
 }
 
@@ -69,7 +92,7 @@ export function signalClassification(value: Classification) {
  * The secret is only placed on this in-process request. It is not logged.
  * Feedback is the `text` field. The handler treats that field as untrusted.
  */
-export async function classifyForIntake(feedback: string, open: OpenIssue[]): Promise<IntakeDecision> {
+export async function classifyForIntake(feedback: string): Promise<IntakeDecision> {
   try {
     const secret = process.env.TRIAGE_API_SECRET?.trim() ?? "";
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -80,7 +103,7 @@ export async function classifyForIntake(feedback: string, open: OpenIssue[]): Pr
         headers,
         body: JSON.stringify({
           text: feedback.slice(0, 8000),
-          candidates: candidatesFromOpenIssues(open),
+          candidates: intakeCandidates(),
         }),
       }),
     );

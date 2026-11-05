@@ -12,14 +12,14 @@ const closeIssue = vi.hoisted(() => vi.fn());
 const ensureLabel = vi.hoisted(() => vi.fn());
 const listOpenFeedbackIssues = vi.hoisted(() => vi.fn());
 const continueTracking = vi.hoisted(() => vi.fn());
-const notifyIntakeOnly = vi.hoisted(() => vi.fn());
+const notifyIntakeClassification = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
 
 vi.mock("@cursor/sdk", () => ({
   Agent: { create, getRun },
 }));
 vi.mock("@/lib/fix", () => ({ continueTracking }));
-vi.mock("@/lib/notify", () => ({ notifyIntakeOnly, requestReview }));
+vi.mock("@/lib/notify", () => ({ notifyIntakeClassification, requestReview }));
 vi.mock("@/lib/github", async () => {
   const actual = await vi.importActual<typeof import("@/lib/github")>("@/lib/github");
   return {
@@ -107,7 +107,7 @@ beforeEach(() => {
   ensureLabel.mockReset();
   listOpenFeedbackIssues.mockReset();
   continueTracking.mockReset();
-  notifyIntakeOnly.mockReset();
+  notifyIntakeClassification.mockReset();
   requestReview.mockReset();
   reply = () => JSON.stringify(classified());
   process.env.VERCEL = "1";
@@ -123,7 +123,7 @@ beforeEach(() => {
   closeIssue.mockResolvedValue(undefined);
   ensureLabel.mockResolvedValue(undefined);
   continueTracking.mockResolvedValue(undefined);
-  notifyIntakeOnly.mockResolvedValue(undefined);
+  notifyIntakeClassification.mockResolvedValue(undefined);
   dispatchRepro.mockResolvedValue(undefined);
   branchSha.mockResolvedValue(SHA);
   getFile.mockResolvedValue("import { expect, it } from 'vitest';\nit('image', () => { expect(true).toBe(false); });\n");
@@ -182,14 +182,26 @@ describe("intake classify on the real route", () => {
     expect(create).not.toHaveBeenCalled();
     expect(createIssue).not.toHaveBeenCalled();
     expect(dispatchRepro).not.toHaveBeenCalled();
-    expect(notifyIntakeOnly).toHaveBeenCalledWith(expect.objectContaining({
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "hold",
       reason: "s4",
-      classification: expect.objectContaining({ severity: "S4", category: "other" }),
+      severity: "S4",
+      duplicate_of: null,
+      fallback: false,
+      needs_human: false,
+      category: "other",
+      summary: "This is a request for subscriptions, not a bug.",
+      confidence: 0.95,
     }));
-    expect(notifyIntakeOnly.mock.calls[0][0].issue).toBeUndefined();
+    expect(notifyIntakeClassification.mock.calls[0][0].issue).toBeUndefined();
     expect(userText()).toContain("<<<FEEDBACK>>>");
     expect(userText()).toContain("<<<END_FEEDBACK>>>");
-    expect(userText()).toContain("<<<CANDIDATES>>>\n(none)\n<<<END_CANDIDATES>>>");
+    expect(userText()).toContain("#72\nsuspected_area: src/lib/images.ts");
+    expect(userText()).toContain("#14\nsuspected_area: src/lib/checkout.ts");
+    expect(userText()).toContain("#4\nsuspected_area: src/lib/cart");
+    expect(userText()).toContain("#25\nsuspected_area: src/lib/cart");
+    expect(userText()).toContain("#31\nsuspected_area: src/data/products.json");
+    expect(userText()).not.toContain("category:");
     const auth = new Headers((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).headers).get("authorization");
     expect(auth).toBe(`Bearer ${KEY}`);
     const dumped = [...log.mock.calls, ...err.mock.calls].flat().join("\n");
@@ -198,7 +210,7 @@ describe("intake classify on the real route", () => {
     expect(dumped).not.toContain("Please add a weekly bean subscription");
   });
 
-  it("sends open issues as duplicate candidates without category labels", async () => {
+  it("does not send open-issue titles or a plain-language area label", async () => {
     listOpenFeedbackIssues.mockResolvedValue([
       { number: 41, title: "Canvas tote never lands in the cart", body: "The button does nothing." },
     ]);
@@ -212,10 +224,10 @@ describe("intake classify on the real route", () => {
 
     await fileFeedback("The homepage looks nice.", REPORTED);
 
-    expect(userText()).toContain("#41 Canvas tote never lands in the cart");
-    expect(userText()).toContain("body: The button does nothing.");
+    expect(userText()).not.toContain("Canvas tote never lands");
+    expect(userText()).not.toContain("catalog images");
     expect(userText()).not.toContain("category:");
-    expect(userText()).not.toContain("suspected_area:");
+    expect(userText()).toContain("suspected_area: src/lib/images.ts");
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -238,31 +250,70 @@ describe("intake classify on the real route", () => {
       branch: MATCH,
     });
     expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
-    expect(notifyIntakeOnly).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "bug",
+      severity: "S2",
+      duplicate_of: null,
+      fallback: false,
+      needs_human: false,
+      category: "images",
+    }));
+    expect(notifyIntakeClassification.mock.calls[0][0].issue).toBeUndefined();
     expect(closeIssue).not.toHaveBeenCalled();
   });
 
-  it("does not drop an S2 when the model names a duplicate the open issue cannot confirm", async () => {
-    listOpenFeedbackIssues.mockResolvedValue([
-      { number: 41, title: "Canvas tote never lands in the cart", body: "The button does nothing." },
-    ]);
+  it("files an S2 when the model uses a plain label instead of the candidate file path", async () => {
     reply = () => JSON.stringify(classified({
-      category: "cart",
+      category: "images",
       severity: "S2",
-      suspected_area: "src/lib/cart.ts",
-      duplicate_of: 41,
+      suspected_area: "catalog images",
+      duplicate_of: 72,
       duplicate_confidence: 0.95,
-      summary: "The tote still cannot be added.",
+      summary: "The House Espresso photo is broken.",
     }));
-    finished('```json\n{"action":"create","title":"Tote","body":"Still broken."}\n```');
+    finished('```json\n{"action":"create","title":"House espresso image","body":"The photo is wrong."}\n```');
     vi.spyOn(console, "log").mockImplementation(() => {});
 
-    await fileFeedback("Adding the canvas tote still does nothing.", REPORTED);
+    await fileFeedback(HOUSE, REPORTED);
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(notifyIntakeOnly).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "bug",
+      severity: "S2",
+      duplicate_of: null,
+      fallback: false,
+    }));
     expect(createIssue).toHaveBeenCalledTimes(1);
-    expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
+  });
+
+  it("holds a House Espresso report that matches issue 72 on src/lib/images.ts", async () => {
+    reply = () => JSON.stringify(classified({
+      category: "images",
+      severity: "S2",
+      suspected_area: "src/lib/images.ts",
+      duplicate_of: 72,
+      duplicate_confidence: 0.92,
+      summary: "The House Espresso photo is the known image bug.",
+    }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await fileFeedback(HOUSE, REPORTED);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(createIssue).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "hold",
+      reason: "duplicate",
+      severity: "S2",
+      duplicate_of: 72,
+      fallback: false,
+      needs_human: false,
+      category: "images",
+      suspected_area: "src/lib/images.ts",
+      known_case_url: "https://github.com/acme/beanbox/issues/72",
+    }));
   });
 
   it("fails open when classify is unconfigured and marks the issue", async () => {
@@ -315,7 +366,13 @@ describe("intake classify on the real route", () => {
 
     await fileFeedback("Please add subscriptions, unless checkout is broken.", REPORTED);
 
-    expect(notifyIntakeOnly).not.toHaveBeenCalled();
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "classify_failed",
+      severity: "S4",
+      fallback: false,
+      needs_human: true,
+    }));
     expect(create).toHaveBeenCalledTimes(1);
     expect(createIssue.mock.calls[0][1]).toContain("(needs_human)");
   });
