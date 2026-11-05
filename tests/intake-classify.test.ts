@@ -11,6 +11,7 @@ const createIssue = vi.hoisted(() => vi.fn());
 const closeIssue = vi.hoisted(() => vi.fn());
 const ensureLabel = vi.hoisted(() => vi.fn());
 const listOpenFeedbackIssues = vi.hoisted(() => vi.fn());
+const getIssue = vi.hoisted(() => vi.fn());
 const continueTracking = vi.hoisted(() => vi.fn());
 const notifyIntakeClassification = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
@@ -33,6 +34,7 @@ vi.mock("@/lib/github", async () => {
     closeIssue,
     ensureLabel,
     listOpenFeedbackIssues,
+    getIssue,
   };
 });
 
@@ -106,6 +108,7 @@ beforeEach(() => {
   closeIssue.mockReset();
   ensureLabel.mockReset();
   listOpenFeedbackIssues.mockReset();
+  getIssue.mockReset();
   continueTracking.mockReset();
   notifyIntakeClassification.mockReset();
   requestReview.mockReset();
@@ -119,6 +122,7 @@ beforeEach(() => {
   delete process.env.TRIAGE_MODEL;
   delete process.env.TRIAGE_GROK_MODEL;
   listOpenFeedbackIssues.mockResolvedValue([]);
+  getIssue.mockResolvedValue({ state: "open", number: 72, title: "House espresso", body: "", url: "", labels: [] });
   createIssue.mockResolvedValue({ number: 48, url: "https://github.com/acme/beanbox/issues/48" });
   closeIssue.mockResolvedValue(undefined);
   ensureLabel.mockResolvedValue(undefined);
@@ -303,6 +307,7 @@ describe("intake classify on the real route", () => {
 
     expect(create).not.toHaveBeenCalled();
     expect(createIssue).not.toHaveBeenCalled();
+    expect(getIssue).toHaveBeenCalledWith(72);
     expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
       action: "hold",
       reason: "duplicate",
@@ -314,6 +319,41 @@ describe("intake classify on the real route", () => {
       suspected_area: "src/lib/images.ts",
       known_case_url: "https://github.com/acme/beanbox/issues/72",
     }));
+  });
+
+  it("files a House Espresso regression when issue 72 is closed", async () => {
+    getIssue.mockResolvedValue({ state: "closed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
+    reply = () => JSON.stringify(classified({
+      category: "images",
+      severity: "S2",
+      suspected_area: "src/lib/images.ts",
+      duplicate_of: 72,
+      duplicate_confidence: 0.92,
+      summary: "The House Espresso photo broke again after the fix.",
+    }));
+    const send = finished([
+      "```json",
+      `{"action":"create","title":"House espresso image","body":"The photo regressed.","testPath":"${TEST_PATH}","branch":"beanbox-triage/house-espresso-image"}`,
+      "```",
+    ].join("\n"));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await fileFeedback(HOUSE, REPORTED);
+
+    expect(getIssue).toHaveBeenCalledWith(72);
+    expect(send).toHaveBeenCalledWith(expect.stringContaining(HOUSE));
+    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(createIssue.mock.calls[0][2]).toEqual(["repro-pending"]);
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "regression",
+      severity: "S2",
+      duplicate_of: 72,
+      fallback: false,
+      needs_human: false,
+      known_case_url: "https://github.com/acme/beanbox/issues/72",
+    }));
+    expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
   });
 
   it("fails open when classify is unconfigured and marks the issue", async () => {

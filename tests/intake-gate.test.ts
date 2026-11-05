@@ -8,6 +8,7 @@ const createIssue = vi.hoisted(() => vi.fn());
 const appendReport = vi.hoisted(() => vi.fn());
 const closeIssue = vi.hoisted(() => vi.fn());
 const ensureLabel = vi.hoisted(() => vi.fn());
+const getIssue = vi.hoisted(() => vi.fn());
 const notifyIntakeClassification = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
 
@@ -24,6 +25,7 @@ vi.mock("@/lib/github", async () => {
     appendReport,
     closeIssue,
     ensureLabel,
+    getIssue,
   };
 });
 
@@ -62,6 +64,7 @@ beforeEach(() => {
   appendReport.mockReset();
   closeIssue.mockReset();
   ensureLabel.mockReset();
+  getIssue.mockReset();
   notifyIntakeClassification.mockReset();
   requestReview.mockReset();
   delete process.env.TRIAGE_API_SECRET;
@@ -70,6 +73,7 @@ beforeEach(() => {
   createIssue.mockResolvedValue({ number: 21, url: "https://github.com/acme/beanbox/issues/21" });
   closeIssue.mockResolvedValue(undefined);
   ensureLabel.mockResolvedValue(undefined);
+  getIssue.mockResolvedValue({ state: "open", number: 41, title: "Open bug", body: "", url: "", labels: [] });
   appendReport.mockResolvedValue(undefined);
   notifyIntakeClassification.mockResolvedValue(undefined);
   triageFeedback.mockRejectedValue(new Error("agent should not start"));
@@ -241,6 +245,7 @@ describe("fileFeedback intake gate", () => {
     });
     expect(signal.issue).toBeUndefined();
     expect(signal.known_case_url).toBeUndefined();
+    expect(getIssue).not.toHaveBeenCalled();
     expect(JSON.stringify(signal)).not.toContain("shopper@example.com");
     expect(log.mock.calls.flat().join("\n")).not.toContain("shopper@example.com");
     expect(log.mock.calls.flat().join("\n")).not.toContain(SECRET);
@@ -274,6 +279,58 @@ describe("fileFeedback intake gate", () => {
       known_case_url: "https://github.com/acme/beanbox/issues/41",
     }));
     expect(notifyIntakeClassification.mock.calls[0][0].issue).toBeUndefined();
+    expect(getIssue).toHaveBeenCalledWith(41);
+  });
+
+  it("files a regression when the matched issue is already closed", async () => {
+    getIssue.mockResolvedValue({ state: "closed", number: 72, title: "House espresso", body: "", url: "", labels: [] });
+    classifyPost.mockResolvedValue(NextResponse.json(classified({
+      category: "images",
+      severity: "S2",
+      suspected_area: "src/lib/images.ts",
+      duplicate_of: 72,
+      duplicate_confidence: 0.92,
+      summary: "The House Espresso photo broke again.",
+    })));
+    triageFeedback.mockResolvedValue({ action: "create", title: "House espresso regressed", body: "Photo broke again." });
+
+    await fileFeedback("The House Espresso photo is broken again.", REPORTED);
+
+    expect(getIssue).toHaveBeenCalledWith(72);
+    expect(triageFeedback).toHaveBeenCalledTimes(1);
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "regression",
+      severity: "S2",
+      duplicate_of: 72,
+      fallback: false,
+      needs_human: false,
+    }));
+  });
+
+  it("files when the matched issue state cannot be read", async () => {
+    getIssue.mockRejectedValue(new Error("github down"));
+    classifyPost.mockResolvedValue(NextResponse.json(classified({
+      category: "cart",
+      severity: "S2",
+      duplicate_of: 25,
+      duplicate_confidence: 0.9,
+    })));
+    triageFeedback.mockResolvedValue({ action: "create", title: "Tote", body: "Still broken." });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await fileFeedback("Adding the canvas tote still does nothing.", REPORTED);
+
+    expect(triageFeedback).toHaveBeenCalledTimes(1);
+    expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
+      action: "file",
+      reason: "bug",
+      duplicate_of: 25,
+    }));
+    expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
+    expect(err.mock.calls.flat().join("\n")).not.toContain("github down");
   });
 
   it("omits the known-case link when GITHUB_REPO is not set", async () => {

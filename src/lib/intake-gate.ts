@@ -3,7 +3,7 @@ import { ClassifyOutput, DUPLICATE_CONFIDENCE_MIN, type ClassifyOutput as Classi
 
 export type IntakeDecision =
   | { action: "hold"; reason: "s4" | "duplicate"; classification: Classification }
-  | { action: "file"; failure?: string; classification?: Classification };
+  | { action: "file"; failure?: string; classification?: Classification; reason?: "regression" };
 
 /** Known bugs the Lead tracks. Only `number` and a file-path `suspected_area`. */
 export const INTAKE_CANDIDATES: { number: number; suspected_area: string }[] = [
@@ -50,7 +50,7 @@ export function decideIntake(raw: unknown): IntakeDecision {
 
 export type IntakeWebhook = {
   action: "hold" | "file";
-  reason: "s4" | "duplicate" | "bug" | "classify_failed";
+  reason: "s4" | "duplicate" | "bug" | "regression" | "classify_failed";
   severity: string | null;
   duplicate_of: number | null;
   fallback: boolean;
@@ -69,9 +69,16 @@ export type IntakeWebhook = {
 export function intakeWebhook(decision: IntakeDecision, reportedBy: string, knownCaseUrl?: string): IntakeWebhook {
   const found = decision.classification;
   const failed = decision.action === "file" && decision.failure != null;
+  const reason = decision.action === "hold"
+    ? decision.reason
+    : decision.reason === "regression"
+      ? "regression"
+      : failed
+        ? "classify_failed"
+        : "bug";
   return {
     action: decision.action,
-    reason: decision.action === "hold" ? decision.reason : failed ? "classify_failed" : "bug",
+    reason,
     severity: found?.severity ?? null,
     duplicate_of: found?.duplicate_of ?? null,
     fallback: found ? found.fallback === true : true,

@@ -1,17 +1,18 @@
 import * as gh from "./github";
-import { classifyForIntake, intakeFailureNote, intakeWebhook } from "./intake-gate";
+import { classifyForIntake, intakeFailureNote, intakeWebhook, type IntakeDecision } from "./intake-gate";
 import { notifyIntakeClassification } from "./notify";
 import { settleNewReport } from "./repro-track";
 import { triageFeedback } from "./triage";
 
 /**
- * Classify, then triage. S4 and a clear duplicate stop here: no issue and no
- * cloud agent. The shopper already received the thanks response. A classify
- * failure still files, and the issue body says the classify step failed.
+ * Classify, then triage. S4 and a duplicate of an open issue stop here: no
+ * issue and no cloud agent. A duplicate of a closed issue is a regression and
+ * continues into triage. The shopper already received the thanks response. A
+ * classify failure still files, and the issue body says the classify step failed.
  */
 export async function fileFeedback(feedback: string, reportedBy: string): Promise<void> {
   const open = await gh.listOpenFeedbackIssues();
-  const intake = await classifyForIntake(feedback);
+  const intake = await resolveDuplicate(await classifyForIntake(feedback));
   const duplicateOf = intake.classification?.duplicate_of ?? null;
   await notifyIntakeClassification(
     intakeWebhook(intake, reportedBy, duplicateOf != null ? knownCaseUrl(duplicateOf) : undefined),
@@ -39,6 +40,21 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
     testPath: decision.testPath,
     branch: decision.branch,
   });
+}
+
+/** Hold a duplicate only while that GitHub issue is still open. */
+async function resolveDuplicate(decision: IntakeDecision): Promise<IntakeDecision> {
+  if (decision.action !== "hold" || decision.reason !== "duplicate") return decision;
+  const number = decision.classification.duplicate_of;
+  if (number == null) return { action: "file", classification: decision.classification };
+  try {
+    const issue = await gh.getIssue(number);
+    if (issue.state === "open") return decision;
+    if (issue.state === "closed") return { action: "file", reason: "regression", classification: decision.classification };
+  } catch (err) {
+    console.error("[feedback] duplicate issue state check failed", err instanceof Error ? err.name : "Error");
+  }
+  return { action: "file", classification: decision.classification };
 }
 
 function knownCaseUrl(number: number): string | undefined {

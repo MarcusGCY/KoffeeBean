@@ -101,11 +101,11 @@ export async function notifyFixCompleted(event: GrokIssue & {
 /**
  * Lead signal for every classified report. No new issue number.
  * Nothing is emailed; this is the same webhook as the other bot pings.
- * `known_case_url` is set only for a known duplicate.
+ * `known_case_url` is set when `duplicate_of` is set, including a regression of a closed issue.
  */
 export async function notifyIntakeClassification(event: {
   action: "hold" | "file";
-  reason: "s4" | "duplicate" | "bug" | "classify_failed";
+  reason: "s4" | "duplicate" | "bug" | "regression" | "classify_failed";
   severity: string | null;
   duplicate_of: number | null;
   fallback: boolean;
