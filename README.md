@@ -348,6 +348,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. Leave it empty in git |
 | `DATABASE_URL` | Optional. Neon Postgres connection string for the BI event log (see below). Leave it empty in git |
 | `BI_HASH_SECRET` | Optional. 16+ character secret that keys the shopper hash for BI events. Leave it empty in git |
+| `BI_API_SECRET` | Optional. Service token for the read-only `/api/bi/*` endpoints (see "BI read API"). Leave it empty in git |
 
 ### BI event log (Neon Postgres)
 
@@ -372,6 +373,49 @@ Emission points (all best effort, run after the response when possible):
 - `placeOrder` in `src/lib/store-meta.ts` (cart page and chat Confirm): `order.placed` plus a `bi_orders` upsert; `attributed_sku_ids` is the order's SKUs that are still marked.
 - `cancelOrder` in `src/lib/store-meta.ts`: `order.cancelled` plus `bi_orders.cancelled_at`.
 - `source` is `demo` when the signed-in user has the Auth0 `admin` role (the check behind `/admin/demo` and Demo Reset), otherwise `live`.
+
+### BI read API (for the BI bot)
+
+Read-only, service-token endpoints over `bi_events` for the Marcus-facing BI bot. This is a separate path from `/api/feedback`, triage, and review, and it never calls them. It does not use the Auth0 shopper session.
+
+**Auth.** Set `BI_API_SECRET` (generate with `openssl rand -hex 32`) in `.env.local` and the Vercel project (mark it sensitive), and give the same value to the BI bot. Send it as `Authorization: Bearer <BI_API_SECRET>`, or as `x-bi-secret: <BI_API_SECRET>`. A missing or wrong secret is `401`. If `BI_API_SECRET` is unset on the server the endpoints answer `503 unconfigured` (they never open up). If `DATABASE_URL` is unset they answer `503 database_unconfigured`; a Neon failure is `503 unavailable`. Responses are `private, no-store`. Bad query parameters are `400 { "error": "..." }`.
+
+**Privacy.** Rows are returned with `shopper_hash` only. The Auth0 `sub` and chat text are never stored in `bi_events`, so they cannot be returned.
+
+**Source.** Every query excludes demo and admin traffic by default (`source=live`). Pass `source=demo` for only demo rows, or `source=all` for both.
+
+`GET /api/bi/events` lists events, newest first.
+
+| Param | Meaning |
+| --- | --- |
+| `since`, `until` | ISO 8601 window on `created_at`. `since` is inclusive, `until` is exclusive. Both optional |
+| `event_type` | Optional. One of `barista.turn`, `recommend.shown`, `recommend.added`, `recommend.undone`, `order.placed`, `order.cancelled`. Repeat it or comma-separate |
+| `source` | `live` (default), `demo`, or `all` |
+| `limit` | Default 50, capped at 200 |
+| `cursor` (alias `after_id`) | The `nextCursor` of the previous page |
+
+Response: `{ "events": [{ "id", "created_at", "event_type", "source", "shopper_hash", "session_id", "payload" }], "nextCursor"? }`. `id` is a string. `nextCursor` is present only when more rows exist; pass it back as `cursor`.
+
+`GET /api/bi/summary` returns small aggregates for a window. `since` and `until` default to the last 7 days ending now, and `source` defaults to `live`.
+
+- `orders`: `placed` and `cancelled` event counts, `revenueCents` (sum of `order.placed` totals), `aovCents` (revenue / placed, `null` when none; cancelled orders are not netted out), `withCoupon`.
+- `topSkus`: top 10 by ordered quantity, `{ productId, qty, orders }`.
+- `coupons`: top 10 coupon codes by orders, `{ code, orders }`.
+- `recommendations`: `shown`, `added`, `undone` event counts, `shownRecommendations` and `addedRecommendations` (distinct `recommendationId`s), and `conversion` (`addedRecommendations / shownRecommendations`, `null` when nothing was shown).
+- `baristaTurns`: `total` and `byOutcome` (`replied`, `rate_limited`, `timeout`, `error`).
+
+```bash
+export BI_BASE_URL="https://<production-host>"
+export BI_API_SECRET="<your BI_API_SECRET>"
+
+curl -s -H "Authorization: Bearer $BI_API_SECRET" \
+  "$BI_BASE_URL/api/bi/events?event_type=order.placed,order.cancelled&since=2026-11-01T00:00:00Z&limit=20"
+
+curl -s -H "Authorization: Bearer $BI_API_SECRET" \
+  "$BI_BASE_URL/api/bi/summary?since=2026-11-01T00:00:00Z&until=2026-11-08T00:00:00Z"
+
+curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&limit=5"
+```
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
