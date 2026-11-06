@@ -237,6 +237,44 @@ describe("resetDemoBugs", () => {
     expect(await source.fileAt("README.md", committed.sha)).toBeNull();
   });
 
+  it("restores the tote rewrite when main already has the fixed cart", async () => {
+    const planted = [
+      "export function addItem(cart: CartItem[], productId: string): CartItem[] {",
+      "  const id = productId.replace(\"tote\", \"canvas-tote\");",
+      "  if (!getProduct(id)) return cart;",
+      "  return [...cart, { productId: id, quantity: 1 }];",
+      "}",
+      "",
+    ].join("\n");
+    const fixed = planted.replace('productId.replace("tote", "canvas-tote")', "productId");
+    const source = repo({
+      seed: (put) => {
+        put(DEMO_BUG_COMMIT, "src/lib/cart.ts", planted);
+        put(HEAD, "src/lib/cart.ts", fixed);
+      },
+    });
+    const result = await resetDemoBugs(source);
+    expect(result.flash).toBe("reset");
+    expect(source.commitCount).toBe(1);
+    const sha = source.commits[0].sha;
+    expect(await source.fileAt("src/lib/cart.ts", sha)).toBe(planted);
+    expect(await source.fileAt("src/lib/images.ts", sha)).toContain("imges/beans");
+    expect(await source.fileAt("src/data/products.json", sha)).toBe(PRICEY);
+  });
+
+  it("does not commit when the cart file no longer matches the planted bug", async () => {
+    const source = repo({
+      seed: (put) => put(HEAD, "src/lib/cart.ts", "export function addItem() {\n  return \"rewritten\";\n}\n"),
+    });
+    const result = await resetDemoBugs(source);
+    expect(result.flash).toBe("conflict");
+    expect(result.detail).toContain("src/lib/cart.ts");
+    expect(result.detail).toContain("later edits touched the same lines");
+    expect(result.detail).toContain("Nothing was committed");
+    expect(source.commitCount).toBe(0);
+    expect(await source.fileAt("src/lib/cart.ts", HEAD)).toContain("rewritten");
+  });
+
   it("does not commit when the three bugs are already planted", async () => {
     const source = repo({ currentImages: BUGGY });
     const result = await resetDemoBugs(source);
