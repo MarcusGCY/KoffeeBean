@@ -417,6 +417,14 @@ curl -s -H "Authorization: Bearer $BI_API_SECRET" \
 curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&limit=5"
 ```
 
+### BI demo seed (`source=demo`)
+
+So the BI bot can show live vs demo contrast, the admin demo page (`/admin/demo`, Auth0 `admin` role only) has a **Seed BI demo story** button (`POST /api/demo/bi-seed`; admin session, same-origin and CSRF checked; no public route and no signed bot grant). It writes **analytics rows only** with `source=demo` into the BI event store (`bi_events` plus the `bi_orders` mirror). Auth0 `app_metadata` remains the source of truth for carts and orders; nothing in checkout, the cart, or order reads uses these rows, and no real order is created.
+
+Story, "Cancellation spike" (`src/lib/bi-demo-seed.ts`): five calm days (3 cheap bean/merch orders a day, one cancelled, a `SAVE10` order each day), then in the last ~30 hours 12 orders of the $250 Roast Day T-Shirt, all with `BEANS20`, of which 8 are cancelled. Each order has a `barista.turn`, `recommend.shown` and `recommend.added` in the same `demo-story:<n>` session. Expect `/api/bi/summary?source=demo` to show 27 placed and 9 cancelled (33% cancelled vs about 7% in the baseline), `BEANS20` on 12 of 27 orders, and the `tee` as top revenue SKU. `source=live` is unaffected.
+
+Rules: shoppers are synthetic subs (`demo-seed|shopper-N`) run through `hashShopperId`, events are validated by the same strict schemas as `recordBiEvent`, and there is no chat text or PII. Re-running is safe: it deletes only `source='demo'` rows whose `session_id` starts with `demo-story:` or `order_id` starts with `demo-story-`, then inserts a fresh story relative to now, in one transaction. `live` rows are never deleted. Needs `DATABASE_URL` and `BI_HASH_SECRET`.
+
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
 
