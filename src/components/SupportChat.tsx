@@ -265,7 +265,7 @@ export function SupportChat() {
           className="mb-2 flex w-[min(22rem,calc(100vw-2rem))] flex-col rounded-lg border border-stone-300 bg-white text-stone-900 shadow-xl"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-stone-200 pl-3 pr-1">
-            <h2 className="text-sm font-semibold">Support</h2>
+            <h2 className="text-sm font-semibold">Barista</h2>
             <button
               type="button"
               onClick={() => setOpen(false)}
