@@ -3,6 +3,7 @@ import { addItem, getProduct, removeItem, total } from "./cart";
 import { checkout, type Order } from "./checkout";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
+import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
 import type { CartSnapshot, OrderDetail, OrderSummary } from "./store-types";
@@ -299,6 +300,7 @@ export async function placeOrder(
     cart: storedCart([], null),
     chat_limits: decision.limits,
   });
+  emitBi(() => trackOrderPlaced({ sub: userId }, stored));
   return summarize(stored, now);
 }
 
@@ -331,6 +333,12 @@ export async function cancelOrder(
   const next = orders.slice();
   next[index] = updated;
   await patchAppMetadata(userId, { orders: next, chat_limits: decision.limits });
+  emitBi(() =>
+    trackOrderCancelled(
+      { sub: userId },
+      { id: updated.id, totalCents: updated.totalCents, cancelledAt: now.toISOString() },
+    ),
+  );
   return summarize(updated, now);
 }
 
