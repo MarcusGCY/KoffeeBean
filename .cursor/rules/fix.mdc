@@ -30,3 +30,6 @@ Proof: <name the original repro test, the command run, and its result>
 
 Do not claim a test passed unless you ran it and observed it passing.
 If verification could not complete, state that explicitly in Proof.
+
+These reporting requirements do not replace or relax any existing
+repro-test preservation, minimal-fix, security, or verification rules
