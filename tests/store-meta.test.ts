@@ -59,10 +59,10 @@ describe("store-meta", () => {
     expect(db.patches).toHaveLength(0);
   });
 
-  it("still no-ops the planted tote id and does not write", async () => {
+  it("adds the canvas tote bag and writes the cart", async () => {
     const cart = await addToCart("auth0|shopper", "tote", 1);
-    expect(cart).toMatchObject({ items: [] });
-    expect(db.patches).toHaveLength(0);
+    expect(cart).toMatchObject({ items: [{ productId: "tote", qty: 1 }] });
+    expect(db.patches).toHaveLength(1);
   });
 
   it("keeps the newest 20 orders", async () => {
@@ -113,12 +113,12 @@ describe("store-meta", () => {
     expect(Object.keys(db.patches[0] ?? {})).toEqual(["audit"]);
   });
 
-  it("sets a mug quantity and leaves the planted tote add as a no-op", async () => {
+  it("sets a tote quantity and a mug quantity", async () => {
     const now = new Date("2026-10-31T01:00:00.000Z");
     const tote = await setCartQty("auth0|shopper", "tote", 2, now);
-    expect(tote).toMatchObject({ items: [] });
-    expect(db.patches).toHaveLength(0);
+    expect(tote).toMatchObject({ items: [{ productId: "tote", qty: 2 }] });
+    expect(db.patches).toHaveLength(1);
     const mug = await setCartQty("auth0|shopper", "mug", 2, now);
-    expect(mug).toMatchObject({ items: [{ productId: "mug", qty: 2 }] });
+    expect(mug).toMatchObject({ items: [{ productId: "tote", qty: 2 }, { productId: "mug", qty: 2 }] });
   });
 });

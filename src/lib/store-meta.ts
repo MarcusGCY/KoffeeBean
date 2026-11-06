@@ -166,7 +166,7 @@ export async function getCart(userId: string): Promise<CartSnapshot> {
   return snapshot(cart.items, cart.coupon);
 }
 
-/** Uses addItem, including the planted tote id rewrite, so that bug still no-ops. */
+/** Adds via addItem. */
 export async function addToCart(
   userId: string,
   productId: string,
@@ -189,7 +189,7 @@ export async function addToCart(
   return snapshot(items, current.coupon);
 }
 
-/** Sets an absolute quantity using addItem and removeItem, so the planted tote rewrite still no-ops. */
+/** Sets an absolute quantity using addItem and removeItem. */
 export async function setCartQty(
   userId: string,
   productId: string,
