@@ -113,8 +113,8 @@ describe("event types and payload shaping", () => {
   });
 
   it("rejects unknown types, sources, and malformed session ids", () => {
-    expect(() => shapeBiEvent({ ...turn(), type: "barista.chat" as never })).toThrow();
-    expect(() => shapeBiEvent({ ...turn(), source: "admin" as never })).toThrow();
+    expect(() => shapeBiEvent({ ...turn(), type: "barista.chat" } as never)).toThrow();
+    expect(() => shapeBiEvent({ ...turn(), source: "admin" } as never)).toThrow();
     expect(() => shapeBiEvent(turn({ sessionId: "has spaces and text" }))).toThrow();
     expect(() => shapeBiEvent(turn({ sessionId: "x".repeat(65) }))).toThrow();
   });
