@@ -351,7 +351,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 
 ### BI event log (Neon Postgres)
 
-Foundation for the Barista to BI work. Neon holds **analytics only**: Auth0 stays the source of truth for carts and orders, and Upstash Redis stays the chat quota store. Nothing in the app emits BI events yet.
+Foundation for the Barista to BI work. Neon holds **analytics only**: Auth0 stays the source of truth for carts and orders, and Upstash Redis stays the chat quota store. Events are emitted from `src/lib/bi-track.ts` (see "Emission points" below).
 
 1. Set `DATABASE_URL` to the pooled Neon connection string (`sslmode=require`) in `.env.local` and the Vercel project (mark it sensitive). The Neon project is KoffeeBean-BI (`proud-glitter-89179522`, `aws-ap-southeast-1`, branch `main`, database `koffeebean_bi`). No other connection variable name is used.
 2. Generate `BI_HASH_SECRET` with `openssl rand -hex 32` and set it the same way. Keep it stable: changing it breaks joins with older rows.
@@ -364,6 +364,14 @@ Tables: `bi_events` (append-only by convention; `id`, `created_at`, `event_type`
 - No PII and no chat text. `src/lib/bi-events.ts` defines strict payload shapes for `barista.turn`, `recommend.shown`, `recommend.added`, `recommend.undone`, `order.placed`, and `order.cancelled`; unknown fields are rejected.
 - `recordBiEvent(...)` never throws. With `DATABASE_URL` or `BI_HASH_SECRET` unset, or if Neon is down or slow (2 second cap), it logs a short code and returns `{ ok: false }`, so checkout and chat are not affected.
 - BI is a separate path from `/api/feedback`, triage, and review. It does not call them.
+
+Emission points (all best effort, run after the response when possible):
+
+- `POST /api/chat`: `barista.turn` at turn end (tool ids, message length, latency; no text) and `recommend.shown` when cards were shown. The `products` SSE event carries the turn's `recommendationId`.
+- `POST` / `DELETE /api/cart/items` with a `recommendationId` (sent only by chat cards): `recommend.added` / `recommend.undone`. Adding marks the SKU in Redis for 30 minutes (`kb:bi:rec:<sub>:<productId>`).
+- `placeOrder` in `src/lib/store-meta.ts` (cart page and chat Confirm): `order.placed` plus a `bi_orders` upsert; `attributed_sku_ids` is the order's SKUs that are still marked.
+- `cancelOrder` in `src/lib/store-meta.ts`: `order.cancelled` plus `bi_orders.cancelled_at`.
+- `source` is `demo` when the signed-in user has the Auth0 `admin` role (the check behind `/admin/demo` and Demo Reset), otherwise `live`.
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
