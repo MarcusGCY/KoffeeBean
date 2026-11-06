@@ -346,6 +346,24 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `AUTH0_MGMT_CLIENT_SECRET` | Machine-to-machine client secret. Scopes `read:users` and `update:users_app_metadata`. Leave it empty in git |
 | `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL for chat quotas and one-time confirm actions. Leave it empty in git |
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. Leave it empty in git |
+| `DATABASE_URL` | Optional. Neon Postgres connection string for the BI event log (see below). Leave it empty in git |
+| `BI_HASH_SECRET` | Optional. 16+ character secret that keys the shopper hash for BI events. Leave it empty in git |
+
+### BI event log (Neon Postgres)
+
+Foundation for the Barista to BI work. Neon holds **analytics only**: Auth0 stays the source of truth for carts and orders, and Upstash Redis stays the chat quota store. Nothing in the app emits BI events yet.
+
+1. Set `DATABASE_URL` to the pooled Neon connection string (`sslmode=require`) in `.env.local` and the Vercel project (mark it sensitive). The Neon project is KoffeeBean-BI (`proud-glitter-89179522`, `aws-ap-southeast-1`, branch `main`, database `koffeebean_bi`). No other connection variable name is used.
+2. Generate `BI_HASH_SECRET` with `openssl rand -hex 32` and set it the same way. Keep it stable: changing it breaks joins with older rows.
+3. The tables already exist on that branch. For a new branch or database, create them once: `psql "$DATABASE_URL" -f db/migrations/0001_bi_events.sql` (idempotent).
+
+Tables: `bi_events` (append-only by convention; `id`, `created_at`, `event_type`, `source`, `shopper_hash`, `session_id`, `payload` jsonb) and an optional `bi_orders` mirror for cross-shopper order aggregates (`items` jsonb and `attributed_sku_ids` text[]; no writer yet).
+
+- Every event has `source` of `live` or `demo`. BI queries should exclude `demo`.
+- `shopper_hash` comes from `hashShopperId(sub)` in `src/lib/bi-hash.ts`: HMAC-SHA256 of the Auth0 `sub`, keyed by `BI_HASH_SECRET`, as 64 hex characters. The raw `sub` is never stored.
+- No PII and no chat text. `src/lib/bi-events.ts` defines strict payload shapes for `barista.turn`, `recommend.shown`, `recommend.added`, `recommend.undone`, `order.placed`, and `order.cancelled`; unknown fields are rejected.
+- `recordBiEvent(...)` never throws. With `DATABASE_URL` or `BI_HASH_SECRET` unset, or if Neon is down or slow (2 second cap), it logs a short code and returns `{ ok: false }`, so checkout and chat are not affected.
+- BI is a separate path from `/api/feedback`, triage, and review. It does not call them.
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
