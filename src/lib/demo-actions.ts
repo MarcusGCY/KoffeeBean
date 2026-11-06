@@ -15,10 +15,55 @@ import {
   statusLabel,
   type FixStatus,
 } from "./demo-status";
-import { planFileChanges, type FileSnapshot, type PlannedFile } from "./text-patch";
+import { planFileChanges, transformFile, type FileSnapshot, type PlannedFile, type TransformResult } from "./text-patch";
 
 const ATTEMPTS = 3;
 const REPRO_PREFIX = "tests/repro/";
+
+/**
+ * Planted bug text and the fixed text that replaced it on main.
+ * When current main is the fixed file, reset writes the planted file in full
+ * instead of replaying the original line patch.
+ */
+const PLANTED_SWAPS: Record<string, { buggy: string; fixed: string }[]> = {
+  "src/lib/cart.ts": [
+    { buggy: 'productId.replace("tote", "canvas-tote")', fixed: "productId" },
+  ],
+  "src/lib/images.ts": [{ buggy: "imges/beans", fixed: "images/beans" }],
+  "src/data/products.json": [{ buggy: '"price": 25000', fixed: '"price": 2500' }],
+};
+
+/** Fixed form of a planted file. Equal to `planted` when this path has no known swap. */
+function fixedForm(path: string, planted: string): string {
+  return (PLANTED_SWAPS[path] ?? []).reduce(
+    (text, swap) => text.split(swap.buggy).join(swap.fixed),
+    planted,
+  );
+}
+
+/**
+ * Write the planted file when main is that file or its known fixed form.
+ * Otherwise keep the contextual patch. A real mismatch still fails.
+ */
+export function restorePlantedFile(file: FileSnapshot): TransformResult {
+  const { path, before, after, current } = file;
+  if (after != null && current === after) return { ok: true, text: current, changed: false };
+  if (after != null && current != null) {
+    const fixed = fixedForm(path, after);
+    if (fixed !== after && current === fixed) return { ok: true, text: after, changed: true };
+  }
+  return transformFile(before, after, current, "forward");
+}
+
+function planPlantedRestore(files: FileSnapshot[]): ReturnType<typeof planFileChanges> {
+  const planned: PlannedFile[] = [];
+  for (const file of files) {
+    const result = restorePlantedFile(file);
+    if (!result.ok) return { ok: false, path: file.path, reason: result.reason };
+    if (result.changed) planned.push({ path: file.path, text: result.text });
+  }
+  return { ok: true, files: planned, changed: planned.length > 0 };
+}
 
 /**
  * Repro tests added after the setup commit are deleted.
@@ -306,7 +351,7 @@ export async function resetDemoBugs(repo: DemoRepo): Promise<DemoActionResult> {
     } catch (error) {
       return { flash: "error", detail: publicGitHubError(error) };
     }
-    const plan = planFileChanges(snapshots, "forward");
+    const plan = planPlantedRestore(snapshots);
     if (!plan.ok) {
       return {
         flash: "conflict",
