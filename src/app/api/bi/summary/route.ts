@@ -7,8 +7,6 @@ import {
   requireBiSql,
 } from "@/lib/bi-read";
 
-export const dynamic = "force-dynamic";
-
 export async function GET(req: Request) {
   const denied = requireBiSecret(req);
   if (denied) return denied;
