@@ -353,11 +353,11 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 
 Foundation for the Barista to BI work. Neon holds **analytics only**: Auth0 stays the source of truth for carts and orders, and Upstash Redis stays the chat quota store. Nothing in the app emits BI events yet.
 
-1. Create a Neon project and copy its connection string into `DATABASE_URL` (`.env.local` and the Vercel project).
+1. Set `DATABASE_URL` to the pooled Neon connection string (`sslmode=require`) in `.env.local` and the Vercel project (mark it sensitive). The Neon project is KoffeeBean-BI (`proud-glitter-89179522`, `aws-ap-southeast-1`, branch `main`, database `koffeebean_bi`). No other connection variable name is used.
 2. Generate `BI_HASH_SECRET` with `openssl rand -hex 32` and set it the same way. Keep it stable: changing it breaks joins with older rows.
-3. Create the tables once: `psql "$DATABASE_URL" -f db/migrations/0001_bi_events.sql` (idempotent).
+3. The tables already exist on that branch. For a new branch or database, create them once: `psql "$DATABASE_URL" -f db/migrations/0001_bi_events.sql` (idempotent).
 
-Tables: `bi_events` (append-only; `id`, `created_at`, `event_type`, `source`, `shopper_hash`, `session_id`, `payload` jsonb) and an optional `bi_orders` mirror for cross-shopper order aggregates.
+Tables: `bi_events` (append-only by convention; `id`, `created_at`, `event_type`, `source`, `shopper_hash`, `session_id`, `payload` jsonb) and an optional `bi_orders` mirror for cross-shopper order aggregates (`items` jsonb and `attributed_sku_ids` text[]; no writer yet).
 
 - Every event has `source` of `live` or `demo`. BI queries should exclude `demo`.
 - `shopper_hash` comes from `hashShopperId(sub)` in `src/lib/bi-hash.ts`: HMAC-SHA256 of the Auth0 `sub`, keyed by `BI_HASH_SECRET`, as 64 hex characters. The raw `sub` is never stored.
