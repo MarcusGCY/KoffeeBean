@@ -427,7 +427,7 @@ export function SupportChat() {
           aria-expanded={false}
           className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full bg-stone-900 px-4 text-sm font-medium text-white shadow-lg hover:bg-stone-700"
         >
-          Support
+          Barista
         </button>
       )}
     </div>
