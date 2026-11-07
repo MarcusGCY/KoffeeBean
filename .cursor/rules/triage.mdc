@@ -13,6 +13,7 @@ For a create:
 - Add exactly one self-contained vitest file at `tests/repro/<slug>.test.ts`. It must fail on current main and reproduce the report. Import app code with the `@/` alias.
 - Run `git fetch origin main` and create the branch from that latest `origin/main`. Never reuse or check out an existing branch.
 - Name the branch `beanbox-triage/<slug>-<8 character run id>` using the exact suffix in the task. Push only to that name. Do not open a pull request.
+- If the task gives a case token and no GitHub issue exists yet, the test path is `tests/repro/<case-token>-<slug>.test.ts` and the branch is `beanbox-triage/<case-token>-<slug>-<suffix>`. Do not invent an issue number. Do not rename the file after creating it.
 - Commit and push only that new test file.
 - Set `testPath` to that file and `branch` to the branch you pushed.
 

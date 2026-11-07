@@ -34,7 +34,7 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
   }
 
   const reported = intake.failure ? `${reportedBy}\n\n${intakeFailureNote(intake.failure)}` : reportedBy;
-  const decision = await triageFeedback(feedback, open);
+  const decision = await triageFeedback(feedback, open, quality ? { caseId: quality.caseId } : undefined);
   const triageAt = new Date().toISOString();
   if (decision.action === "merge" && decision.issueNumber) {
     await gh.appendReport(decision.issueNumber, `${feedback}\n\n${reported}`);
@@ -47,8 +47,9 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
     summary: decision.body,
     feedback,
     reportedBy: reported,
-    testPath: decision.testPath,
-    branch: decision.branch,
+    testPath: decision.identityMismatch ? undefined : decision.testPath,
+    branch: decision.identityMismatch ? undefined : decision.branch,
+    identityMismatch: decision.identityMismatch,
     quality,
     triageAgentId: decision.agentId,
     triageRunId: decision.runId,

@@ -8,7 +8,8 @@ Make the smallest change that fixes the root cause of the GitHub issue.
 - The issue lists a reproduction test (`beanbox-repro`). Copy that file from the triage branch into this PR.
 - Make that same test pass.
 - Never skip or weaken it. Do not use `.skip` or `.todo`, and do not delete or loosen its assertions.
-- Do not edit `tests/repro` beyond that copy.
+- Do not edit `tests/repro` beyond that copy. That file was named before the GitHub issue existed.
+- When the task states `Issue #<n>` and the machine token `issue-<n>`, the pull request title starts with `Issue #<n>:` and the branch name contains `issue-<n>`. The issue URL and `Fixes #<n>` stay in the body. A case id in the task is a secondary reference, not a substitute for the issue number.
 
 Run `npm test`. `tests/cart.test.ts` and `tests/images.test.ts` must pass. `productImageUrl` for a bean id must return the path that exists under `public/` (bean files are in `public/images/beans/`).
 

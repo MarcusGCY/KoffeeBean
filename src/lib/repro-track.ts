@@ -2,6 +2,7 @@ import { continueTracking } from "./fix";
 import * as gh from "./github";
 import { requestReview } from "./notify";
 import { recordOpenedCase } from "./quality-audit";
+import { identityMismatchDetail } from "./quality-identity";
 import { appendCaseMarker, asDelivery, qualityCase, type NotifyDelivery, type QualityCase } from "./quality-case";
 import {
   cannotReproduceBody,
@@ -25,6 +26,7 @@ type Report = {
   intakeDelivery?: NotifyDelivery;
   intakeAt?: string;
   triageAt?: string;
+  identityMismatch?: { expected: string; testPath?: string; branch?: string };
 };
 
 export type ReproResume =
@@ -68,6 +70,15 @@ export function initialReproBudgetMs(): number {
 export async function settleNewReport(
   report: Report & { testPath?: string; branch?: string },
 ): Promise<void> {
+  if (report.identityMismatch) {
+    await publish(undefined, report, {
+      status: "error",
+      testPath: report.identityMismatch.testPath,
+      branch: report.identityMismatch.branch,
+      detail: identityMismatchDetail(report.identityMismatch),
+    });
+    return;
+  }
   const verdict = await watchRepro(report.testPath, report.branch, initialReproBudgetMs(), { dispatch: true });
   if (verdict.status === "pending") {
     await gh.ensureLabel(gh.LABEL_REPRO_PENDING, "fbca04", "Reproduction check has not finished");
@@ -258,6 +269,7 @@ async function writeCase(
     triageAt: report.triageAt,
     repro,
     reproError: verdict.status === "error" ? verdict.detail : undefined,
+    blocker: report.identityMismatch ? "identity mismatch" : undefined,
     reviewDelivery,
   });
 }

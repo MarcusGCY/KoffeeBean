@@ -247,6 +247,7 @@ export type PullSnapshot = {
   baseRepo: string;
   mergeCommitSha?: string;
   headSha?: string;
+  body?: string;
 };
 
 export async function getPullRequest(number: number): Promise<PullSnapshot | null> {
@@ -268,6 +269,7 @@ export async function getPullRequest(number: number): Promise<PullSnapshot | nul
       baseRepo: data.base.repo?.full_name ?? "",
       mergeCommitSha: data.merge_commit_sha ?? undefined,
       headSha: /^[0-9a-f]{40}$/i.test(data.head.sha) ? data.head.sha.toLowerCase() : undefined,
+      body: data.body ?? "",
     };
   } catch (error) {
     if (githubHttpStatus(error) === 404) return null;
@@ -282,6 +284,11 @@ const READY_MUTATION = `mutation($id: ID!) {
 }`;
 
 /** GraphQL markPullRequestReadyForReview. REST cannot clear a draft. */
+export async function updatePull(number: number, patch: { title?: string; body?: string }): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().pulls.update({ owner, repo: r, pull_number: number, ...patch });
+}
+
 export async function markPullRequestReady(nodeId: string): Promise<void> {
   await gh().graphql(READY_MUTATION, { id: nodeId });
 }

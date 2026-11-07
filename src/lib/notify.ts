@@ -13,6 +13,7 @@ import {
   type NotifyDelivery,
   type QualityCase,
 } from "./quality-case";
+import { qualityIdentity } from "./quality-identity";
 
 export type { NotifyDelivery };
 
@@ -87,6 +88,7 @@ export async function requestReview(issue: GrokIssue & { summary: string; qualit
       }),
       nextOwner: "human",
       blocker: "waiting for signed approval",
+      identity: qualityIdentity({ issue: issue.number, caseId: issue.quality.caseId }),
     } : {}),
   };
   if (!process.env.GROK_WEBHOOK_URL) {
@@ -124,6 +126,12 @@ export async function notifyFixCompleted(event: GrokIssue & {
   agentId?: string;
   runId?: string;
   headSha?: string;
+  branch?: string;
+  branchHasIssueToken?: boolean;
+  prTitle?: string;
+  alignment?: "updated" | "unchanged" | "failed" | "skipped";
+  alignmentError?: "github_read_failed" | "github_write_failed";
+  titleNonconformance?: boolean;
 }): Promise<NotifyDelivery> {
   const pull = completedPull(event.number, event.prUrl);
   const handoff = "quality" in event;
@@ -194,7 +202,9 @@ export async function notifyIntakeClassification(event: {
         summary: event.summary,
         severity: quality.severity,
         category: quality.category,
+        caseId: quality.caseId,
       }),
+      identity: qualityIdentity({ caseId: quality.caseId }),
     } : {}),
   });
 }
@@ -222,7 +232,9 @@ export async function notifyFixMerged(event: GrokIssue & {
         severity: event.quality?.severity,
         category: event.quality?.category,
         reason: event.quality?.reason,
+        caseId: event.quality?.caseId,
       }),
+      identity: qualityIdentity({ issue: event.number, caseId: event.quality?.caseId }),
       nextOwner: "deploy",
       blocker: "deploy not observed by this app",
     } : {}),
@@ -261,7 +273,9 @@ function fixStartedFields(issue: GrokIssue & { quality?: QualityCase | null; age
       severity: issue.quality?.severity,
       category: issue.quality?.category,
       reason: issue.quality?.reason,
+      caseId: issue.quality?.caseId,
     }),
+    identity: qualityIdentity({ issue: issue.number, caseId: issue.quality?.caseId }),
     nextOwner: "engineering",
     blocker: "adoption not acknowledged",
     ...(adoptionUrl ? { adoptionUrl } : {}),
@@ -269,7 +283,20 @@ function fixStartedFields(issue: GrokIssue & { quality?: QualityCase | null; age
 }
 
 function fixCompletedFields(
-  event: GrokIssue & { status: string; prUrl?: string; quality?: QualityCase | null; agentId?: string; runId?: string; headSha?: string },
+  event: GrokIssue & {
+    status: string;
+    prUrl?: string;
+    quality?: QualityCase | null;
+    agentId?: string;
+    runId?: string;
+    headSha?: string;
+    branch?: string;
+    branchHasIssueToken?: boolean;
+    prTitle?: string;
+    alignment?: "updated" | "unchanged" | "failed" | "skipped";
+    alignmentError?: "github_read_failed" | "github_write_failed";
+    titleNonconformance?: boolean;
+  },
   mergeUrl: string | undefined,
   prNumber: number | undefined,
 ) {
@@ -299,7 +326,22 @@ function fixCompletedFields(
       severity: event.quality?.severity,
       category: event.quality?.category,
       reason: event.quality?.reason,
+      caseId: event.quality?.caseId,
+      branch: event.branch,
+      branchHasIssueToken: event.branchHasIssueToken,
+      alignment: event.alignment,
+      alignmentError: event.alignmentError,
     }),
+    identity: qualityIdentity({ issue: event.number, caseId: event.quality?.caseId }),
+    ...(event.branch ? { branch: event.branch } : {}),
+    ...(event.branchHasIssueToken !== undefined ? { branchHasIssueToken: event.branchHasIssueToken } : {}),
+    ...(event.branchHasIssueToken === false ? { branchNonconformance: true } : {}),
+    ...(event.prTitle ? { prTitle: event.prTitle } : {}),
+    ...(event.alignment ? {
+      alignment: event.alignment,
+      titleNonconformance: event.titleNonconformance === true,
+      ...(event.alignmentError ? { alignmentError: event.alignmentError } : {}),
+    } : {}),
     nextOwner: "verification",
     blocker: "independent verification not acknowledged",
     ...(verificationUrl ? { verificationUrl } : {}),
