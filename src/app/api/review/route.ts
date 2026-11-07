@@ -2,7 +2,8 @@ import { after, NextResponse } from "next/server";
 import { verify } from "@/lib/approval";
 import * as gh from "@/lib/github";
 import { fixIssue } from "@/lib/fix";
-import { notifyFixStarted } from "@/lib/notify";
+import { caseFields, recordQualityEvent } from "@/lib/quality-audit";
+import { buildEvent, parseCase } from "@/lib/quality-case";
 
 // Hobby Fluid compute allows 300s, including work scheduled with after().
 // The fix itself can run much longer; fixIssue persists the run and resumes later.
@@ -31,12 +32,29 @@ export async function GET(req: Request) {
   }
 
   await gh.setLabels(issue, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
+  const quality = parseCase(current.body, issue);
+  await recordQualityEvent(issue, buildEvent({
+    actionId: `approval:${issue}`,
+    ...caseFields(quality),
+    stage: "approval",
+    status: "recorded",
+    at: new Date().toISOString(),
+    actor: "signed-link",
+    issue,
+    pr: null,
+    agentId: null,
+    runId: null,
+    evidence: "signed approve link; one app launcher",
+    attempt: 1,
+    nextOwner: "app",
+    blocker: null,
+    externalAck: "acknowledged",
+  }));
   after(async () => {
     try {
-      await notifyFixStarted({ number: current.number, title: current.title, url: current.url });
       await fixIssue(issue);
     } catch (e) {
-      console.error("[review] fix failed", e);
+      console.error("[review] fix failed", e instanceof Error ? e.name : "Error");
     }
   });
   return NextResponse.json({ status: "approved-fix-started" });

@@ -1,5 +1,20 @@
 import { reviewLinks } from "./approval";
 import { mergeLink, prNumberFromUrl } from "./merge-link";
+import {
+  fixCompletedMessage,
+  fixMergedMessage,
+  fixStartedMessage,
+  intakeMessage,
+  qualityAckLink,
+  type AckBinding,
+  qualityCase,
+  reviewRequestMessage,
+  severityLine,
+  type NotifyDelivery,
+  type QualityCase,
+} from "./quality-case";
+
+export type { NotifyDelivery };
 
 export type GrokIssue = { number: number; title: string; url: string };
 
@@ -32,16 +47,18 @@ async function postGrok(payload: unknown): Promise<boolean> {
 }
 
 /** Log webhook failures. Fix progress must not abort the Cursor run. */
-async function postGrokQuietly(payload: { type: string; [key: string]: unknown }): Promise<void> {
+async function postGrokQuietly(payload: { type: string; [key: string]: unknown }): Promise<NotifyDelivery> {
   const url = process.env.GROK_WEBHOOK_URL;
   if (!url) {
     console.log(`[notify] GROK_WEBHOOK_URL not set; skipped ${payload.type}`);
-    return;
+    return "skipped";
   }
   try {
     await postGrok(payload);
+    return "delivered";
   } catch (e) {
-    console.error(`[notify] ${payload.type} failed`, e);
+    console.error(`[notify] ${payload.type} failed`, e instanceof Error ? e.name : "Error");
+    return "failed";
   }
 }
 
@@ -50,7 +67,7 @@ async function postGrokQuietly(payload: { type: string; [key: string]: unknown }
  * The payload is deliberately generic; adapt it once the bot's API is known.
  * The bot replies by calling the approve/reject URL (a GET, signed per decision).
  */
-export async function requestReview(issue: GrokIssue & { summary: string }) {
+export async function requestReview(issue: GrokIssue & { summary: string; quality?: QualityCase }) {
   const links = reviewLinks(issue.number);
   const payload = {
     type: "review_request",
@@ -60,20 +77,37 @@ export async function requestReview(issue: GrokIssue & { summary: string }) {
       { id: "approve", label: "Approve & fix", url: links.approve },
       { id: "reject", label: "Reject", url: links.reject },
     ],
+    ...(issue.quality ? {
+      ...caseNotice(issue.quality),
+      message: reviewRequestMessage({
+        number: issue.number,
+        title: issue.title,
+        summary: issue.summary,
+        ...issue.quality,
+      }),
+      nextOwner: "human",
+      blocker: "waiting for signed approval",
+    } : {}),
   };
   if (!process.env.GROK_WEBHOOK_URL) {
     console.log("[notify] GROK_WEBHOOK_URL not set; review page:", links.page);
-    return { delivered: false, reviewPage: links.page };
+    return { delivered: false, delivery: "skipped" as const, reviewPage: links.page };
   }
   const delivered = await postGrok(payload);
-  return { delivered, reviewPage: links.page };
+  return { delivered, delivery: "delivered" as const, reviewPage: links.page };
 }
 
 /** Ping the bot when Approve kicks off a Cursor fix. */
-export async function notifyFixStarted(issue: GrokIssue): Promise<void> {
-  await postGrokQuietly({
+export async function notifyFixStarted(issue: GrokIssue & {
+  quality?: QualityCase | null;
+  agentId?: string;
+  runId?: string;
+}): Promise<NotifyDelivery> {
+  const handoff = issue.quality !== undefined || issue.agentId !== undefined;
+  return postGrokQuietly({
     type: "fix_started",
     issue: { number: issue.number, title: issue.title, url: issue.url },
+    ...(handoff ? fixStartedFields(issue) : {}),
   });
 }
 
@@ -86,15 +120,21 @@ export async function notifyFixCompleted(event: GrokIssue & {
   status: string;
   prUrl?: string;
   summary: string;
-}): Promise<void> {
+  quality?: QualityCase | null;
+  agentId?: string;
+  runId?: string;
+  headSha?: string;
+}): Promise<NotifyDelivery> {
   const pull = completedPull(event.number, event.prUrl);
-  await postGrokQuietly({
+  const handoff = "quality" in event;
+  return postGrokQuietly({
     type: "fix_completed",
     issue: { number: event.number, title: event.title, url: event.url },
     status: event.status,
     ...(event.prUrl ? { prUrl: event.prUrl } : {}),
     ...pull,
     summary: event.summary,
+    ...(handoff ? fixCompletedFields(event, pull?.mergeUrl, pull?.prNumber) : {}),
   });
 }
 
@@ -118,8 +158,17 @@ export async function notifyIntakeClassification(event: {
   redacted_text: string | null;
   reportedBy: string;
   known_case_url?: string;
-}): Promise<void> {
-  await postGrokQuietly({
+  caseId?: string;
+}): Promise<NotifyDelivery> {
+  const quality = event.caseId
+    ? qualityCase({
+      caseId: event.caseId,
+      severity: event.severity,
+      reason: event.reason,
+      category: event.category,
+    })
+    : undefined;
+  return postGrokQuietly({
     type: "intake_classification",
     action: event.action,
     reason: event.reason,
@@ -135,6 +184,18 @@ export async function notifyIntakeClassification(event: {
     redacted_text: event.redacted_text,
     reportedBy: event.reportedBy,
     ...(event.known_case_url ? { known_case_url: event.known_case_url } : {}),
+    ...(quality ? {
+      caseId: quality.caseId,
+      correlationId: quality.correlationId,
+      severityLine: severityLine(quality),
+      message: intakeMessage({
+        action: event.action,
+        reason: quality.reason,
+        summary: event.summary,
+        severity: quality.severity,
+        category: quality.category,
+      }),
+    } : {}),
   });
 }
 
@@ -143,15 +204,125 @@ export async function notifyFixMerged(event: GrokIssue & {
   prNumber: number;
   prUrl: string;
   sha: string;
-}): Promise<void> {
-  await postGrokQuietly({
+  quality?: QualityCase | null;
+}): Promise<NotifyDelivery> {
+  const handoff = "quality" in event;
+  return postGrokQuietly({
     type: "fix_merged",
     issue: { number: event.number, title: event.title, url: event.url },
     prNumber: event.prNumber,
     prUrl: event.prUrl,
     sha: event.sha,
     summary: `Squash-merged pull request #${event.prNumber}. Vercel will redeploy main shortly.`,
+    ...(handoff ? {
+      ...caseNotice(event.quality),
+      message: fixMergedMessage({
+        number: event.number,
+        prNumber: event.prNumber,
+        severity: event.quality?.severity,
+        category: event.quality?.category,
+        reason: event.quality?.reason,
+      }),
+      nextOwner: "deploy",
+      blocker: "deploy not observed by this app",
+    } : {}),
   });
+}
+
+function caseNotice(quality: QualityCase | null | undefined) {
+  return {
+    caseId: quality?.caseId ?? null,
+    correlationId: quality?.correlationId ?? null,
+    severity: quality?.severity ?? null,
+    reason: quality?.reason ?? null,
+    category: quality?.category ?? null,
+    severityLine: severityLine(quality ?? {}),
+  };
+}
+
+function fixStartedFields(issue: GrokIssue & { quality?: QualityCase | null; agentId?: string; runId?: string }) {
+  let adoptionUrl: string | undefined;
+  try {
+    adoptionUrl = qualityAckLink(ackBinding(issue.number, "engineering", issue.quality?.caseId, issue.runId, 0, "-"));
+  } catch (error) {
+    console.error("[notify] could not sign adoption link", error instanceof Error ? error.name : "Error");
+  }
+  return {
+    launched: true,
+    doNotLaunch: true,
+    agentId: issue.agentId ?? null,
+    runId: issue.runId ?? null,
+    ...caseNotice(issue.quality),
+    message: fixStartedMessage({
+      number: issue.number,
+      title: issue.title,
+      agentId: issue.agentId,
+      runId: issue.runId,
+      severity: issue.quality?.severity,
+      category: issue.quality?.category,
+      reason: issue.quality?.reason,
+    }),
+    nextOwner: "engineering",
+    blocker: "adoption not acknowledged",
+    ...(adoptionUrl ? { adoptionUrl } : {}),
+  };
+}
+
+function fixCompletedFields(
+  event: GrokIssue & { status: string; prUrl?: string; quality?: QualityCase | null; agentId?: string; runId?: string; headSha?: string },
+  mergeUrl: string | undefined,
+  prNumber: number | undefined,
+) {
+  let verificationUrl: string | undefined;
+  let adoptionUrl: string | undefined;
+  try {
+    adoptionUrl = qualityAckLink(ackBinding(event.number, "engineering", event.quality?.caseId, event.runId, prNumber ?? 0, event.headSha ?? "-"));
+    if (prNumber && event.headSha && event.runId) {
+      verificationUrl = qualityAckLink(ackBinding(event.number, "verification", event.quality?.caseId, event.runId, prNumber, event.headSha));
+    }
+  } catch (error) {
+    console.error("[notify] could not sign verification link", error instanceof Error ? error.name : "Error");
+  }
+  return {
+    doNotLaunch: true,
+    selfReportedTestsAreVerification: false,
+    agentId: event.agentId ?? null,
+    runId: event.runId ?? null,
+    ...caseNotice(event.quality),
+    message: fixCompletedMessage({
+      number: event.number,
+      title: event.title,
+      status: event.status,
+      prUrl: event.prUrl,
+      mergeUrl,
+      headSha: event.headSha,
+      severity: event.quality?.severity,
+      category: event.quality?.category,
+      reason: event.quality?.reason,
+    }),
+    nextOwner: "verification",
+    blocker: "independent verification not acknowledged",
+    ...(verificationUrl ? { verificationUrl } : {}),
+    ...(adoptionUrl ? { adoptionUrl } : {}),
+  };
+}
+
+function ackBinding(
+  issue: number,
+  stage: AckBinding["stage"],
+  caseId: string | null | undefined,
+  runId: string | null | undefined,
+  pr: number,
+  head: string,
+): AckBinding {
+  return {
+    issue,
+    stage,
+    caseId: caseId && caseId !== "-" ? caseId : "-",
+    runId: runId && runId !== "-" ? runId : "-",
+    pr,
+    head: head || "-",
+  };
 }
 
 function completedPull(

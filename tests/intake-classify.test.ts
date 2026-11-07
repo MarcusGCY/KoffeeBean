@@ -35,6 +35,10 @@ vi.mock("@/lib/github", async () => {
     ensureLabel,
     listOpenFeedbackIssues,
     getIssue,
+    comment: vi.fn(async () => undefined),
+    listComments: vi.fn(async () => []),
+    updateIssue: vi.fn(async () => undefined),
+    setLabels: vi.fn(async () => undefined),
   };
 });
 

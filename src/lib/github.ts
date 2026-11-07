@@ -246,6 +246,7 @@ export type PullSnapshot = {
   headRepo: string | null;
   baseRepo: string;
   mergeCommitSha?: string;
+  headSha?: string;
 };
 
 export async function getPullRequest(number: number): Promise<PullSnapshot | null> {
@@ -266,6 +267,7 @@ export async function getPullRequest(number: number): Promise<PullSnapshot | nul
       headRepo: data.head.repo?.full_name ?? null,
       baseRepo: data.base.repo?.full_name ?? "",
       mergeCommitSha: data.merge_commit_sha ?? undefined,
+      headSha: /^[0-9a-f]{40}$/i.test(data.head.sha) ? data.head.sha.toLowerCase() : undefined,
     };
   } catch (error) {
     if (githubHttpStatus(error) === 404) return null;

@@ -14,7 +14,11 @@ const Decision = z.object({
   testPath: z.string().optional(),
   branch: z.string().optional(),
 });
-export type Decision = z.infer<typeof Decision> & { branch?: string };
+export type Decision = z.infer<typeof Decision> & {
+  branch?: string;
+  agentId?: string;
+  runId?: string;
+};
 
 const PREVIEW_MAX = 160;
 
@@ -183,7 +187,7 @@ async function resolveRepro(
 
   console.log(`[triage] decision testPath=${testPath ? "ok" : "missing"} branch=${branch ? "ok" : "missing"}`);
 
-  const next: Decision = { ...d };
+  const next: Decision = { ...d, agentId: ctx.agentId, runId: ctx.runId };
   if (testPath) next.testPath = testPath;
   else delete next.testPath;
   if (branch) next.branch = branch;

@@ -17,6 +17,8 @@ const findReproRun = vi.hoisted(() => vi.fn());
 const workflowRunLog = vi.hoisted(() => vi.fn());
 const requestReview = vi.hoisted(() => vi.fn());
 const continueTracking = vi.hoisted(() => vi.fn());
+const comment = vi.hoisted(() => vi.fn());
+const listComments = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/triage", () => ({ triageFeedback }));
 vi.mock("@/lib/notify", () => ({ requestReview, notifyIntakeClassification: vi.fn() }));
@@ -39,6 +41,8 @@ vi.mock("@/lib/github", async () => {
     dispatchRepro,
     findReproRun,
     workflowRunLog,
+    comment,
+    listComments,
   };
 });
 
@@ -98,6 +102,8 @@ beforeEach(() => {
   workflowRunLog.mockReset();
   requestReview.mockReset();
   continueTracking.mockReset();
+  comment.mockReset();
+  listComments.mockReset();
   delete process.env.VERCEL;
   process.env.APPROVAL_SECRET = "test-secret";
   listOpenFeedbackIssues.mockResolvedValue([]);
@@ -106,8 +112,10 @@ beforeEach(() => {
   ensureLabel.mockResolvedValue(undefined);
   updateIssue.mockResolvedValue(undefined);
   setLabels.mockResolvedValue(undefined);
-  requestReview.mockResolvedValue(undefined);
+  requestReview.mockResolvedValue({ delivered: true, delivery: "delivered" });
   continueTracking.mockResolvedValue(undefined);
+  comment.mockResolvedValue(undefined);
+  listComments.mockResolvedValue([]);
   dispatchRepro.mockResolvedValue(undefined);
   branchSha.mockResolvedValue(SHA);
   compareAgainstMain.mockResolvedValue({
@@ -150,12 +158,16 @@ describe("fileFeedback reproduce gate", () => {
     expect(body).toContain(CHECK_URL);
     expect(body).toContain("TAIL-MARKER");
     expect(body).not.toContain("HEAD-MARKER");
-    expect(requestReview).toHaveBeenCalledWith({
+    expect(requestReview).toHaveBeenCalledWith(expect.objectContaining({
       number: 21,
       title: "Tote will not add",
       url: ISSUE.url,
       summary: "Cart skips the tote.",
-    });
+    }));
+    const review = requestReview.mock.calls[0][0] as { quality?: { caseId?: string; severity?: string | null; reason?: string | null } };
+    expect(review.quality?.caseId).toMatch(/^kb-[0-9a-f]{16}$/);
+    expect(review.quality?.reason).toBeTruthy();
+    expect(JSON.stringify(comment.mock.calls)).not.toContain("ada@example.com");
     expect(closeIssue).not.toHaveBeenCalled();
   });
 

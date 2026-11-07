@@ -59,6 +59,10 @@ export default async function DemoPage({
           Revert a merged Cursor fix so the shop bug comes back after Vercel redeploys main.
           The feedback issue is closed and labeled <code className="font-mono">demo-reverted</code>,
           so the next report opens a fresh issue.
+          {" "}
+          <a className="font-medium text-amber-900 underline" href="/admin/quality">Quality audit</a>
+          {" "}
+          reads one issue&apos;s trail.
         </p>
 
         {notice && (

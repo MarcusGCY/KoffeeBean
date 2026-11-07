@@ -135,14 +135,14 @@ describe("mergeApprovedFix", () => {
     expect(setLabels).toHaveBeenCalledWith(14, ["user-feedback", "approved", "merged"]);
     expect(closeIssue).toHaveBeenCalledWith(14);
     expect(comment).toHaveBeenCalledWith(14, fixMergedComment(PR_URL, SHA));
-    expect(notifyFixMerged).toHaveBeenCalledWith({
+    expect(notifyFixMerged).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,
       title: issue.title,
       url: issue.url,
       prNumber: 15,
       prUrl: PR_URL,
       sha: SHA,
-    });
+    }));
   });
 
   it("marks a draft ready before squash-merging", async () => {
@@ -183,7 +183,7 @@ describe("mergeApprovedFix", () => {
     expect(second).toMatchObject({ status: "already-merged", sha: SHA });
     expect(squashMergePullRequest).not.toHaveBeenCalled();
     expect(notifyFixMerged).toHaveBeenCalledTimes(1);
-    expect(comment).toHaveBeenCalledTimes(1);
+    expect(comment.mock.calls.filter((call) => String(call[1]).includes("beanbox-fix-merged"))).toHaveLength(1);
   });
 
   it("refuses a pull request that is not the one recorded on the issue", async () => {
