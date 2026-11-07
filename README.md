@@ -216,23 +216,23 @@ Revert itself needs **Contents** read/write (to commit on `main`) and **Issues**
 
 When the app has a case id, each of those payloads also includes `caseId`, `correlationId`, `severity`, `reason`, `category`, `severityLine`, and `message`. Older routines can ignore the new fields. `severityLine` is `Severity S2 · images · bug` (or `unknown` / `unspecified` when that part was not stored). `message` is the text to post verbatim. It always starts with `severityLine`.
 
-`fix_started` is sent only after the app has created the one fix agent. It adds `launched: true`, `doNotLaunch: true`, `agentId`, `runId`, `adoptionUrl`, `nextOwner: "engineering"`, and `blocker`. `fix_completed` adds `doNotLaunch: true`, `selfReportedTestsAreVerification: false`, `verificationUrl`, `adoptionUrl`, `nextOwner: "verification"`, and `blocker`. `adoptionUrl` and `verificationUrl` are signed GET links (`/api/quality/ack`). Opening one records an acknowledgement. It does not launch an agent and it does not merge.
+`fix_started` is sent only after the app has created the one fix agent. It adds `launched: true`, `doNotLaunch: true`, `agentId`, `runId`, `adoptionUrl`, `nextOwner: "engineering"`, and `blocker`. `fix_completed` adds `doNotLaunch: true`, `selfReportedTestsAreVerification: false`, `verificationUrl` when the head sha was read, `adoptionUrl`, `nextOwner: "verification"`, and `blocker`. Those URLs are signed GET confirmations. Opening one records nothing. An Auth0 `admin` records a decision with a same-origin POST. Engineering `adopt` is not a launch and not a GO. Verification `go` requires evidence for one head. `no-go` and missing evidence do not pass. A later push makes an older GO stale. Neither POST merges or launches.
 
-An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/audit?issue=<n>` (Auth0 role `admin`, otherwise 404). The trail is GitHub comments signed with `APPROVAL_SECRET`, not Auth0 `app_metadata` and not the BI tables. Webhook HTTP success is delivery, not proof the room showed it. Missing webhook results stay `not_recorded`.
+An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/audit?issue=<n>` (Auth0 role `admin`, otherwise 404). The trail is GitHub comments signed with `APPROVAL_SECRET`. On a public repository those comments are public. They are not Auth0 `app_metadata` and not the BI tables. Webhook HTTP success is delivery, not proof the room showed it. Missing webhook results stay `not_recorded`. A failed comment write is not retried in the background.
 
 ### Quality room routine
 
-The app is the only launcher. Replace a filter that keeps only `feedback` and `intake_classification` with this rule:
+The app is the sole launcher. Replace a filter that keeps only `feedback` and `intake_classification` with this rule:
 
 ```
 Known webhook types are intake_classification, review_request, fix_started, fix_completed, and fix_merged.
 Do not drop a delivery because type is not feedback or intake_classification.
 For each known type, post the message field verbatim when it is present. Do not remove the Severity line.
+The app is the sole launcher. Do not start a cloud agent, a triage run, or a fix run from this routine.
 review_request: show the signed Approve and Reject links from actions. Do not ask Triage or Engineering to start work. The app launches a fix only after /api/review returns approved-fix-started.
-fix_started: the app has already launched the only fix. Post the message. Do not launch another agent. Do not ask Triage or Engineering to start a second fix. Do not end tracking at approval. adoptionUrl records acknowledgement only and does not launch work.
-fix_completed: post the message. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification until verificationUrl is opened. That URL does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
+fix_started: the app has already launched the only fix. Post the message in the Quality room and keep tracking the case after approval. Do not launch another agent. Do not ask Triage or Engineering to start a second fix. Engineering adoption is not a launch. Opening adoptionUrl records nothing. An admin POST of adopt records adoption only.
+fix_completed: post the message in the Quality room and route the case to verification. Do not stop tracking at approval. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification. Opening verificationUrl records nothing. ACK is not GO. A GO is an admin POST with evidence for that pull request and that head. NO-GO is not a pass. A later push invalidates a GO. The verification POST does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
 fix_merged: post the message. This app does not observe the Vercel deploy.
-Do not start a cloud agent, a triage run, or a fix run from this routine.
 ```
 
 The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.

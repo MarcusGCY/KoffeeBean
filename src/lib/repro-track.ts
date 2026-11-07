@@ -23,6 +23,8 @@ type Report = {
   triageAgentId?: string;
   triageRunId?: string;
   intakeDelivery?: NotifyDelivery;
+  intakeAt?: string;
+  triageAt?: string;
 };
 
 export type ReproResume =
@@ -82,12 +84,11 @@ export async function settleNewReport(
       ...(report.triageAgentId ? { triageAgentId: report.triageAgentId } : {}),
       ...(report.triageRunId ? { triageRunId: report.triageRunId } : {}),
       ...(report.intakeDelivery ? { intakeDelivery: report.intakeDelivery } : {}),
+      ...(report.intakeAt ? { intakeAt: report.intakeAt } : {}),
+      ...(report.triageAt ? { triageAt: report.triageAt } : {}),
     };
-    const issue = await gh.createIssue(
-      report.title,
-      appendCaseMarker(pendingIssueBody(pending), carried(report)),
-      [gh.LABEL_REPRO_PENDING],
-    );
+    const issue = await gh.createIssue(report.title, pendingIssueBody(pending), [gh.LABEL_REPRO_PENDING]);
+    await bindCase(issue.number, pendingIssueBody(pending), carried(report));
     console.log(`[feedback] reproduction check pending #${issue.number}`);
     await writeCase(issue.number, report, {
       status: "pending",
@@ -170,7 +171,7 @@ async function publish(
       feedback: report.feedback,
       reportedBy: report.reportedBy,
     });
-    const issue = await save(existing, report.title, appendCaseMarker(body, carried(report)), [gh.FEEDBACK_LABEL, gh.LABEL_AWAITING]);
+    const issue = await save(existing, report.title, body, [gh.FEEDBACK_LABEL, gh.LABEL_AWAITING], carried(report));
     console.log(`[feedback] created #${issue.number}`);
     let reviewDelivery: NotifyDelivery = "failed";
     try {
@@ -209,8 +210,9 @@ async function publish(
   const issue = await save(
     existing,
     report.title,
-    appendCaseMarker(body, carried(report)),
+    body,
     [gh.FEEDBACK_LABEL, gh.LABEL_CANNOT_REPRODUCE],
+    carried(report),
   );
   await gh.closeIssue(issue.number);
   await writeCase(issue.number, report, verdict);
@@ -252,6 +254,8 @@ async function writeCase(
     sha: "sha" in verdict ? verdict.sha : undefined,
     checkUrl: "checkUrl" in verdict ? verdict.checkUrl : undefined,
     intakeDelivery: report.intakeDelivery ?? "skipped",
+    intakeAt: report.intakeAt,
+    triageAt: report.triageAt,
     repro,
     reproError: verdict.status === "error" ? verdict.detail : undefined,
     reviewDelivery,
@@ -263,14 +267,27 @@ async function save(
   title: string,
   body: string,
   labels: string[],
+  quality?: QualityCase,
 ): Promise<{ number: number; url: string }> {
   if (!existing) {
-    if (labels.includes(gh.LABEL_AWAITING)) return gh.createIssue(title, body);
-    return gh.createIssue(title, body, labels);
+    const created = labels.includes(gh.LABEL_AWAITING)
+      ? await gh.createIssue(title, body)
+      : await gh.createIssue(title, body, labels);
+    await bindCase(created.number, body, quality);
+    return created;
   }
-  await gh.updateIssue(existing.number, body);
+  await gh.updateIssue(existing.number, quality ? appendCaseMarker(body, quality, existing.number) : body);
   await gh.setLabels(existing.number, labels);
   return existing;
+}
+
+async function bindCase(issue: number, body: string, quality: QualityCase | undefined): Promise<void> {
+  if (!quality) return;
+  try {
+    await gh.updateIssue(issue, appendCaseMarker(body, quality, issue));
+  } catch (error) {
+    console.error(`[quality] case_marker_failed issue=${issue} case=${quality.caseId} error=github_write_failed name=${error instanceof Error ? error.name : "Error"}`);
+  }
 }
 
 function delay(ms: number): Promise<void> {

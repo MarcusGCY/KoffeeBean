@@ -114,7 +114,7 @@ async function finish(
     await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED, gh.LABEL_MERGED]);
     await gh.closeIssue(issue.number);
     await gh.comment(issue.number, fixMergedComment(pull.url, sha));
-    const quality = parseCase(issue.body);
+    const quality = parseCase(issue.body, issue.number);
     const delivery = asDelivery(await notifyFixMerged({
       number: issue.number,
       title: issue.title,

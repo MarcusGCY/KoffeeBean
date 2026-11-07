@@ -14,6 +14,7 @@ import { triageFeedback } from "./triage";
  */
 export async function fileFeedback(feedback: string, reportedBy: string): Promise<void> {
   const open = await gh.listOpenFeedbackIssues();
+  const intakeAt = new Date().toISOString();
   const caseId = newQualityCaseId();
   const intake = await resolveDuplicate(await classifyForIntake(feedback));
   const duplicateOf = intake.classification?.duplicate_of ?? null;
@@ -27,13 +28,14 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
   const intakeDelivery = await notifyIntakeClassification({ ...signal, caseId: quality?.caseId });
   if (intake.action === "hold") {
     console.log(
-      `[feedback] intake only case=${quality?.caseId ?? "none"} reason=${signal.reason} severity=${signal.severity ?? "none"} delivery=${intakeDelivery}`,
+      `[feedback] intake_not_durable case=${quality?.caseId ?? "none"} reason=${signal.reason} severity=${signal.severity ?? "none"} delivery=${intakeDelivery} durable=false`,
     );
     return;
   }
 
   const reported = intake.failure ? `${reportedBy}\n\n${intakeFailureNote(intake.failure)}` : reportedBy;
   const decision = await triageFeedback(feedback, open);
+  const triageAt = new Date().toISOString();
   if (decision.action === "merge" && decision.issueNumber) {
     await gh.appendReport(decision.issueNumber, `${feedback}\n\n${reported}`);
     console.log(`[feedback] merged into #${decision.issueNumber} case=${quality?.caseId ?? "none"}`);
@@ -51,6 +53,8 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
     triageAgentId: decision.agentId,
     triageRunId: decision.runId,
     intakeDelivery,
+    intakeAt,
+    triageAt,
   });
 }
 

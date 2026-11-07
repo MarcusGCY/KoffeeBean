@@ -32,7 +32,7 @@ export async function GET(req: Request) {
   }
 
   await gh.setLabels(issue, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
-  const quality = parseCase(current.body);
+  const quality = parseCase(current.body, issue);
   await recordQualityEvent(issue, buildEvent({
     actionId: `approval:${issue}`,
     ...caseFields(quality),

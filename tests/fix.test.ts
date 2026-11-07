@@ -8,6 +8,7 @@ const setLabels = vi.hoisted(() => vi.fn());
 const comment = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const listFixingIssueNumbers = vi.hoisted(() => vi.fn());
+const getPullRequest = vi.hoisted(() => vi.fn());
 const notifyFixCompleted = vi.hoisted(() => vi.fn());
 const notifyFixStarted = vi.hoisted(() => vi.fn());
 
@@ -21,6 +22,7 @@ vi.mock("@/lib/github", () => ({
   comment,
   listComments,
   listFixingIssueNumbers,
+  getPullRequest,
   FEEDBACK_LABEL: "user-feedback",
   LABEL_APPROVED: "approved",
   LABEL_FIXING: "cursor-fixing",
@@ -66,6 +68,7 @@ beforeEach(() => {
   comment.mockReset();
   listComments.mockReset();
   listFixingIssueNumbers.mockReset();
+  getPullRequest.mockReset();
   notifyFixCompleted.mockReset();
   notifyFixStarted.mockReset();
   labels = ["user-feedback"];
@@ -86,6 +89,7 @@ beforeEach(() => {
   });
   listComments.mockImplementation(async () => comments.map((c) => ({ ...c })));
   listFixingIssueNumbers.mockResolvedValue([]);
+  getPullRequest.mockResolvedValue({ headSha: "e".repeat(40) });
   listRuns.mockResolvedValue({ items: [] });
   notifyFixCompleted.mockResolvedValue("delivered");
   notifyFixStarted.mockResolvedValue("delivered");

@@ -218,7 +218,7 @@ async function publishFixResult(
     : undefined;
   await gh.comment(issue.number, fixResultComment(summary, meta));
   await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
-  const quality = parseCase(current.body);
+  const quality = parseCase(current.body, issue.number);
   const run = comments.map((comment) => parseFixRun(comment.body)).find((parsed): parsed is FixRunRef => Boolean(parsed));
   const delivery = asDelivery(await notifyFixCompleted({
     number: issue.number,
@@ -230,6 +230,7 @@ async function publishFixResult(
     quality,
     agentId: run?.agentId,
     runId: run?.runId,
+    headSha: await pullHead(meta?.prNumber),
   }));
   const at = new Date().toISOString();
   const fields = caseFields(quality);
@@ -271,9 +272,20 @@ async function publishFixResult(
   return { status: result.status, prUrl: pr, skipped: false };
 }
 
+async function pullHead(prNumber: number | undefined): Promise<string | undefined> {
+  if (!prNumber || typeof gh.getPullRequest !== "function") return undefined;
+  try {
+    const pull = await gh.getPullRequest(prNumber);
+    return pull?.headSha;
+  } catch (error) {
+    console.error(`[quality] head_read_failed pr=${prNumber} error=github_read_failed name=${error instanceof Error ? error.name : "Error"}`);
+    return undefined;
+  }
+}
+
 async function recordLaunch(issue: IssueRef, ref: FixRunRef): Promise<void> {
   const current = await gh.getIssue(issue.number);
-  const quality = parseCase(current.body);
+  const quality = parseCase(current.body, issue.number);
   const fields = caseFields(quality);
   const at = new Date().toISOString();
   await recordQualityEvent(issue.number, buildEvent({

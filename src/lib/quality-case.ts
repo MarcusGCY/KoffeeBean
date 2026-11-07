@@ -57,10 +57,23 @@ export type QualityEvent = {
   nextOwner: string;
   blocker: string | null;
   externalAck: "none" | "delivered" | "acknowledged";
+  head: string | null;
+  decision: "adopt" | "go" | "no-go" | null;
+  verifierRef: string | null;
+  atKind: "source" | "written" | "unknown";
+};
+
+export type AckBinding = {
+  issue: number;
+  stage: AckStage;
+  caseId: string;
+  runId: string;
+  pr: number;
+  head: string;
 };
 
 const CASE_ID = /^kb-[0-9a-f]{16}$/;
-const ACTION_ID = /^[a-z0-9:_-]{1,80}$/;
+const ACTION_ID = /^[a-z0-9:_-]{1,220}$/;
 const STAGE = /^[a-z0-9_]{1,40}$/;
 const CATEGORY = /^[A-Za-z][A-Za-z0-9_./-]{0,63}$/;
 
@@ -147,8 +160,8 @@ export function fixStartedMessage(input: {
     `Issue #${input.number}: ${oneLine(input.title)}`,
     `The app launched the only fix. Agent ${tokenId(input.agentId)}, run ${tokenId(input.runId)}.`,
     "Do not launch another agent and do not ask Triage or Engineering to start a second fix.",
-    "Opening the adoption link records acknowledgement only. It does not launch work.",
-    "Next owner: engineering. Blocker: adoption not acknowledged.",
+    "Keep tracking this case after approval. The Quality room routes it; Engineering adoption is not a launch.",
+    "Opening the adoption URL records nothing. An admin POST records adoption only. Adoption is not a verification GO.",
   ].join("\n");
 }
 
@@ -158,6 +171,7 @@ export function fixCompletedMessage(input: {
   status: string;
   prUrl?: string;
   mergeUrl?: string;
+  headSha?: string;
   severity?: string | null;
   category?: string | null;
   reason?: string | null;
@@ -168,9 +182,12 @@ export function fixCompletedMessage(input: {
     input.prUrl ? `Pull request: ${input.prUrl}` : "No pull request was opened.",
     `Run status: ${oneLine(input.status)}.`,
     "The pull request's own test report is not verification.",
-    "Next owner: verification. Blocker: independent verification not acknowledged.",
-    "The verification link records an acknowledgement only. It does not merge and does not launch an agent.",
-    "The adoption link, if still open, also only records acknowledgement.",
+    "Quality room: route this case to verification. Do not stop tracking at approval.",
+    "Next owner: verification. A verification GO is an admin POST with evidence for this pull request and this head.",
+    input.headSha
+      ? "Opening the verification URL records nothing. ACK is not GO. NO-GO is not a pass. A later push invalidates a GO."
+      : "No verification link was included because the head sha was not read. Opening a URL would not be a GO.",
+    "The verification POST does not merge and does not launch an agent.",
     input.mergeUrl ? "Merge remains the separate signed merge link." : "No signed merge link is available.",
   ].join("\n");
 }
@@ -204,15 +221,15 @@ export function intakeMessage(input: {
   ].filter((line) => line !== "").join("\n");
 }
 
-export function caseMarker(quality: QualityCase): string {
-  const payload = JSON.stringify(quality);
+export function caseMarker(quality: QualityCase, issue: number): string {
+  const payload = JSON.stringify({ ...quality, issue });
   return `<!-- ${CASE_MARKER} ${payload} ${sign(payload)} -->`;
 }
 
-export function appendCaseMarker(body: string, quality: QualityCase | undefined): string {
-  if (!quality) return body;
+export function appendCaseMarker(body: string, quality: QualityCase | undefined, issue: number): string {
+  if (!quality || !Number.isInteger(issue) || issue <= 0) return body;
   try {
-    const marker = caseMarker(quality);
+    const marker = caseMarker(quality, issue);
     if (body.includes(marker)) return body;
     return `${body}\n\n${marker}`;
   } catch {
@@ -220,15 +237,21 @@ export function appendCaseMarker(body: string, quality: QualityCase | undefined)
   }
 }
 
-export function parseCase(body: string): QualityCase | undefined {
+export function parseCase(body: string, issue: number): QualityCase | undefined {
   const re = /<!--\s*beanbox-case\s+(\{[\s\S]*?\})\s+([0-9a-f]{64})\s*-->/gi;
   for (const match of body.matchAll(re)) {
     const payload = match[1];
     const sig = match[2];
     if (!payload || !sig || !hmacEquals(sig, payload)) continue;
     try {
-      const parsed = JSON.parse(payload) as { caseId?: unknown; severity?: unknown; reason?: unknown; category?: unknown };
-      if (typeof parsed.caseId !== "string") continue;
+      const parsed = JSON.parse(payload) as {
+        caseId?: unknown;
+        severity?: unknown;
+        reason?: unknown;
+        category?: unknown;
+        issue?: unknown;
+      };
+      if (typeof parsed.caseId !== "string" || parsed.issue !== issue) continue;
       const quality = qualityCase({
         caseId: parsed.caseId,
         severity: parsed.severity,
@@ -266,9 +289,13 @@ export function parseAudit(body: string): QualityEvent | undefined {
   return undefined;
 }
 
-export function buildEvent(input: Omit<QualityEvent, "v" | "evidence" | "error"> & {
+export function buildEvent(input: Omit<QualityEvent, "v" | "evidence" | "error" | "head" | "decision" | "verifierRef" | "atKind"> & {
   evidence?: string | null;
   error?: string | null;
+  head?: string | null;
+  decision?: QualityEvent["decision"];
+  verifierRef?: string | null;
+  atKind?: QualityEvent["atKind"];
 }): QualityEvent {
   return {
     v: 1,
@@ -292,6 +319,10 @@ export function buildEvent(input: Omit<QualityEvent, "v" | "evidence" | "error">
     nextOwner: input.nextOwner,
     blocker: input.blocker ? clip(redactAudit(input.blocker)) : null,
     externalAck: input.externalAck,
+    head: cleanHead(input.head),
+    decision: cleanDecision(input.decision),
+    verifierRef: cleanVerifierRef(input.verifierRef),
+    atKind: input.atKind === "source" || input.atKind === "unknown" ? input.atKind : "written",
   };
 }
 
@@ -304,29 +335,54 @@ export function redactAudit(value: string): string {
   return scrubSecrets(scrubbed);
 }
 
-export function qualityAckToken(issue: number, stage: AckStage, now = Date.now()): string {
+export function qualityAckToken(binding: AckBinding, now = Date.now()): string {
   const exp = now + QUALITY_ACK_TTL_MS;
-  return `${exp}.${sign(`ack:${issue}:${stage}:${exp}`)}`;
+  const bound = normalizeBinding(binding);
+  if (!bound) throw new Error("Invalid acknowledgement binding");
+  return `${exp}.${sign(ackPayload(bound, exp))}`;
 }
 
-export function verifyQualityAck(
-  issue: number,
-  stage: string,
-  token: string,
-  now = Date.now(),
-): "ok" | "expired" | "invalid" {
-  if (!isAckStage(stage)) return "invalid";
+export function verifyQualityAck(binding: AckBinding, token: string, now = Date.now()): "ok" | "expired" | "invalid" {
+  if (!isAckStage(binding.stage) || !Number.isInteger(binding.issue) || binding.issue <= 0) return "invalid";
   const grant = readGrant(token);
   if (!grant) return "invalid";
-  if (!safeEqual(grant.sig, sign(`ack:${issue}:${stage}:${grant.exp}`))) return "invalid";
+  const bound = normalizeBinding(binding);
+  if (!bound) return "invalid";
+  if (!safeEqual(grant.sig, sign(ackPayload(bound, grant.exp)))) return "invalid";
   if (grant.exp > now + QUALITY_ACK_TTL_MS + CLOCK_SKEW_MS) return "invalid";
   if (grant.exp <= now) return "expired";
   return "ok";
 }
 
-export function qualityAckLink(issue: number, stage: AckStage, now = Date.now()): string {
-  const token = qualityAckToken(issue, stage, now);
-  return `${appOrigin()}/api/quality/ack?issue=${issue}&stage=${stage}&token=${token}`;
+export function qualityAckLink(binding: AckBinding, now = Date.now()): string {
+  const bound = normalizeBinding(binding);
+  if (!bound) throw new Error("Invalid acknowledgement binding");
+  const token = qualityAckToken(bound, now);
+  const query = new URLSearchParams({
+    issue: String(bound.issue),
+    stage: bound.stage,
+    case: bound.caseId,
+    run: bound.runId,
+    pr: String(bound.pr),
+    head: bound.head,
+    token,
+  });
+  return `${appOrigin()}/api/quality/ack?${query}`;
+}
+
+export function readAckQuery(url: URL): AckBinding | undefined {
+  const issue = Number(url.searchParams.get("issue"));
+  const stage = url.searchParams.get("stage") ?? "";
+  const caseId = url.searchParams.get("case") ?? "-";
+  const runId = url.searchParams.get("run") ?? "-";
+  const pr = Number(url.searchParams.get("pr") ?? "0");
+  const head = url.searchParams.get("head") ?? "-";
+  if (!Number.isInteger(issue) || issue <= 0 || !isAckStage(stage)) return undefined;
+  return normalizeBinding({ issue, stage, caseId, runId, pr, head });
+}
+
+export function verifierRef(userId: string): string {
+  return createHmac("sha256", env("APPROVAL_SECRET")).update(`verifier:${userId}`).digest("hex").slice(0, 16);
 }
 
 export function isAckStage(value: string): value is AckStage {
@@ -411,10 +467,42 @@ function readEvent(payload: string): QualityEvent | undefined {
       nextOwner: clip(redactAudit(parsed.nextOwner)),
       blocker: typeof parsed.blocker === "string" ? parsed.blocker : null,
       externalAck,
+      head: cleanHead(parsed.head),
+      decision: cleanDecision(parsed.decision),
+      verifierRef: cleanVerifierRef(parsed.verifierRef),
+      atKind: parsed.atKind === "source" || parsed.atKind === "written" || parsed.atKind === "unknown" ? parsed.atKind : "written",
     });
   } catch {
     return undefined;
   }
+}
+
+function cleanHead(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const head = value.trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(head) ? head : null;
+}
+
+function cleanDecision(value: unknown): QualityEvent["decision"] {
+  return value === "adopt" || value === "go" || value === "no-go" ? value : null;
+}
+
+function cleanVerifierRef(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{16}$/.test(value) ? value : null;
+}
+
+function normalizeBinding(binding: AckBinding): AckBinding | undefined {
+  if (!Number.isInteger(binding.issue) || binding.issue <= 0 || !isAckStage(binding.stage)) return undefined;
+  if (!/^(?:-|[A-Za-z0-9_-]{1,80})$/.test(binding.caseId)) return undefined;
+  if (!/^(?:-|[A-Za-z0-9_-]{1,80})$/.test(binding.runId)) return undefined;
+  if (!Number.isInteger(binding.pr) || binding.pr < 0) return undefined;
+  const head = binding.head.trim().toLowerCase();
+  if (!/^(?:-|[0-9a-f]{40})$/.test(head)) return undefined;
+  return { ...binding, caseId: binding.caseId, runId: binding.runId, head };
+}
+
+function ackPayload(binding: AckBinding, exp: number): string {
+  return `ack:${binding.issue}:${binding.stage}:${binding.caseId}:${binding.runId}:${binding.pr}:${binding.head}:${exp}`;
 }
 
 function positiveInt(value: unknown): number | null {

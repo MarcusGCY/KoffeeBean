@@ -3,17 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getIssue = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const comment = vi.hoisted(() => vi.fn());
+const getPullRequest = vi.hoisted(() => vi.fn());
 const readAdmin = vi.hoisted(() => vi.fn());
 const fixIssue = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/github", async () => {
   const actual = await vi.importActual<typeof import("@/lib/github")>("@/lib/github");
-  return { ...actual, getIssue, listComments, comment };
+  return { ...actual, getIssue, listComments, comment, getPullRequest };
 });
 vi.mock("@/lib/demo-session", () => ({ readAdmin }));
 vi.mock("@/lib/fix", () => ({ fixIssue }));
 
-import { GET as ack } from "@/app/api/quality/ack/route";
+import { GET as ackGet, POST as ackPost } from "@/app/api/quality/ack/route";
 import { GET as auditRoute } from "@/app/api/quality/audit/route";
 import { fixResultComment, fixRunComment } from "@/lib/fix-marker";
 import { assembleAudit } from "@/lib/quality-audit";
@@ -22,7 +23,8 @@ import {
   fixStartedMessage,
   parseAudit,
   parseCase,
-  qualityAckToken,
+  qualityAckLink,
+  readAckQuery,
   qualityCase,
   redactAudit,
   reviewRequestMessage,
@@ -30,6 +32,7 @@ import {
   buildEvent,
   caseMarker,
 } from "@/lib/quality-case";
+import { demoCsrfToken } from "@/lib/demo-auth";
 import { reproMarker } from "@/lib/reproduce";
 
 const SECRET = "quality-audit-secret";
@@ -41,6 +44,7 @@ beforeEach(() => {
   getIssue.mockReset();
   listComments.mockReset();
   comment.mockReset();
+  getPullRequest.mockReset();
   readAdmin.mockReset();
   fixIssue.mockReset();
   process.env.APPROVAL_SECRET = SECRET;
@@ -79,7 +83,7 @@ describe("quality messages", () => {
     }
     expect(review).toContain("Do not ask Triage or Engineering to start work.");
     expect(started).toContain("Do not launch another agent");
-    expect(started).toContain("does not launch work");
+    expect(started).toContain("Adoption is not a verification GO");
     expect(completed).toContain("not verification");
     expect(completed).toContain("does not merge and does not launch");
   });
@@ -160,9 +164,10 @@ describe("assembleAudit", () => {
       caseId: quality.caseId,
       correlationId: quality.correlationId,
       stage: "engineering_ack",
-      status: "acknowledged",
+      status: "adopted",
       at: "2026-11-07T02:30:00.000Z",
-      actor: "signed-link",
+      actor: "admin",
+      decision: "adopt",
       issue: 90,
       pr: null,
       agentId: null,
@@ -179,25 +184,98 @@ describe("assembleAudit", () => {
     const view = assembleAudit({
       number: 90,
       title: "House Espresso",
-      body: caseMarker(quality),
+      body: caseMarker(quality, 90),
       state: "open",
       labels: ["user-feedback", "approved"],
       comments: [{ body: sealEvent(event) }],
     });
     expect(view.caseId).toBe(quality.caseId);
     expect(view.tracking.fixLaunched).toBe(false);
-    expect(view.tracking.engineeringAdoption).toBe("acknowledged");
-    expect(view.next).toMatchObject({
-      stage: "fix_launch",
-      blocker: "fix not launched; acknowledgement does not launch an agent",
-    });
-    expect(parseCase(caseMarker(quality))?.severity).toBe("S2");
+    expect(view.tracking.engineeringAdoption).toBe("adopted");
+    expect(view.tracking.verification).toBe("not_applicable");
+    expect(view.next).toMatchObject({ stage: "fix_launch" });
+    expect(parseCase(caseMarker(quality, 90), 90)?.severity).toBe("S2");
+    expect(parseCase(caseMarker(quality, 90), 91)).toBeUndefined();
     expect(parseAudit("<!-- beanbox-audit {\"actionId\":\"engineering_ack:90\"} aaaa -->")).toBeUndefined();
+  });
+
+  it("does not treat a copied verification acknowledgement or a stale GO as a pass", () => {
+    const head = "a".repeat(40);
+    const other = "b".repeat(40);
+    const copied = buildEvent({
+      actionId: "decision:10:-:verification:-:91:" + head + ":go:1",
+      caseId: null,
+      correlationId: null,
+      stage: "verification",
+      status: "go",
+      at: "2026-11-07T02:40:00.000Z",
+      actor: "admin",
+      issue: 10,
+      pr: 91,
+      agentId: null,
+      runId: RUN,
+      severity: "S2",
+      reason: "bug",
+      category: "images",
+      evidence: "checked the diff",
+      attempt: 1,
+      nextOwner: "human",
+      blocker: null,
+      externalAck: "none",
+      head,
+      decision: "go",
+      atKind: "source",
+    });
+    const stale = buildEvent({
+      ...copied,
+      actionId: "decision:90:-:verification:" + RUN + ":91:" + other + ":go:1",
+      issue: 90,
+      head: other,
+    });
+    const emptyGo = buildEvent({
+      ...stale,
+      actionId: "decision:90:-:verification:" + RUN + ":91:" + head + ":go:1",
+      head,
+      evidence: "   ",
+    });
+    const noGo = buildEvent({
+      ...emptyGo,
+      actionId: "decision:90:-:verification:" + RUN + ":91:" + head + ":no-go:1",
+      decision: "no-go",
+      status: "no_go",
+      evidence: null,
+      at: "2026-11-07T02:41:00.000Z",
+    });
+    const view = assembleAudit({
+      number: 90,
+      title: "House Espresso",
+      body: "",
+      state: "open",
+      labels: ["user-feedback", "approved"],
+      currentHead: head,
+      currentPr: 91,
+      comments: [
+        { body: sealEvent(copied) },
+        { body: sealEvent(stale) },
+        { body: sealEvent(emptyGo) },
+        { body: sealEvent(noGo) },
+        {
+          body: fixResultComment("Cursor opened a fix: https://github.com/acme/beanbox/pull/91", {
+            prNumber: 91,
+            prUrl: "https://github.com/acme/beanbox/pull/91",
+          }),
+        },
+      ],
+    });
+    expect(view.tracking.verification).toBe("no_go");
+    expect(view.next?.stage).toBe("verification");
+    expect(view.unresolved.find((item) => item.stage === "merge")).toBeUndefined();
   });
 });
 
 describe("acknowledgement route", () => {
   const comments: { id: number; body: string }[] = [];
+  const head = "c".repeat(40);
 
   beforeEach(() => {
     comments.length = 0;
@@ -213,31 +291,96 @@ describe("acknowledgement route", () => {
     comment.mockImplementation(async (_issue: number, body: string) => {
       comments.push({ id: comments.length + 1, body });
     });
+    getPullRequest.mockResolvedValue({ number: 91, headSha: head, headRef: "cursor/fix", state: "open", merged: false });
   });
 
-  it("records engineering adoption once and does not launch or merge", async () => {
-    const token = qualityAckToken(90, "engineering");
-    const first = await ack(new Request(`http://localhost:3000/api/quality/ack?issue=90&stage=engineering&token=${token}`));
-    const second = await ack(new Request(`http://localhost:3000/api/quality/ack?issue=90&stage=engineering&token=${token}`));
-    expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({
-      status: "acknowledged",
-      stage: "engineering",
-      launchesAgent: false,
-      merges: false,
+  function link(stage: "engineering" | "verification") {
+    return qualityAckLink({
+      issue: 90,
+      stage,
+      caseId: "-",
+      runId: RUN,
+      pr: stage === "verification" ? 91 : 0,
+      head: stage === "verification" ? head : "-",
     });
-    expect(second.status).toBe(200);
-    expect(await second.json()).toMatchObject({ status: "already-acknowledged", launchesAgent: false, merges: false });
-    expect(comment).toHaveBeenCalledTimes(1);
-    expect(fixIssue).not.toHaveBeenCalled();
-    expect(parseAudit(comments[0].body)?.stage).toBe("engineering_ack");
-  });
+  }
 
-  it("rejects a tampered link", async () => {
-    const res = await ack(new Request("http://localhost:3000/api/quality/ack?issue=90&stage=engineering&token=1.aa"));
-    expect(res.status).toBe(403);
+  it("GET confirms the link and does not record", async () => {
+    const res = await ackGet(new Request(link("verification")));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ mutates: false, recorded: false, countsAsGo: false, head });
     expect(comment).not.toHaveBeenCalled();
     expect(fixIssue).not.toHaveBeenCalled();
+  });
+
+  it("POST without an admin session records nothing", async () => {
+    readAdmin.mockResolvedValue(null);
+    const res = await ackPost(new Request(link("engineering"), {
+      method: "POST",
+      headers: { origin: "http://localhost:3000", "content-type": "application/json" },
+      body: JSON.stringify({ decision: "adopt", evidence: "", csrf: "x" }),
+    }));
+    expect(res.status).toBe(404);
+    expect(comment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a GO without evidence and a GO after the head moves", async () => {
+    readAdmin.mockResolvedValue({ id: "auth0|admin", email: "owner@example.com" });
+    const csrf = demoCsrfToken("auth0|admin");
+    const headers = { origin: "http://localhost:3000", "content-type": "application/json" };
+    const missing = await ackPost(new Request(link("verification"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "go", evidence: "  ", csrf }),
+    }));
+    expect(missing.status).toBe(400);
+    expect(comment).not.toHaveBeenCalled();
+
+    getPullRequest.mockResolvedValue({ number: 91, headSha: "d".repeat(40), headRef: "cursor/fix", state: "open", merged: false });
+    const moved = await ackPost(new Request(link("verification"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "go", evidence: "repro passed on the old head", csrf }),
+    }));
+    expect(moved.status).toBe(409);
+    expect(await moved.json()).toMatchObject({ recorded: false, code: "head_moved" });
+    expect(comment).not.toHaveBeenCalled();
+    expect(fixIssue).not.toHaveBeenCalled();
+  });
+
+  it("records one GO for the bound head and does not launch or merge", async () => {
+    readAdmin.mockResolvedValue({ id: "auth0|admin", email: "owner@example.com" });
+    const csrf = demoCsrfToken("auth0|admin");
+    const headers = { origin: "http://localhost:3000", "content-type": "application/json" };
+    const first = await ackPost(new Request(link("verification"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "go", evidence: "Re-ran the repro on this head.", csrf }),
+    }));
+    const second = await ackPost(new Request(link("verification"), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ decision: "go", evidence: "Re-ran the repro on this head.", csrf }),
+    }));
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      recorded: true,
+      countsAsGo: true,
+      launchesAgent: false,
+      merges: false,
+      decision: "go",
+    });
+    expect(second.status).toBe(200);
+    expect((await second.json()).duplicate).toBe(false);
+    expect(fixIssue).not.toHaveBeenCalled();
+    const decisions = comments.map((item) => parseAudit(item.body)).filter((event) => event?.stage === "verification");
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]?.decision).toBe("go");
+    expect(decisions[0]?.verifierRef).toMatch(/^[0-9a-f]{16}$/);
+    expect(JSON.stringify(comments)).not.toContain("owner@example.com");
+    expect(JSON.stringify(comments)).not.toContain("auth0|admin");
+    const bound = readAckQuery(new URL(link("verification")));
+    expect(bound?.head).toBe(head);
   });
 });
 

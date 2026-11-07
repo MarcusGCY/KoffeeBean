@@ -6,6 +6,7 @@ import {
   fixStartedMessage,
   intakeMessage,
   qualityAckLink,
+  type AckBinding,
   qualityCase,
   reviewRequestMessage,
   severityLine,
@@ -122,6 +123,7 @@ export async function notifyFixCompleted(event: GrokIssue & {
   quality?: QualityCase | null;
   agentId?: string;
   runId?: string;
+  headSha?: string;
 }): Promise<NotifyDelivery> {
   const pull = completedPull(event.number, event.prUrl);
   const handoff = "quality" in event;
@@ -132,7 +134,7 @@ export async function notifyFixCompleted(event: GrokIssue & {
     ...(event.prUrl ? { prUrl: event.prUrl } : {}),
     ...pull,
     summary: event.summary,
-    ...(handoff ? fixCompletedFields(event, pull?.mergeUrl) : {}),
+    ...(handoff ? fixCompletedFields(event, pull?.mergeUrl, pull?.prNumber) : {}),
   });
 }
 
@@ -241,7 +243,7 @@ function caseNotice(quality: QualityCase | null | undefined) {
 function fixStartedFields(issue: GrokIssue & { quality?: QualityCase | null; agentId?: string; runId?: string }) {
   let adoptionUrl: string | undefined;
   try {
-    adoptionUrl = qualityAckLink(issue.number, "engineering");
+    adoptionUrl = qualityAckLink(ackBinding(issue.number, "engineering", issue.quality?.caseId, issue.runId, 0, "-"));
   } catch (error) {
     console.error("[notify] could not sign adoption link", error instanceof Error ? error.name : "Error");
   }
@@ -267,14 +269,17 @@ function fixStartedFields(issue: GrokIssue & { quality?: QualityCase | null; age
 }
 
 function fixCompletedFields(
-  event: GrokIssue & { status: string; prUrl?: string; quality?: QualityCase | null; agentId?: string; runId?: string },
+  event: GrokIssue & { status: string; prUrl?: string; quality?: QualityCase | null; agentId?: string; runId?: string; headSha?: string },
   mergeUrl: string | undefined,
+  prNumber: number | undefined,
 ) {
   let verificationUrl: string | undefined;
   let adoptionUrl: string | undefined;
   try {
-    verificationUrl = qualityAckLink(event.number, "verification");
-    adoptionUrl = qualityAckLink(event.number, "engineering");
+    adoptionUrl = qualityAckLink(ackBinding(event.number, "engineering", event.quality?.caseId, event.runId, prNumber ?? 0, event.headSha ?? "-"));
+    if (prNumber && event.headSha && event.runId) {
+      verificationUrl = qualityAckLink(ackBinding(event.number, "verification", event.quality?.caseId, event.runId, prNumber, event.headSha));
+    }
   } catch (error) {
     console.error("[notify] could not sign verification link", error instanceof Error ? error.name : "Error");
   }
@@ -290,6 +295,7 @@ function fixCompletedFields(
       status: event.status,
       prUrl: event.prUrl,
       mergeUrl,
+      headSha: event.headSha,
       severity: event.quality?.severity,
       category: event.quality?.category,
       reason: event.quality?.reason,
@@ -298,6 +304,24 @@ function fixCompletedFields(
     blocker: "independent verification not acknowledged",
     ...(verificationUrl ? { verificationUrl } : {}),
     ...(adoptionUrl ? { adoptionUrl } : {}),
+  };
+}
+
+function ackBinding(
+  issue: number,
+  stage: AckBinding["stage"],
+  caseId: string | null | undefined,
+  runId: string | null | undefined,
+  pr: number,
+  head: string,
+): AckBinding {
+  return {
+    issue,
+    stage,
+    caseId: caseId && caseId !== "-" ? caseId : "-",
+    runId: runId && runId !== "-" ? runId : "-",
+    pr,
+    head: head || "-",
   };
 }
 

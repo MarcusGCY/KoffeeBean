@@ -8,6 +8,7 @@ import {
   redactAudit,
   sealEvent,
   severityLine,
+  type AckBinding,
   type NotifyDelivery,
   type QualityCase,
   type QualityEvent,
@@ -34,6 +35,9 @@ export type StageView = {
   severity: string | null;
   reason: string | null;
   category: string | null;
+  head: string | null;
+  decision: "adopt" | "go" | "no-go" | null;
+  atKind: "source" | "written" | "unknown";
 };
 
 export type QualityAudit = {
@@ -53,8 +57,8 @@ export type QualityAudit = {
   tracking: {
     appLauncher: "single";
     fixLaunched: boolean;
-    engineeringAdoption: "acknowledged" | "unacknowledged" | "not_applicable";
-    verification: "acknowledged" | "acknowledged_before_pull_request" | "unacknowledged" | "not_applicable";
+    engineeringAdoption: "adopted" | "unacknowledged" | "not_applicable";
+    verification: "go" | "no_go" | "stale" | "unacknowledged" | "not_applicable";
     notifyFixStarted: "not_recorded" | NotifyDelivery;
     notifyFixCompleted: "not_recorded" | NotifyDelivery;
     notifyFixMerged: "not_recorded" | NotifyDelivery;
@@ -71,12 +75,16 @@ export type QualityAudit = {
 };
 
 const LIMITS = [
-  "The app is the only launcher. An adoption or verification link does not start an agent and does not merge.",
+  "The app is the only launcher. Engineering adoption is not a launch. Opening a quality URL records nothing.",
+  "A verification GO is an admin POST with evidence for one pull request head. ACK is not GO. NO-GO and missing evidence are not a pass. A later push invalidates a GO.",
   "Webhook HTTP success is delivery to the routine URL. It is not a room acknowledgement.",
-  "This app does not observe the Grok room, Engineering chat, or Triage chat.",
-  "A pull request body's own test report is not verification.",
-  "Vercel deploy after merge is not observed by this app.",
-  "Issues that predate audit comments are reconstructed from GitHub markers. Missing webhook results stay not recorded.",
+  "This app does not observe the Grok room, Engineering chat, or Triage chat. The Quality room has to route verification.",
+  "Audit comments sit on the GitHub issue. On a public repository they are public, not a confidential store.",
+  "Duplicate suppression reads comments and then writes. Concurrent POSTs can both write. There is no atomic ledger and no background outbox.",
+  "A failed audit write is not retried later. The response says nothing was saved. A missing comment is not proof the stage failed, and this trail is not an all-points log.",
+  "atKind source is a time captured for that step. atKind written is when the comment was saved. atKind unknown means no original time was stored. Pre-issue holds and triage failures are not durable.",
+  "A pull request body's own test report is not verification. Vercel deploy after merge is not observed by this app.",
+  "GET /api/review still approves and starts the one fix. GET /api/quality/ack does not.",
 ];
 
 const EXTERNAL = {
@@ -87,18 +95,44 @@ const EXTERNAL = {
   vercelDeploy: "not observed by this app",
 };
 
-export async function recordQualityEvent(
-  issue: number,
-  event: QualityEvent,
-): Promise<"recorded" | "duplicate" | "failed"> {
+const RECOVERY = "Retry the write. Nothing was saved. This app has no background outbox.";
+
+export type AuditWriteResult = {
+  recorded: boolean;
+  duplicate: boolean;
+  actionId: string;
+  issue: number;
+  caseId: string | null;
+  stage: string;
+  dedup: "check_then_write";
+  error?: "github_write_failed" | "issue_mismatch";
+  recovery?: string;
+};
+
+export async function recordQualityEvent(issue: number, event: QualityEvent): Promise<AuditWriteResult> {
+  const base = {
+    actionId: event.actionId,
+    issue,
+    caseId: event.caseId,
+    stage: event.stage,
+    dedup: "check_then_write" as const,
+  };
+  if (event.issue !== issue) {
+    console.error(`[quality] audit_write_rejected issue=${issue} eventIssue=${event.issue ?? "none"} case=${event.caseId ?? "none"} action=${event.actionId} stage=${event.stage} error=issue_mismatch`);
+    return { ...base, recorded: false, duplicate: false, error: "issue_mismatch", recovery: RECOVERY };
+  }
   try {
     const comments = await gh.listComments(issue);
-    if (comments.some((comment) => parseAudit(comment.body)?.actionId === event.actionId)) return "duplicate";
+    const existing = comments
+      .map((comment) => parseAudit(comment.body))
+      .find((found) => found?.actionId === event.actionId && found.issue === issue);
+    if (existing) return { ...base, recorded: true, duplicate: true };
     await gh.comment(issue, sealEvent(event));
-    return "recorded";
+    return { ...base, recorded: true, duplicate: false };
   } catch (error) {
-    console.error("[quality] audit write failed", error instanceof Error ? error.name : "Error");
-    return "failed";
+    const name = error instanceof Error ? error.name : "Error";
+    console.error(`[quality] audit_write_failed issue=${issue} case=${event.caseId ?? "none"} action=${event.actionId} stage=${event.stage} error=github_write_failed name=${name}`);
+    return { ...base, recorded: false, duplicate: false, error: "github_write_failed", recovery: RECOVERY };
   }
 }
 
@@ -112,11 +146,15 @@ export async function recordOpenedCase(input: {
   sha?: string;
   checkUrl?: string;
   intakeDelivery: NotifyDelivery;
+  intakeAt?: string;
+  triageAt?: string;
   repro: "pending" | "reproduced" | "not_reproduced" | "error";
   reproError?: string;
   reviewDelivery?: NotifyDelivery;
 }): Promise<void> {
-  const at = new Date().toISOString();
+  const writtenAt = new Date().toISOString();
+  const intakeAt = input.intakeAt ?? writtenAt;
+  const triageAt = input.triageAt ?? writtenAt;
   const base = {
     caseId: input.quality.caseId,
     correlationId: input.quality.correlationId,
@@ -131,7 +169,8 @@ export async function recordOpenedCase(input: {
     actionId: `intake:${input.quality.caseId}`,
     stage: "intake",
     status: "recorded",
-    at,
+    at: intakeAt,
+    atKind: input.intakeAt ? "source" : "written",
     actor: "app",
     pr: null,
     agentId: null,
@@ -143,10 +182,11 @@ export async function recordOpenedCase(input: {
   }));
   await recordQualityEvent(input.issue, buildEvent({
     ...base,
-    actionId: `triage:${input.quality.caseId}`,
+    actionId: `triage:${input.quality.caseId}:${input.triageRunId ?? "none"}`,
     stage: "triage",
-    status: input.triageAgentId ? "recorded" : "recorded",
-    at,
+    status: "recorded",
+    at: triageAt,
+    atKind: input.triageAt ? "source" : "written",
     actor: input.triageAgentId ? "cursor_agent" : "app",
     pr: null,
     agentId: input.triageAgentId ?? null,
@@ -160,10 +200,11 @@ export async function recordOpenedCase(input: {
   }));
   await recordQualityEvent(input.issue, buildEvent({
     ...base,
-    actionId: `repro:${input.quality.caseId}:${input.repro}`,
+    actionId: `repro:${input.quality.caseId}:${input.sha ?? "none"}:${input.repro}`,
     stage: "repro",
     status: input.repro,
-    at,
+    at: writtenAt,
+    atKind: "written",
     actor: input.checkUrl ? "github_actions" : "app",
     pr: null,
     agentId: null,
@@ -186,7 +227,8 @@ export async function recordOpenedCase(input: {
       actionId: `review_delivery:${input.issue}`,
       stage: "review_delivery",
       status: input.reviewDelivery === "failed" ? "undelivered" : input.reviewDelivery,
-      at,
+      at: writtenAt,
+      atKind: "written",
       actor: "app",
       pr: null,
       agentId: null,
@@ -223,10 +265,27 @@ export async function loadQualityAudit(issue: number): Promise<QualityAudit> {
     throw error;
   }
   const comments = await gh.listComments(issue);
+  let currentPr: number | null = null;
+  for (const item of comments) {
+    const meta = parseFixResult(item.body);
+    if (meta?.prNumber) currentPr = meta.prNumber;
+  }
+  let currentHead: string | null = null;
+  if (currentPr) {
+    try {
+      const pull = await gh.getPullRequest(currentPr);
+      currentHead = pull?.headSha ?? null;
+    } catch (error) {
+      console.error(`[quality] head_read_failed issue=${issue} pr=${currentPr} case=${parseCase(current.body, issue)?.caseId ?? "none"} error=github_read_failed name=${error instanceof Error ? error.name : "Error"}`);
+      currentHead = null;
+    }
+  }
   return assembleAudit({
     number: current.number,
     title: current.title,
     body: current.body,
+    currentHead,
+    currentPr,
     state: current.state,
     labels: current.labels,
     comments: comments.map((comment) => ({ body: comment.body })),
@@ -240,17 +299,25 @@ export function assembleAudit(input: {
   state: string;
   labels: string[];
   comments: { body: string }[];
+  currentHead?: string | null;
+  currentPr?: number | null;
 }): QualityAudit {
-  const quality = parseCase(input.body);
+  const quality = parseCase(input.body, input.number);
   const recorded = input.comments
     .map((comment) => parseAudit(comment.body))
-    .filter((event): event is QualityEvent => Boolean(event))
+    .filter((event): event is QualityEvent => Boolean(event && event.issue === input.number))
     .sort((a, b) => a.at.localeCompare(b.at));
   const stages = mergeStages(input, recorded);
   const hasLaunch = stages.some((stage) => stage.stage === "fix_launch");
-  const engAck = stages.some((stage) => stage.stage === "engineering_ack" && stage.status === "acknowledged");
-  const pr = latestPr(stages);
-  const verAck = stages.some((stage) => stage.stage === "verification" && stage.status === "acknowledged");
+  const runId = stages.find((stage) => stage.stage === "fix_launch" && stage.runId)?.runId ?? null;
+  const engAck = recorded.some((event) =>
+    event.stage === "engineering_ack"
+    && event.decision === "adopt"
+    && (runId == null || event.runId === runId));
+  const pr = input.currentPr ?? latestPr(stages);
+  const head = input.currentHead ?? null;
+  const verdict = verificationVerdict(recorded, pr, head);
+  const verGo = verdict === "go";
   const merged = input.labels.includes("merged") || stages.some((stage) => stage.stage === "merge");
   const unresolved: QualityAudit["unresolved"] = [];
   if (!hasLaunch && engAck) {
@@ -264,17 +331,21 @@ export function assembleAudit(input: {
     unresolved.push({
       stage: "engineering_ack",
       owner: "engineering",
-      blocker: "adoption not acknowledged; do not launch another fix",
+      blocker: "adoption is not recorded for this run; adoption is not a launch and not a GO",
     });
   }
-  if (pr && !verAck) {
+  if (pr && !verGo) {
     unresolved.push({
       stage: "verification",
       owner: "verification",
-      blocker: "independent verification not acknowledged; pull request test report is not verification",
+      blocker: verdict === "no_go"
+        ? "verification NO-GO for this head; NO-GO is not a pass"
+        : verdict === "stale"
+          ? "a GO for a previous head does not cover the current head"
+          : "verification GO is not recorded; opening a link is not a GO",
     });
   }
-  if (pr && verAck && !merged && input.state === "open") {
+  if (pr && verGo && !merged && input.state === "open") {
     unresolved.push({
       stage: "merge",
       owner: "human",
@@ -323,10 +394,14 @@ export function assembleAudit(input: {
     tracking: {
       appLauncher: "single",
       fixLaunched: hasLaunch,
-      engineeringAdoption: engAck ? "acknowledged" : hasLaunch ? "unacknowledged" : "not_applicable",
-      verification: verAck
-        ? (pr ? "acknowledged" : "acknowledged_before_pull_request")
-        : pr ? "unacknowledged" : "not_applicable",
+      engineeringAdoption: engAck ? "adopted" : hasLaunch ? "unacknowledged" : "not_applicable",
+      verification: verdict === "go"
+        ? "go"
+        : verdict === "no_go"
+          ? "no_go"
+          : verdict === "stale"
+            ? "stale"
+            : pr ? "unacknowledged" : "not_applicable",
       notifyFixStarted: notifyState(recorded, "notify_fix_started"),
       notifyFixCompleted: notifyState(recorded, "notify_fix_completed"),
       notifyFixMerged: notifyState(recorded, "notify_fix_merged"),
@@ -335,6 +410,24 @@ export function assembleAudit(input: {
     external: EXTERNAL,
     limits: LIMITS,
   };
+}
+
+function verificationVerdict(
+  events: QualityEvent[],
+  pr: number | null,
+  head: string | null,
+): "go" | "no_go" | "stale" | "none" {
+  const decisions = events.filter((event) => event.stage === "verification" && event.decision);
+  const usable = (event: QualityEvent) => event.decision !== "go" || Boolean(event.evidence?.trim());
+  if (!pr || !head) return decisions.some((event) => event.decision === "go" && usable(event)) ? "stale" : "none";
+  const current = decisions
+    .filter((event) => event.pr === pr && event.head === head && usable(event))
+    .sort((a, b) => a.at.localeCompare(b.at));
+  const latest = current.at(-1);
+  if (!latest) return decisions.some((event) => event.decision === "go" && usable(event)) ? "stale" : "none";
+  if (latest.decision === "no-go") return "no_go";
+  if (latest.decision === "go") return "go";
+  return "none";
 }
 
 function chooseNext(
@@ -402,6 +495,7 @@ function reconstruct(input: {
       stage: "repro",
       status: "reproduced",
       at: null,
+      atKind: "unknown",
       actor: check ? "github_actions" : "app",
       issue: input.number,
       evidence: check ? `check ${check} sha ${repro.sha}` : `sha ${repro.sha} test ${repro.testPath}`,
@@ -415,6 +509,7 @@ function reconstruct(input: {
       stage: "approval",
       status: "recorded",
       at: null,
+      atKind: "unknown",
       actor: "app",
       issue: input.number,
       evidence: "label approved",
@@ -430,6 +525,7 @@ function reconstruct(input: {
       stage: "fix_launch",
       status: "launched",
       at: Number.isFinite(run.startedAt) ? new Date(run.startedAt).toISOString() : null,
+      atKind: Number.isFinite(run.startedAt) ? "source" : "unknown",
       actor: "cursor_agent",
       issue: input.number,
       agentId: run.agentId,
@@ -448,6 +544,7 @@ function reconstruct(input: {
       stage: "fix_result",
       status: "opened",
       at: null,
+      atKind: "unknown",
       actor: "cursor_agent",
       issue: input.number,
       pr: meta?.prNumber ?? null,
@@ -465,6 +562,7 @@ function reconstruct(input: {
       stage: "merge",
       status: "merged",
       at: null,
+      atKind: "unknown",
       actor: "app",
       issue: input.number,
       evidence: "merge marker or merged label",
@@ -497,10 +595,13 @@ function toView(event: QualityEvent): StageView {
     severity: event.severity,
     reason: event.reason,
     category: event.category,
+    head: event.head,
+    decision: event.decision,
+    atKind: event.atKind,
   };
 }
 
-function view(input: Omit<StageView, "source" | "actionId" | "pr" | "agentId" | "runId" | "error" | "attempt" | "severity" | "reason" | "category"> & {
+function view(input: Omit<StageView, "source" | "actionId" | "pr" | "agentId" | "runId" | "error" | "attempt" | "severity" | "reason" | "category" | "head" | "decision"> & {
   pr?: number | null;
   agentId?: string | null;
   runId?: string | null;
@@ -517,48 +618,91 @@ function view(input: Omit<StageView, "source" | "actionId" | "pr" | "agentId" | 
     severity: null,
     reason: null,
     category: null,
+    head: null,
+    decision: null,
+    atKind: input.atKind,
   };
 }
 
-export async function acknowledgeStage(
-  issue: number,
-  stage: "engineering" | "verification",
-): Promise<{ status: "acknowledged" | "already-acknowledged"; audit: QualityAudit }> {
-  const current = await gh.getIssue(issue);
-  const quality = parseCase(current.body);
-  const comments = await gh.listComments(issue);
-  const recordedPr = comments
-    .map((comment) => parseFixResult(comment.body)?.prNumber)
-    .find((number): number is number => typeof number === "number");
-  const stageName = stage === "engineering" ? "engineering_ack" : "verification";
-  const wrote = await recordQualityEvent(issue, buildEvent({
-    actionId: `${stageName}:${issue}`,
-    caseId: quality?.caseId ?? null,
-    correlationId: quality?.correlationId ?? null,
+export class QualityDecisionError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "QualityDecisionError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export async function recordQualityDecision(input: {
+  binding: AckBinding;
+  decision: "adopt" | "go" | "no-go";
+  evidence: string;
+  verifierRef: string;
+  currentHead: string | null;
+}): Promise<{ audit: QualityAudit; write: AuditWriteResult }> {
+  const binding = input.binding;
+  if (binding.stage === "engineering" && input.decision !== "adopt") {
+    throw new QualityDecisionError(400, "bad_decision", "Engineering adoption only records adopt. Nothing was recorded.");
+  }
+  if (binding.stage === "verification" && input.decision === "adopt") {
+    throw new QualityDecisionError(400, "bad_decision", "Verification records go or no-go. Nothing was recorded.");
+  }
+  const evidence = redactAudit(input.evidence).trim();
+  if (input.decision === "go" && !evidence) {
+    throw new QualityDecisionError(400, "evidence_required", "A GO requires evidence. Nothing was recorded.");
+  }
+  if (binding.stage === "verification") {
+    if (!binding.pr || binding.head === "-") {
+      throw new QualityDecisionError(409, "unbound_head", "Verification is not bound to a pull request head. Nothing was recorded.");
+    }
+    if (!input.currentHead || input.currentHead !== binding.head) {
+      throw new QualityDecisionError(409, "head_moved", "The pull request head does not match this link. Nothing was recorded.");
+    }
+  }
+  const current = await gh.getIssue(binding.issue);
+  const quality = parseCase(current.body, binding.issue);
+  if (binding.caseId !== "-" && quality && quality.caseId !== binding.caseId) {
+    throw new QualityDecisionError(409, "case_mismatch", "This link is for a different case. Nothing was recorded.");
+  }
+  const comments = await gh.listComments(binding.issue);
+  const prefix = `decision:${binding.issue}:${binding.caseId}:${binding.stage}:${binding.runId}:${binding.pr}:${binding.head}:${input.decision}:`;
+  const attempt = 1 + comments
+    .map((comment) => parseAudit(comment.body))
+    .filter((event) => event?.issue === binding.issue && event.actionId.startsWith(prefix)).length;
+  const stageName = binding.stage === "engineering" ? "engineering_ack" : "verification";
+  const write = await recordQualityEvent(binding.issue, buildEvent({
+    actionId: `${prefix}${attempt}`,
+    caseId: quality?.caseId ?? (binding.caseId === "-" ? null : binding.caseId),
+    correlationId: quality?.correlationId ?? (binding.caseId === "-" ? null : binding.caseId),
     stage: stageName,
-    status: "acknowledged",
+    status: input.decision === "no-go" ? "no_go" : input.decision === "go" ? "go" : "adopted",
     at: new Date().toISOString(),
-    actor: "signed-link",
-    issue,
-    pr: recordedPr ?? null,
+    atKind: "source",
+    actor: "admin",
+    issue: binding.issue,
+    pr: binding.pr > 0 ? binding.pr : null,
     agentId: null,
-    runId: null,
+    runId: binding.runId === "-" ? null : binding.runId,
     severity: quality?.severity ?? null,
     reason: quality?.reason ?? null,
     category: quality?.category ?? null,
-    evidence: stage === "engineering"
-      ? "signed adoption link; does not launch an agent"
-      : "signed verification link; pull request test report was not accepted as verification",
-    attempt: 1,
-    nextOwner: stage === "engineering" ? (recordedPr ? "verification" : "app") : "human",
-    blocker: stage === "verification"
-      ? (recordedPr ? "signed merge not completed" : "acknowledged before a pull request was recorded")
-      : "acknowledgement does not launch an agent",
-    externalAck: "acknowledged",
+    evidence: evidence || null,
+    attempt,
+    nextOwner: input.decision === "go" ? "human" : "verification",
+    blocker: input.decision === "go"
+      ? "signed merge not completed"
+      : input.decision === "no-go"
+        ? "verification NO-GO; not a pass"
+        : "adoption is not a launch and not a verification GO",
+    externalAck: "none",
+    head: binding.head === "-" ? null : binding.head,
+    decision: input.decision,
+    verifierRef: input.verifierRef,
   }));
-  if (wrote === "failed") throw new Error("audit write failed");
-  return {
-    status: wrote === "recorded" ? "acknowledged" : "already-acknowledged",
-    audit: await loadQualityAudit(issue),
-  };
+  if (!write.recorded) {
+    throw new QualityDecisionError(503, write.error ?? "audit_write_failed", write.recovery ?? "Nothing was recorded.");
+  }
+  return { audit: await loadQualityAudit(binding.issue), write };
 }

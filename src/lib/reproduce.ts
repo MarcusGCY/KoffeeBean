@@ -53,6 +53,8 @@ export type PendingRepro = {
   triageAgentId?: string;
   triageRunId?: string;
   intakeDelivery?: "delivered" | "skipped" | "failed";
+  intakeAt?: string;
+  triageAt?: string;
 };
 
 type ReportKind =
@@ -216,6 +218,8 @@ export function parsePending(body: string): PendingRepro | undefined {
         ...(parsed.intakeDelivery === "delivered" || parsed.intakeDelivery === "skipped" || parsed.intakeDelivery === "failed"
           ? { intakeDelivery: parsed.intakeDelivery }
           : {}),
+        ...(typeof parsed.intakeAt === "string" ? { intakeAt: parsed.intakeAt } : {}),
+        ...(typeof parsed.triageAt === "string" ? { triageAt: parsed.triageAt } : {}),
       };
     } catch {
       continue;
