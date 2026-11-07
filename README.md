@@ -237,7 +237,7 @@ Once the issue exists, `Issue #<n>` is the human prefix and `issue-<n>` is the m
 | Fix branch | contains `issue-90`, for example `cursor/issue-90-house-espresso` |
 | Notifications | `Issue #90`, the issue URL, and `Case kb-0123456789abcdef` |
 
-The app sets the pull request title to that prefix and appends the issue link and case id to the body when they are missing. It does not rename the branch. If the branch lacks `issue-<n>`, `branchHasIssueToken` is false and `branchNonconformance` is true. Old webhook fields stay in place. `identity.canonical` is `provisional` or `issue`.
+The app sets the pull request title to that prefix only after GitHub accepts the update. A failed read or update reports `alignment: failed` and the title GitHub still has, not the title that was requested. `issue-<n>` matches only as a whole token: `notissue-90x` and `issue-90abc` do not match issue 90. Identity lines already in the pull request body are not added again. The body is left unsent when those lines are present, because a body write can overwrite a concurrent edit. If the branch lacks `issue-<n>`, `branchNonconformance` is true and the branch is not renamed.
 
 ### Quality room routine
 

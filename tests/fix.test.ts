@@ -153,6 +153,8 @@ describe("fixIssue", () => {
     expect(String(updatePull.mock.calls[0][1].body)).toContain("https://github.com/acme/beanbox/issues/14");
     expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       prTitle: "Issue #14: Checkout total wrong",
+      alignment: "updated",
+      titleNonconformance: false,
       branch: "cursor/beanbox-fix-14",
       branchHasIssueToken: false,
     }));
@@ -172,6 +174,44 @@ describe("fixIssue", () => {
     }));
     expect(handle.close).toHaveBeenCalledOnce();
     log.mockRestore();
+  });
+
+  it("reports the observed title when the pull request update fails", async () => {
+    const handle = agentWith(async () => ({
+      id: RUN,
+      status: "finished",
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "cursor/beanbox-fix-14", prUrl: PR }] },
+    }));
+    create.mockResolvedValue(handle);
+    updatePull.mockRejectedValueOnce(new Error("github down"));
+
+    await fixIssue(14);
+
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      prTitle: "Checkout total wrong",
+      alignment: "failed",
+      alignmentError: "github_write_failed",
+      titleNonconformance: true,
+    }));
+  });
+
+  it("does not advertise a canonical title when the pull request cannot be read", async () => {
+    const handle = agentWith(async () => ({
+      id: RUN,
+      status: "finished",
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "cursor/notissue-90x", prUrl: PR }] },
+    }));
+    create.mockResolvedValue(handle);
+    getPullRequest.mockRejectedValueOnce(new Error("not found"));
+
+    await fixIssue(14);
+
+    expect(updatePull).not.toHaveBeenCalled();
+    const reported = notifyFixCompleted.mock.calls.at(-1)?.[0] as { prTitle?: string; alignment?: string; alignmentError?: string; branchHasIssueToken?: boolean };
+    expect(reported.alignment).toBe("failed");
+    expect(reported.alignmentError).toBe("github_read_failed");
+    expect(reported.prTitle).toBeUndefined();
+    expect(reported.branchHasIssueToken).toBe(false);
   });
 
   it("uses the polled PR when wait() returns a false error", async () => {

@@ -11,7 +11,14 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { prNumberFromUrl } from "./merge-link";
-import { branchHasIssueToken, canonicalPrTitle, identityLines, issueToken, suggestedFixBranch } from "./quality-identity";
+import {
+  appendIdentityLines,
+  branchHasIssueToken,
+  canonicalPrTitle,
+  identityLines,
+  issueToken,
+  suggestedFixBranch,
+} from "./quality-identity";
 import { notifyFixCompleted, notifyFixStarted } from "./notify";
 import { recordQualityEvent, caseFields } from "./quality-audit";
 import { asDelivery, buildEvent, deliveryAck, parseCase } from "./quality-case";
@@ -249,6 +256,9 @@ async function publishFixResult(
     branch: named.branch,
     branchHasIssueToken: named.branchHasIssueToken,
     prTitle: named.title,
+    alignment: named.alignment,
+    alignmentError: named.alignmentError,
+    titleNonconformance: named.titleNonconformance,
   }));
   const at = new Date().toISOString();
   const fields = caseFields(quality);
@@ -290,6 +300,16 @@ async function publishFixResult(
   return { status: result.status, prUrl: pr, skipped: false };
 }
 
+type PullAlignment = {
+  title?: string;
+  headSha?: string;
+  branch?: string;
+  branchHasIssueToken: boolean;
+  alignment: "updated" | "unchanged" | "failed" | "skipped";
+  alignmentError?: "github_read_failed" | "github_write_failed";
+  titleNonconformance: boolean;
+};
+
 async function alignPullIdentity(
   prNumber: number | undefined,
   issueNumber: number,
@@ -297,36 +317,78 @@ async function alignPullIdentity(
   reportedBranch: string | undefined,
   caseId: string | undefined,
   issueUrl: string,
-): Promise<{ title: string; headSha?: string; branch?: string; branchHasIssueToken: boolean }> {
+): Promise<PullAlignment> {
   const wanted = canonicalPrTitle(issueNumber, fallbackTitle);
-  const footer = identityLines({ issue: issueNumber, caseId, url: issueUrl }).join("\n");
+  const lines = identityLines({ issue: issueNumber, caseId, url: issueUrl });
   if (!prNumber) {
-    return { title: wanted, branch: reportedBranch, branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber) };
-  }
-  try {
-    const pull = await gh.getPullRequest(prNumber);
-    const branch = pull?.headRef || reportedBranch;
-    const current = pull?.title?.trim() || fallbackTitle;
-    const title = canonicalPrTitle(issueNumber, current);
-    const body = pullBodyWithIdentity(pull?.body ?? "", footer);
-    const patch: { title?: string; body?: string } = {};
-    if (!pull || pull.title !== title) patch.title = title;
-    if (body !== (pull?.body ?? "")) patch.body = body;
-    if (patch.title || patch.body) await gh.updatePull(prNumber, patch);
-    return { title, headSha: pull?.headSha, branch, branchHasIssueToken: branchHasIssueToken(branch, issueNumber) };
-  } catch (error) {
-    console.error(`[quality] title_align_failed issue=${issueNumber} pr=${prNumber} error=github_write_failed name=${error instanceof Error ? error.name : "Error"}`);
     return {
-      title: wanted,
       branch: reportedBranch,
       branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber),
+      alignment: "skipped",
+      titleNonconformance: false,
     };
   }
-}
-
-function pullBodyWithIdentity(body: string, footer: string): string {
-  if (!footer || body.includes(footer)) return body;
-  return `${body.trimEnd()}\n\n${footer}\n`;
+  let pull: Awaited<ReturnType<typeof gh.getPullRequest>>;
+  try {
+    pull = await gh.getPullRequest(prNumber);
+  } catch (error) {
+    console.error(`[quality] title_read_failed issue=${issueNumber} pr=${prNumber} error=github_read_failed name=${error instanceof Error ? error.name : "Error"}`);
+    return {
+      branch: reportedBranch,
+      branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber),
+      alignment: "failed",
+      alignmentError: "github_read_failed",
+      titleNonconformance: true,
+    };
+  }
+  if (!pull) {
+    return {
+      branch: reportedBranch,
+      branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber),
+      alignment: "failed",
+      alignmentError: "github_read_failed",
+      titleNonconformance: true,
+    };
+  }
+  const observed = pull.title ?? "";
+  const branch = pull.headRef || reportedBranch;
+  const nextBody = appendIdentityLines(pull.body ?? "", lines);
+  const patch: { title?: string; body?: string } = {};
+  if (observed !== wanted) patch.title = wanted;
+  // Sending body replaces it. Skip that write when every identity line is already present.
+  if (nextBody !== (pull.body ?? "")) patch.body = nextBody;
+  if (!patch.title && !patch.body) {
+    return {
+      title: observed,
+      headSha: pull.headSha,
+      branch,
+      branchHasIssueToken: branchHasIssueToken(branch, issueNumber),
+      alignment: "unchanged",
+      titleNonconformance: false,
+    };
+  }
+  try {
+    await gh.updatePull(prNumber, patch);
+  } catch (error) {
+    console.error(`[quality] title_write_failed issue=${issueNumber} pr=${prNumber} error=github_write_failed name=${error instanceof Error ? error.name : "Error"}`);
+    return {
+      title: observed,
+      headSha: pull.headSha,
+      branch,
+      branchHasIssueToken: branchHasIssueToken(branch, issueNumber),
+      alignment: "failed",
+      alignmentError: "github_write_failed",
+      titleNonconformance: observed !== wanted,
+    };
+  }
+  return {
+    title: patch.title ?? observed,
+    headSha: pull.headSha,
+    branch,
+    branchHasIssueToken: branchHasIssueToken(branch, issueNumber),
+    alignment: "updated",
+    titleNonconformance: false,
+  };
 }
 
 async function recordLaunch(issue: IssueRef, ref: FixRunRef): Promise<void> {

@@ -183,6 +183,8 @@ export function fixCompletedMessage(input: {
   caseId?: string | null;
   branch?: string;
   branchHasIssueToken?: boolean;
+  alignment?: "updated" | "unchanged" | "failed" | "skipped";
+  alignmentError?: string;
 }): string {
   return [
     severityLine(input),
@@ -191,6 +193,9 @@ export function fixCompletedMessage(input: {
     input.prUrl ? `Pull request: ${input.prUrl}` : "No pull request was opened.",
     input.branchHasIssueToken === false
       ? `Nonconformance: branch ${input.branch ?? "unknown"} does not contain issue-${input.number}. The branch was not renamed.`
+      : "",
+    input.alignment === "failed"
+      ? `Pull request title was not changed (${input.alignmentError ?? "github_write_failed"}).`
       : "",
     `Run status: ${oneLine(input.status)}.`,
     "The pull request's own test report is not verification.",

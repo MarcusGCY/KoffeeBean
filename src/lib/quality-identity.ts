@@ -76,19 +76,54 @@ export function identityLines(input: {
   return [];
 }
 
-/** `Issue #90: House Espresso image not loading`. An existing prefix is not doubled. */
+/**
+ * `Issue #90: House Espresso image not loading`.
+ * Empty and heading-only titles stay `Issue #90`. Applying this twice does not produce `Issue #90: Issue #90`.
+ * `Issue #900` is a different number and is not stripped.
+ */
 export function canonicalPrTitle(issue: number, title: string): string {
   const heading = issueHeading(issue);
   if (!heading) return title.trim();
-  const stripped = title.replace(new RegExp(`^\\s*issue\\s*#\\s*${issue}\\s*:\\s*`, "i"), "").trim();
-  return stripped ? `${heading}: ${stripped}` : heading;
+  let rest = title.trim();
+  const lead = new RegExp(`^issue\\s*#\\s*${issue}(?!\\d)\\s*:?\\s*`, "i");
+  while (lead.test(rest)) rest = rest.replace(lead, "").trim();
+  if (rest.toLowerCase() === heading.toLowerCase()) rest = "";
+  return rest ? `${heading}: ${rest}` : heading;
+}
+
+/** True when `token` is a whole alphanumeric token, not a prefix, suffix, or infix of a longer token. */
+export function hasWholeToken(value: string | null | undefined, token: string | null | undefined): boolean {
+  if (!token || !value) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, "i").test(value);
 }
 
 /** True when `caseId` appears as a whole token, not as a prefix of a longer token. */
 export function caseTokenInArtifact(value: string | null | undefined, caseId: string | null | undefined): boolean {
-  const id = provisionalCaseId(caseId);
-  if (!id || !value) return false;
-  return new RegExp(`(?:^|[^a-z0-9])${id}(?:[^a-z0-9]|$)`).test(value.toLowerCase());
+  return hasWholeToken(value, provisionalCaseId(caseId));
+}
+
+/**
+ * Append identity lines that are not already present. Existing text is kept.
+ * A second call with the same lines returns the same string.
+ * GitHub has no compare-and-swap for the body, so the caller should skip the
+ * write when this returns the original body.
+ */
+export function appendIdentityLines(body: string, lines: string[]): string {
+  const missing = lines.filter((line) => line && !identityLinePresent(body, line));
+  if (missing.length === 0) return body;
+  const base = body.replace(/\s*$/, "");
+  const suffix = missing.join("\n");
+  return base ? `${base}\n\n${suffix}\n` : `${suffix}\n`;
+}
+
+function identityLinePresent(body: string, line: string): boolean {
+  const heading = line.match(/^Issue #(\d+)$/);
+  if (heading) {
+    return new RegExp(`(?:^|\\n)\\s*Issue #${heading[1]}(?!\\d)(?:\\s*:|\\s|$)`, "i").test(body);
+  }
+  if (body.split(/\r?\n/).some((item) => item.trim() === line)) return true;
+  return hasWholeToken(body, line);
 }
 
 export type IdentityMismatch = {
@@ -130,9 +165,7 @@ export function branchNonconformance(branch: string | null | undefined, issue: n
 }
 
 export function branchHasIssueToken(branch: string | null | undefined, issue: number): boolean {
-  const token = issueToken(issue);
-  if (!token || !branch) return false;
-  return new RegExp(`(?:^|[^0-9])${token}(?:[^0-9]|$)`).test(branch.toLowerCase());
+  return hasWholeToken(branch, issueToken(issue));
 }
 
 export function suggestedFixBranch(issue: number, slug: string): string | undefined {

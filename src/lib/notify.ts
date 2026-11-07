@@ -129,6 +129,9 @@ export async function notifyFixCompleted(event: GrokIssue & {
   branch?: string;
   branchHasIssueToken?: boolean;
   prTitle?: string;
+  alignment?: "updated" | "unchanged" | "failed" | "skipped";
+  alignmentError?: "github_read_failed" | "github_write_failed";
+  titleNonconformance?: boolean;
 }): Promise<NotifyDelivery> {
   const pull = completedPull(event.number, event.prUrl);
   const handoff = "quality" in event;
@@ -290,6 +293,9 @@ function fixCompletedFields(
     branch?: string;
     branchHasIssueToken?: boolean;
     prTitle?: string;
+    alignment?: "updated" | "unchanged" | "failed" | "skipped";
+    alignmentError?: "github_read_failed" | "github_write_failed";
+    titleNonconformance?: boolean;
   },
   mergeUrl: string | undefined,
   prNumber: number | undefined,
@@ -323,12 +329,19 @@ function fixCompletedFields(
       caseId: event.quality?.caseId,
       branch: event.branch,
       branchHasIssueToken: event.branchHasIssueToken,
+      alignment: event.alignment,
+      alignmentError: event.alignmentError,
     }),
     identity: qualityIdentity({ issue: event.number, caseId: event.quality?.caseId }),
     ...(event.branch ? { branch: event.branch } : {}),
     ...(event.branchHasIssueToken !== undefined ? { branchHasIssueToken: event.branchHasIssueToken } : {}),
     ...(event.branchHasIssueToken === false ? { branchNonconformance: true } : {}),
     ...(event.prTitle ? { prTitle: event.prTitle } : {}),
+    ...(event.alignment ? {
+      alignment: event.alignment,
+      titleNonconformance: event.titleNonconformance === true,
+      ...(event.alignmentError ? { alignmentError: event.alignmentError } : {}),
+    } : {}),
     nextOwner: "verification",
     blocker: "independent verification not acknowledged",
     ...(verificationUrl ? { verificationUrl } : {}),

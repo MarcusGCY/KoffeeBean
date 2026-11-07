@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  appendIdentityLines,
   branchHasIssueToken,
   branchNonconformance,
   canonicalPrTitle,
@@ -59,9 +60,18 @@ describe("quality identity", () => {
     expect(canonicalPrTitle(90, "issue #90: House Espresso image not loading")).toBe(
       "Issue #90: House Espresso image not loading",
     );
+    expect(canonicalPrTitle(90, "")).toBe("Issue #90");
+    expect(canonicalPrTitle(90, "Issue #90")).toBe("Issue #90");
+    expect(canonicalPrTitle(90, "Issue #90:")).toBe("Issue #90");
+    expect(canonicalPrTitle(90, canonicalPrTitle(90, ""))).toBe("Issue #90");
+    expect(canonicalPrTitle(90, canonicalPrTitle(90, "Issue #90"))).toBe("Issue #90");
+    expect(canonicalPrTitle(90, "Issue #900: other")).toBe("Issue #90: Issue #900: other");
     expect(branchHasIssueToken("cursor/issue-90-house-espresso", 90)).toBe(true);
+    expect(branchHasIssueToken("cursor/issue-90", 90)).toBe(true);
     expect(branchHasIssueToken("cursor/issue-9-house", 90)).toBe(false);
     expect(branchHasIssueToken("cursor/issue-900-house", 90)).toBe(false);
+    expect(branchHasIssueToken("cursor/notissue-90x", 90)).toBe(false);
+    expect(branchHasIssueToken("cursor/issue-90abc", 90)).toBe(false);
     expect(branchHasIssueToken("cursor/fix-house-espresso-image-6573", 90)).toBe(false);
     expect(suggestedFixBranch(90, "house-espresso")).toBe("cursor/issue-90-house-espresso");
     expect(branchNonconformance("cursor/fix-house-espresso-image-6573", 90)).toContain("Nonconformance");
@@ -91,5 +101,29 @@ describe("quality identity", () => {
       "tests/repro/house-espresso-image.test.ts",
     )).toBe(true);
     expect(reproIdentityMismatch(undefined, "tests/repro/house-espresso-image.test.ts", "beanbox-triage/house-espresso-image-bc-84c2c")).toBeUndefined();
+  });
+
+  it("appends only missing identity lines and leaves an already complete body unchanged", () => {
+    const lines = [
+      "Issue #90",
+      "https://github.com/MarcusGCY/KoffeeBean/issues/90",
+      "Case kb-0123456789abcdef",
+    ];
+    const original = [
+      "Root cause: the folder is imges.",
+      "",
+      "Issue #90: House Espresso image not loading",
+      "",
+      "Proof: the repro failed.",
+      "https://github.com/MarcusGCY/KoffeeBean/issues/90",
+    ].join("\n");
+    const once = appendIdentityLines(original, lines);
+    expect(once.startsWith("Root cause: the folder is imges.")).toBe(true);
+    expect(once).toContain("Proof: the repro failed.");
+    expect(once.match(/Issue #90/g)).toHaveLength(1);
+    expect(once.match(/https:\/\/github.com\/MarcusGCY\/KoffeeBean\/issues\/90/g)).toHaveLength(1);
+    expect(once).toContain("Case kb-0123456789abcdef");
+    expect(appendIdentityLines(once, lines)).toBe(once);
+    expect(appendIdentityLines(original, lines.slice(0, 2))).toBe(original);
   });
 });
