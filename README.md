@@ -214,6 +214,27 @@ Revert itself needs **Contents** read/write (to commit on `main`) and **Issues**
 
 `summary` on `fix_completed` is the human-readable GitHub issue comment (PR link, or the run status when no PR opened). A hidden HTML marker on that comment is not part of the payload. `prUrl` is omitted when there is no PR. `prNumber` and `mergeUrl` are omitted in that same case, and also when `prUrl` is not a pull request in `GITHUB_REPO`. The original `fix_completed` fields are unchanged, so an older bot can ignore `prNumber` and `mergeUrl`. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
 
+When the app has a case id, each of those payloads also includes `caseId`, `correlationId`, `severity`, `reason`, `category`, `severityLine`, and `message`. Older routines can ignore the new fields. `severityLine` is `Severity S2 · images · bug` (or `unknown` / `unspecified` when that part was not stored). `message` is the text to post verbatim. It always starts with `severityLine`.
+
+`fix_started` is sent only after the app has created the one fix agent. It adds `launched: true`, `doNotLaunch: true`, `agentId`, `runId`, `adoptionUrl`, `nextOwner: "engineering"`, and `blocker`. `fix_completed` adds `doNotLaunch: true`, `selfReportedTestsAreVerification: false`, `verificationUrl`, `adoptionUrl`, `nextOwner: "verification"`, and `blocker`. `adoptionUrl` and `verificationUrl` are signed GET links (`/api/quality/ack`). Opening one records an acknowledgement. It does not launch an agent and it does not merge.
+
+An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/audit?issue=<n>` (Auth0 role `admin`, otherwise 404). The trail is GitHub comments signed with `APPROVAL_SECRET`, not Auth0 `app_metadata` and not the BI tables. Webhook HTTP success is delivery, not proof the room showed it. Missing webhook results stay `not_recorded`.
+
+### Quality room routine
+
+The app is the only launcher. Replace a filter that keeps only `feedback` and `intake_classification` with this rule:
+
+```
+Known webhook types are intake_classification, review_request, fix_started, fix_completed, and fix_merged.
+Do not drop a delivery because type is not feedback or intake_classification.
+For each known type, post the message field verbatim when it is present. Do not remove the Severity line.
+review_request: show the signed Approve and Reject links from actions. Do not ask Triage or Engineering to start work. The app launches a fix only after /api/review returns approved-fix-started.
+fix_started: the app has already launched the only fix. Post the message. Do not launch another agent. Do not ask Triage or Engineering to start a second fix. Do not end tracking at approval. adoptionUrl records acknowledgement only and does not launch work.
+fix_completed: post the message. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification until verificationUrl is opened. That URL does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
+fix_merged: post the message. This app does not observe the Vercel deploy.
+Do not start a cloud agent, a triage run, or a fix run from this routine.
+```
+
 The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.
 
 ### Merge fix button

@@ -102,6 +102,8 @@ describe("triageFeedback", () => {
       issueNumber: 7,
       title: "Coupon case",
       body: "Trim and lowercase codes.",
+      agentId: AGENT,
+      runId: "run-id",
     });
     expect(create).toHaveBeenCalledTimes(1);
     expect(getRun).toHaveBeenCalledWith("run-id", {
@@ -199,6 +201,8 @@ describe("triageFeedback", () => {
       body: "Cart skips the tote.",
       testPath: "tests/repro/tote-add.test.ts",
       branch: "beanbox-triage/tote-add-bc-00000",
+      agentId: AGENT,
+      runId: "run-id",
     });
   });
 
@@ -212,6 +216,8 @@ describe("triageFeedback", () => {
       action: "create",
       title: "Nope",
       body: "Bad path.",
+      agentId: AGENT,
+      runId: "run-id",
     });
   });
 
@@ -228,6 +234,8 @@ describe("triageFeedback", () => {
       issueNumber: undefined,
       title: "New bug",
       body: "Not a duplicate.",
+      agentId: AGENT,
+      runId: "run-id",
     });
     expect(create).toHaveBeenCalledTimes(1);
     expect(getRun).not.toHaveBeenCalled();
@@ -292,6 +300,8 @@ describe("triageFeedback", () => {
       action: "create",
       title: "Tote",
       body: "Cart skips the tote.",
+      agentId: AGENT,
+      runId: "run-sse",
     });
     expect(wait).not.toHaveBeenCalled();
     expect(conversation).toHaveBeenCalledOnce();
@@ -330,6 +340,8 @@ describe("triageFeedback", () => {
       issueNumber: 7,
       title: "Coupon case",
       body: "Trim codes.",
+      agentId: AGENT,
+      runId: "run-step",
     });
     expect(wait).not.toHaveBeenCalled();
   });
@@ -392,6 +404,8 @@ describe("triageFeedback", () => {
       action: "create",
       title: "Tote",
       body: "Cart skips the tote.",
+      agentId: AGENT,
+      runId: "run-id",
     });
     expect(getRun).not.toHaveBeenCalled();
   });

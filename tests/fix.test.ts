@@ -9,6 +9,7 @@ const comment = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const listFixingIssueNumbers = vi.hoisted(() => vi.fn());
 const notifyFixCompleted = vi.hoisted(() => vi.fn());
+const notifyFixStarted = vi.hoisted(() => vi.fn());
 
 vi.mock("@cursor/sdk", () => ({
   Agent: { create, getRun, listRuns },
@@ -27,6 +28,7 @@ vi.mock("@/lib/github", () => ({
 
 vi.mock("@/lib/notify", () => ({
   notifyFixCompleted,
+  notifyFixStarted,
 }));
 
 import { fixIssue, resumeFix } from "@/lib/fix";
@@ -65,6 +67,7 @@ beforeEach(() => {
   listComments.mockReset();
   listFixingIssueNumbers.mockReset();
   notifyFixCompleted.mockReset();
+  notifyFixStarted.mockReset();
   labels = ["user-feedback"];
   comments.length = 0;
   process.env.CURSOR_API_KEY = API_KEY;
@@ -84,7 +87,8 @@ beforeEach(() => {
   listComments.mockImplementation(async () => comments.map((c) => ({ ...c })));
   listFixingIssueNumbers.mockResolvedValue([]);
   listRuns.mockResolvedValue({ items: [] });
-  notifyFixCompleted.mockResolvedValue(undefined);
+  notifyFixCompleted.mockResolvedValue("delivered");
+  notifyFixStarted.mockResolvedValue("delivered");
 });
 
 afterEach(() => {
@@ -126,14 +130,20 @@ describe("fixIssue", () => {
       head: "cursor/beanbox-fix-14",
     }));
     expect(comment).toHaveBeenCalledWith(14, expect.stringContaining(`"runId":"${RUN}"`));
-    expect(notifyFixCompleted).toHaveBeenCalledWith({
+    expect(notifyFixStarted).toHaveBeenCalledTimes(1);
+    expect(notifyFixStarted).toHaveBeenCalledWith(expect.objectContaining({
+      number: 14,
+      agentId: AGENT,
+      runId: RUN,
+    }));
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,
       title: issue.title,
       url: issue.url,
       status: "finished",
       prUrl: PR,
       summary: `Cursor opened a fix: ${PR}`,
-    });
+    }));
     expect(handle.close).toHaveBeenCalledOnce();
     log.mockRestore();
   });
@@ -191,14 +201,14 @@ describe("fixIssue", () => {
     expect(summary).toContain("No PR was created.");
     expect(summary).not.toContain(API_KEY);
     expect(summary).not.toContain("not_found");
-    expect(notifyFixCompleted).toHaveBeenCalledWith({
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,
       title: issue.title,
       url: issue.url,
       status: "error",
       prUrl: undefined,
       summary,
-    });
+    }));
   });
 
   it("on Vercel publishes when getRun is already finished and does not call wait()", async () => {

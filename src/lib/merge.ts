@@ -6,6 +6,8 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { notifyFixMerged } from "./notify";
+import { caseFields, recordQualityEvent } from "./quality-audit";
+import { asDelivery, buildEvent, deliveryAck, parseCase } from "./quality-case";
 import { parseRepro, testSkips } from "./reproduce";
 
 export class MergeError extends Error {
@@ -100,7 +102,7 @@ export async function mergeApprovedFix(issueNumber: number, prNumber: number): P
 }
 
 async function finish(
-  issue: { number: number; title: string; url: string },
+  issue: { number: number; title: string; url: string; body: string },
   pull: gh.PullSnapshot,
   already: boolean,
 ): Promise<MergeOutcome> {
@@ -112,14 +114,53 @@ async function finish(
     await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED, gh.LABEL_MERGED]);
     await gh.closeIssue(issue.number);
     await gh.comment(issue.number, fixMergedComment(pull.url, sha));
-    await notifyFixMerged({
+    const quality = parseCase(issue.body);
+    const delivery = asDelivery(await notifyFixMerged({
       number: issue.number,
       title: issue.title,
       url: issue.url,
       prNumber: pull.number,
       prUrl: pull.url,
       sha,
-    });
+      quality,
+    }));
+    const at = new Date().toISOString();
+    const fields = caseFields(quality);
+    await recordQualityEvent(issue.number, buildEvent({
+      actionId: `merge:${issue.number}:${pull.number}`,
+      ...fields,
+      stage: "merge",
+      status: "merged",
+      at,
+      actor: "app",
+      issue: issue.number,
+      pr: pull.number,
+      agentId: null,
+      runId: null,
+      evidence: `sha ${sha.slice(0, 12)}`,
+      attempt: 1,
+      nextOwner: "vercel",
+      blocker: "deploy not observed by this app",
+      externalAck: "none",
+    }));
+    await recordQualityEvent(issue.number, buildEvent({
+      actionId: `notify_fix_merged:${issue.number}:${pull.number}`,
+      ...fields,
+      stage: "notify_fix_merged",
+      status: delivery === "failed" ? "undelivered" : delivery,
+      at,
+      actor: "app",
+      issue: issue.number,
+      pr: pull.number,
+      agentId: null,
+      runId: null,
+      evidence: `fix_merged ${delivery}`,
+      error: delivery === "failed" ? "webhook_failed" : null,
+      attempt: 1,
+      nextOwner: "vercel",
+      blocker: "deploy not observed by this app",
+      externalAck: deliveryAck(delivery),
+    }));
   } else if (!hadMarker && !sha && !already) {
     throw new MergeError("GitHub merged the pull request but did not return a commit sha.", 502);
   }

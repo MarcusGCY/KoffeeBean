@@ -1,6 +1,8 @@
 import { continueTracking } from "./fix";
 import * as gh from "./github";
 import { requestReview } from "./notify";
+import { recordOpenedCase } from "./quality-audit";
+import { appendCaseMarker, asDelivery, qualityCase, type NotifyDelivery, type QualityCase } from "./quality-case";
 import {
   cannotReproduceBody,
   judgeRepro,
@@ -17,6 +19,10 @@ type Report = {
   summary: string;
   feedback: string;
   reportedBy: string;
+  quality?: PendingRepro["quality"];
+  triageAgentId?: string;
+  triageRunId?: string;
+  intakeDelivery?: NotifyDelivery;
 };
 
 export type ReproResume =
@@ -72,9 +78,23 @@ export async function settleNewReport(
       branch: verdict.branch,
       sha: verdict.sha,
       startedAt: Date.now(),
+      ...(report.quality ? { quality: report.quality } : {}),
+      ...(report.triageAgentId ? { triageAgentId: report.triageAgentId } : {}),
+      ...(report.triageRunId ? { triageRunId: report.triageRunId } : {}),
+      ...(report.intakeDelivery ? { intakeDelivery: report.intakeDelivery } : {}),
     };
-    const issue = await gh.createIssue(report.title, pendingIssueBody(pending), [gh.LABEL_REPRO_PENDING]);
+    const issue = await gh.createIssue(
+      report.title,
+      appendCaseMarker(pendingIssueBody(pending), carried(report)),
+      [gh.LABEL_REPRO_PENDING],
+    );
     console.log(`[feedback] reproduction check pending #${issue.number}`);
+    await writeCase(issue.number, report, {
+      status: "pending",
+      testPath: verdict.testPath,
+      branch: verdict.branch,
+      sha: verdict.sha,
+    });
     await continueTracking(issue.number);
     return;
   }
@@ -150,14 +170,24 @@ async function publish(
       feedback: report.feedback,
       reportedBy: report.reportedBy,
     });
-    const issue = await save(existing, report.title, body, [gh.FEEDBACK_LABEL, gh.LABEL_AWAITING]);
+    const issue = await save(existing, report.title, appendCaseMarker(body, carried(report)), [gh.FEEDBACK_LABEL, gh.LABEL_AWAITING]);
     console.log(`[feedback] created #${issue.number}`);
-    await requestReview({
-      number: issue.number,
-      title: report.title,
-      url: issue.url,
-      summary: report.summary,
-    });
+    let reviewDelivery: NotifyDelivery = "failed";
+    try {
+      const sent = await requestReview({
+        number: issue.number,
+        title: report.title,
+        url: issue.url,
+        summary: report.summary,
+        ...(carried(report) ? { quality: carried(report) } : {}),
+      });
+      reviewDelivery = asDelivery(sent?.delivery);
+    } catch (error) {
+      console.error("[notify] review_request failed", error instanceof Error ? error.name : "Error");
+      await writeCase(issue.number, report, verdict, "failed");
+      throw error;
+    }
+    await writeCase(issue.number, report, verdict, reviewDelivery);
     return;
   }
 
@@ -176,9 +206,56 @@ async function publish(
     branch: "branch" in verdict ? verdict.branch : undefined,
     checkUrl: "checkUrl" in verdict ? verdict.checkUrl : undefined,
   });
-  const issue = await save(existing, report.title, body, [gh.FEEDBACK_LABEL, gh.LABEL_CANNOT_REPRODUCE]);
+  const issue = await save(
+    existing,
+    report.title,
+    appendCaseMarker(body, carried(report)),
+    [gh.FEEDBACK_LABEL, gh.LABEL_CANNOT_REPRODUCE],
+  );
   await gh.closeIssue(issue.number);
+  await writeCase(issue.number, report, verdict);
   console.log(`[feedback] cannot reproduce #${issue.number} (${verdict.status})`);
+}
+
+function carried(report: Report): QualityCase | undefined {
+  if (!report.quality) return undefined;
+  return qualityCase({
+    caseId: report.quality.caseId,
+    severity: report.quality.severity,
+    reason: report.quality.reason,
+    category: report.quality.category,
+  });
+}
+
+async function writeCase(
+  issue: number,
+  report: Report,
+  verdict: ReproduceResult,
+  reviewDelivery?: NotifyDelivery,
+): Promise<void> {
+  const quality = carried(report);
+  if (!quality) return;
+  const repro = verdict.status === "reproduced"
+    ? "reproduced"
+    : verdict.status === "pending"
+      ? "pending"
+      : verdict.status === "error"
+        ? "error"
+        : "not_reproduced";
+  await recordOpenedCase({
+    issue,
+    quality,
+    triageAgentId: report.triageAgentId,
+    triageRunId: report.triageRunId,
+    branch: "branch" in verdict ? verdict.branch : undefined,
+    testPath: "testPath" in verdict ? verdict.testPath : undefined,
+    sha: "sha" in verdict ? verdict.sha : undefined,
+    checkUrl: "checkUrl" in verdict ? verdict.checkUrl : undefined,
+    intakeDelivery: report.intakeDelivery ?? "skipped",
+    repro,
+    reproError: verdict.status === "error" ? verdict.detail : undefined,
+    reviewDelivery,
+  });
 }
 
 async function save(

@@ -1,6 +1,7 @@
 import * as gh from "./github";
 import { classifyForIntake, intakeFailureNote, intakeWebhook, type IntakeDecision } from "./intake-gate";
 import { notifyIntakeClassification } from "./notify";
+import { newQualityCaseId, qualityCase } from "./quality-case";
 import { settleNewReport } from "./repro-track";
 import { triageFeedback } from "./triage";
 
@@ -13,14 +14,20 @@ import { triageFeedback } from "./triage";
  */
 export async function fileFeedback(feedback: string, reportedBy: string): Promise<void> {
   const open = await gh.listOpenFeedbackIssues();
+  const caseId = newQualityCaseId();
   const intake = await resolveDuplicate(await classifyForIntake(feedback));
   const duplicateOf = intake.classification?.duplicate_of ?? null;
-  await notifyIntakeClassification(
-    intakeWebhook(intake, reportedBy, duplicateOf != null ? knownCaseUrl(duplicateOf) : undefined),
-  );
+  const signal = intakeWebhook(intake, reportedBy, duplicateOf != null ? knownCaseUrl(duplicateOf) : undefined);
+  const quality = qualityCase({
+    caseId,
+    severity: signal.severity,
+    reason: signal.reason,
+    category: signal.category,
+  });
+  const intakeDelivery = await notifyIntakeClassification({ ...signal, caseId: quality?.caseId });
   if (intake.action === "hold") {
     console.log(
-      `[feedback] intake only reason=${intake.reason} severity=${intake.classification.severity ?? "none"}`,
+      `[feedback] intake only case=${quality?.caseId ?? "none"} reason=${signal.reason} severity=${signal.severity ?? "none"} delivery=${intakeDelivery}`,
     );
     return;
   }
@@ -29,7 +36,7 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
   const decision = await triageFeedback(feedback, open);
   if (decision.action === "merge" && decision.issueNumber) {
     await gh.appendReport(decision.issueNumber, `${feedback}\n\n${reported}`);
-    console.log(`[feedback] merged into #${decision.issueNumber}`);
+    console.log(`[feedback] merged into #${decision.issueNumber} case=${quality?.caseId ?? "none"}`);
     return;
   }
 
@@ -40,6 +47,10 @@ export async function fileFeedback(feedback: string, reportedBy: string): Promis
     reportedBy: reported,
     testPath: decision.testPath,
     branch: decision.branch,
+    quality,
+    triageAgentId: decision.agentId,
+    triageRunId: decision.runId,
+    intakeDelivery,
   });
 }
 

@@ -11,7 +11,9 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { prNumberFromUrl } from "./merge-link";
-import { notifyFixCompleted } from "./notify";
+import { notifyFixCompleted, notifyFixStarted } from "./notify";
+import { recordQualityEvent, caseFields } from "./quality-audit";
+import { asDelivery, buildEvent, deliveryAck, parseCase } from "./quality-case";
 import { appOrigin } from "./origin";
 import {
   describeRunError,
@@ -82,6 +84,11 @@ export async function fixIssue(number: number) {
       await gh.comment(number, fixRunComment(ref));
     } catch (err) {
       console.error(`[fix] could not persist run id on #${number}`, err);
+    }
+    try {
+      await recordLaunch(issue, ref);
+    } catch (err) {
+      console.error("[fix] launch notice failed", err instanceof Error ? err.name : "Error");
     }
 
     const outcome = await trackFixRun(run, apiKey);
@@ -211,15 +218,107 @@ async function publishFixResult(
     : undefined;
   await gh.comment(issue.number, fixResultComment(summary, meta));
   await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
-  await notifyFixCompleted({
+  const quality = parseCase(current.body);
+  const run = comments.map((comment) => parseFixRun(comment.body)).find((parsed): parsed is FixRunRef => Boolean(parsed));
+  const delivery = asDelivery(await notifyFixCompleted({
     number: issue.number,
     title: issue.title,
     url: issue.url,
     status: result.status,
     prUrl: pr,
     summary,
-  });
+    quality,
+    agentId: run?.agentId,
+    runId: run?.runId,
+  }));
+  const at = new Date().toISOString();
+  const fields = caseFields(quality);
+  await recordQualityEvent(issue.number, buildEvent({
+    actionId: `fix_result:${issue.number}:${meta?.prNumber ?? result.status}`,
+    ...fields,
+    stage: "fix_result",
+    status: pr ? "opened" : "error",
+    at,
+    actor: "cursor_agent",
+    issue: issue.number,
+    pr: meta?.prNumber ?? null,
+    agentId: run?.agentId ?? null,
+    runId: run?.runId ?? null,
+    evidence: pr ? "pull request recorded; test report is not verification" : "no pull request",
+    attempt: 1,
+    nextOwner: pr ? "verification" : "app",
+    blocker: pr ? "independent verification not acknowledged; pull request test report is not verification" : "no pull request was opened",
+    externalAck: "none",
+  }));
+  await recordQualityEvent(issue.number, buildEvent({
+    actionId: `notify_fix_completed:${issue.number}:${meta?.prNumber ?? result.status}`,
+    ...fields,
+    stage: "notify_fix_completed",
+    status: delivery === "failed" ? "undelivered" : delivery,
+    at,
+    actor: "app",
+    issue: issue.number,
+    pr: meta?.prNumber ?? null,
+    agentId: run?.agentId ?? null,
+    runId: run?.runId ?? null,
+    evidence: `fix_completed ${delivery}`,
+    error: delivery === "failed" ? "webhook_failed" : null,
+    attempt: 1,
+    nextOwner: "verification",
+    blocker: "independent verification not acknowledged; room display is not observed",
+    externalAck: deliveryAck(delivery),
+  }));
   return { status: result.status, prUrl: pr, skipped: false };
+}
+
+async function recordLaunch(issue: IssueRef, ref: FixRunRef): Promise<void> {
+  const current = await gh.getIssue(issue.number);
+  const quality = parseCase(current.body);
+  const fields = caseFields(quality);
+  const at = new Date().toISOString();
+  await recordQualityEvent(issue.number, buildEvent({
+    actionId: `fix_launch:${issue.number}:${ref.runId}`,
+    ...fields,
+    stage: "fix_launch",
+    status: "launched",
+    at,
+    actor: "cursor_agent",
+    issue: issue.number,
+    pr: null,
+    agentId: ref.agentId,
+    runId: ref.runId,
+    evidence: "app launched the only fix",
+    attempt: 1,
+    nextOwner: "engineering",
+    blocker: "adoption not acknowledged; do not launch another fix",
+    externalAck: "none",
+  }));
+  const delivery = asDelivery(await notifyFixStarted({
+    number: issue.number,
+    title: issue.title,
+    url: issue.url,
+    quality,
+    agentId: ref.agentId,
+    runId: ref.runId,
+  }));
+  await recordQualityEvent(issue.number, buildEvent({
+    actionId: `notify_fix_started:${issue.number}:${ref.runId}`,
+    ...fields,
+    stage: "notify_fix_started",
+    status: delivery === "failed" ? "undelivered" : delivery,
+    at,
+    actor: "app",
+    issue: issue.number,
+    pr: null,
+    agentId: ref.agentId,
+    runId: ref.runId,
+    evidence: `fix_started ${delivery}`,
+    error: delivery === "failed" ? "webhook_failed" : null,
+    attempt: 1,
+    nextOwner: "engineering",
+    blocker: "adoption not acknowledged; room display is not observed",
+    externalAck: deliveryAck(delivery),
+  }));
 }
 
 /**
