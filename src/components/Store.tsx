@@ -198,7 +198,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
                         <span className="font-semibold">{money(p.price)}</span>
                         <button
                           type="button"
-                          onClick={() => onAdd(p.id)}
+                          onClick={() => onAdd("id")}
                           disabled={pending || unavailable}
                           className="rounded bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800 disabled:cursor-not-allowed disabled:bg-stone-400"
                         >
