@@ -151,6 +151,7 @@ export async function recordOpenedCase(input: {
   repro: "pending" | "reproduced" | "not_reproduced" | "error";
   reproError?: string;
   reviewDelivery?: NotifyDelivery;
+  blocker?: string;
 }): Promise<void> {
   const writtenAt = new Date().toISOString();
   const intakeAt = input.intakeAt ?? writtenAt;
@@ -214,11 +215,12 @@ export async function recordOpenedCase(input: {
       : `sha ${input.sha ?? "unknown"} test ${input.testPath ?? "unknown"}`,
     error: input.reproError ?? null,
     nextOwner: input.repro === "reproduced" ? "human" : input.repro === "pending" ? "app" : "none",
-    blocker: input.repro === "reproduced"
-      ? "waiting for signed approval"
-      : input.repro === "pending"
-        ? "reproduction check has not finished"
-        : null,
+    blocker: input.blocker
+      ?? (input.repro === "reproduced"
+        ? "waiting for signed approval"
+        : input.repro === "pending"
+          ? "reproduction check has not finished"
+          : null),
     externalAck: "none",
   }));
   if (input.reviewDelivery) {

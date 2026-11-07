@@ -11,7 +11,7 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { prNumberFromUrl } from "./merge-link";
-import { branchHasIssueToken, canonicalPrTitle, issueToken, suggestedFixBranch } from "./quality-identity";
+import { branchHasIssueToken, canonicalPrTitle, identityLines, issueToken, suggestedFixBranch } from "./quality-identity";
 import { notifyFixCompleted, notifyFixStarted } from "./notify";
 import { recordQualityEvent, caseFields } from "./quality-audit";
 import { asDelivery, buildEvent, deliveryAck, parseCase } from "./quality-case";
@@ -85,7 +85,9 @@ export async function fixIssue(number: number) {
         issue.body,
         "",
         "Follow .cursor/rules/fix.mdc. Hard rules: copy the repro test into the PR and make it pass; never skip or weaken it (no .skip or .todo); do not edit tests/repro beyond that copy.",
-        "Do not rename tests/repro. That file was created before this issue number existed.",
+        linked?.caseId
+          ? `Copy the repro file that already contains case token ${linked.caseId}. Do not rename it.`
+          : "Do not rename tests/repro. That file was created before this issue number existed.",
         "Use the minimal-fix and pre-pr-self-check skills (.cursor/skills/minimal-fix/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
         `Reference "Fixes #${number}" in the PR description.`,
       ].filter((line) => line !== "").join("\n"),
@@ -232,7 +234,7 @@ async function publishFixResult(
   await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
   const quality = parseCase(current.body, issue.number);
   const run = comments.map((comment) => parseFixRun(comment.body)).find((parsed): parsed is FixRunRef => Boolean(parsed));
-  const named = await alignPullIdentity(meta?.prNumber, issue.number, issue.title, headOf(result));
+  const named = await alignPullIdentity(meta?.prNumber, issue.number, issue.title, headOf(result), quality?.caseId, issue.url);
   const delivery = asDelivery(await notifyFixCompleted({
     number: issue.number,
     title: issue.title,
@@ -293,8 +295,11 @@ async function alignPullIdentity(
   issueNumber: number,
   fallbackTitle: string,
   reportedBranch: string | undefined,
+  caseId: string | undefined,
+  issueUrl: string,
 ): Promise<{ title: string; headSha?: string; branch?: string; branchHasIssueToken: boolean }> {
   const wanted = canonicalPrTitle(issueNumber, fallbackTitle);
+  const footer = identityLines({ issue: issueNumber, caseId, url: issueUrl }).join("\n");
   if (!prNumber) {
     return { title: wanted, branch: reportedBranch, branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber) };
   }
@@ -303,9 +308,11 @@ async function alignPullIdentity(
     const branch = pull?.headRef || reportedBranch;
     const current = pull?.title?.trim() || fallbackTitle;
     const title = canonicalPrTitle(issueNumber, current);
-    if (pull && pull.title !== title) {
-      await gh.updatePullTitle(prNumber, title);
-    }
+    const body = pullBodyWithIdentity(pull?.body ?? "", footer);
+    const patch: { title?: string; body?: string } = {};
+    if (!pull || pull.title !== title) patch.title = title;
+    if (body !== (pull?.body ?? "")) patch.body = body;
+    if (patch.title || patch.body) await gh.updatePull(prNumber, patch);
     return { title, headSha: pull?.headSha, branch, branchHasIssueToken: branchHasIssueToken(branch, issueNumber) };
   } catch (error) {
     console.error(`[quality] title_align_failed issue=${issueNumber} pr=${prNumber} error=github_write_failed name=${error instanceof Error ? error.name : "Error"}`);
@@ -315,6 +322,11 @@ async function alignPullIdentity(
       branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber),
     };
   }
+}
+
+function pullBodyWithIdentity(body: string, footer: string): string {
+  if (!footer || body.includes(footer)) return body;
+  return `${body.trimEnd()}\n\n${footer}\n`;
 }
 
 async function recordLaunch(issue: IssueRef, ref: FixRunRef): Promise<void> {

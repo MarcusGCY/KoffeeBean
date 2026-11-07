@@ -222,7 +222,7 @@ An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/a
 
 ### Issue identity
 
-A report has a case id (`kb-` plus 16 hex characters) before any GitHub issue exists. That id is the provisional correlation. Triage runs before the issue is created, so the repro file stays `tests/repro/<slug>.test.ts` and the triage branch stays `beanbox-triage/<slug>-<short id>`. Those names cannot carry `issue-<n>` without inventing the number or changing the repro gate.
+A report has a case id (`kb-` plus 16 hex characters) before any GitHub issue exists. That id is the provisional case token. A new repro file is `tests/repro/<case-token>-<slug>.test.ts` and its triage branch is `beanbox-triage/<case-token>-<slug>-<short id>`. The file is not renamed after it is created, and the fix pull request copies that same path. Older repro files and branches without a case token still pass the gate. A new run whose returned path or branch lacks that exact token is an identity mismatch: no review is requested. `issue-9` is not `issue-90`.
 
 Once the issue exists, `Issue #<n>` is the human prefix and `issue-<n>` is the machine token. The case id remains a secondary reference. Example for issue 90, which is only an illustration:
 
@@ -231,10 +231,13 @@ Once the issue exists, `Issue #<n>` is the human prefix and `issue-<n>` is the m
 | Before the issue | `Case kb-0123456789abcdef` and `No GitHub issue number yet.` |
 | Issue link | `https://github.com/MarcusGCY/KoffeeBean/issues/90` |
 | PR title | `Issue #90: House Espresso image not loading` |
+| New repro file | `tests/repro/kb-0123456789abcdef-house-espresso.test.ts` |
+| New triage branch | `beanbox-triage/kb-0123456789abcdef-house-espresso-bc-84c2c` |
+| Legacy repro | `tests/repro/house-espresso-image.test.ts` still passes |
 | Fix branch | contains `issue-90`, for example `cursor/issue-90-house-espresso` |
 | Notifications | `Issue #90`, the issue URL, and `Case kb-0123456789abcdef` |
 
-The app sets the pull request title to that prefix after the fix agent opens it. It records whether the branch actually contains `issue-<n>`. It does not rename an existing branch. Old webhook fields stay in place. `identity.canonical` is `provisional` or `issue`.
+The app sets the pull request title to that prefix and appends the issue link and case id to the body when they are missing. It does not rename the branch. If the branch lacks `issue-<n>`, `branchHasIssueToken` is false and `branchNonconformance` is true. Old webhook fields stay in place. `identity.canonical` is `provisional` or `issue`.
 
 ### Quality room routine
 
@@ -245,9 +248,13 @@ Known webhook types are intake_classification, review_request, fix_started, fix_
 Do not drop a delivery because type is not feedback or intake_classification.
 For each known type, post the message field verbatim when it is present. Do not remove the Severity line.
 The app is the sole launcher. Do not start a cloud agent, a triage run, or a fix run from this routine.
+Before a GitHub issue exists, correlate on the case token only. Do not invent an issue number.
+A new repro file is tests/repro/<case-token>-<slug>.test.ts and its triage branch is beanbox-triage/<case-token>-<slug>-<short id>. Do not rename that file. The fix copies it byte for byte.
+If the returned repro path or branch does not contain that exact case token, it is an identity mismatch. Do not ask for review.
+Legacy repro files without a case token remain valid.
 review_request: show the signed Approve and Reject links from actions. Do not ask Triage or Engineering to start work. The app launches a fix only after /api/review returns approved-fix-started.
 fix_started: the app has already launched the only fix. Post the message in the Quality room and keep tracking the case after approval. Do not launch another agent. Do not ask Triage or Engineering to start a second fix. Engineering adoption is not a launch. Opening adoptionUrl records nothing. An admin POST of adopt records adoption only.
-fix_completed: post the message in the Quality room and route the case to verification. Do not stop tracking at approval. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification. Opening verificationUrl records nothing. ACK is not GO. A GO is an admin POST with evidence for that pull request and that head. NO-GO is not a pass. A later push invalidates a GO. The verification POST does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
+fix_completed: post the message in the Quality room and route the case to verification. Do not stop tracking at approval. If branchNonconformance is true, say the branch does not contain issue-<n> and was not renamed. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification. Opening verificationUrl records nothing. ACK is not GO. A GO is an admin POST with evidence for that pull request and that head. NO-GO is not a pass. A later push invalidates a GO. The verification POST does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
 fix_merged: post the message. This app does not observe the Vercel deploy.
 ```
 

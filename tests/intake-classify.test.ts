@@ -84,19 +84,38 @@ function completion(content: string) {
 
 let reply = () => JSON.stringify(classified());
 
+let caseToken = "";
+
+function reproPath(): string {
+  return caseToken ? `tests/repro/${caseToken}-house-espresso-image.test.ts` : TEST_PATH;
+}
+
+function reproBranch(): string {
+  return caseToken ? `beanbox-triage/${caseToken}-house-espresso-image-bc-74046` : MATCH;
+}
+
 function finished(result: string) {
   const wait = vi.fn(async () => {
     throw new Error("wait should not run on Vercel");
   });
-  const send = vi.fn(async () => ({ id: RUN, agentId: AGENT, wait }));
+  const send = vi.fn(async (prompt: string) => {
+    caseToken = String(prompt).match(/kb-[0-9a-f]{16}/)?.[0] ?? "";
+    const bound = caseToken
+      ? result
+        .replaceAll(MATCH, reproBranch())
+        .replaceAll("beanbox-triage/house-espresso-image\"", `beanbox-triage/${caseToken}-house-espresso-image"`)
+        .replaceAll(TEST_PATH, reproPath())
+      : result;
+    getRun.mockResolvedValueOnce({
+      id: RUN,
+      agentId: AGENT,
+      status: "finished",
+      result: bound,
+    });
+    return { id: RUN, agentId: AGENT, wait };
+  });
   const close = vi.fn();
   create.mockResolvedValueOnce({ agentId: AGENT, send, close });
-  getRun.mockResolvedValueOnce({
-    id: RUN,
-    agentId: AGENT,
-    status: "finished",
-    result,
-  });
   return send;
 }
 
@@ -136,12 +155,13 @@ beforeEach(() => {
   branchSha.mockResolvedValue(SHA);
   getFile.mockResolvedValue("import { expect, it } from 'vitest';\nit('image', () => { expect(true).toBe(false); });\n");
   findReproRun.mockResolvedValue(null);
-  compareAgainstMain.mockResolvedValue({
+  caseToken = "";
+  compareAgainstMain.mockImplementation(async () => ({
     baseSha: MAIN,
     ahead: 1,
     behind: 0,
-    files: [{ filename: TEST_PATH, status: "added" }],
-  });
+    files: [{ filename: reproPath(), status: "added" }],
+  }));
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -250,13 +270,14 @@ describe("intake classify on the real route", () => {
 
     expect(vi.mocked(fetch).mock.invocationCallOrder[0]).toBeLessThan(create.mock.invocationCallOrder[0]);
     expect(send).toHaveBeenCalledWith(expect.stringContaining(HOUSE));
-    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(dispatchRepro).toHaveBeenCalledWith(reproPath(), SHA);
     expect(createIssue).toHaveBeenCalledTimes(1);
     expect(createIssue.mock.calls[0][2]).toEqual(["repro-pending"]);
     expect(parsePending(createIssue.mock.calls[0][1] as string)).toMatchObject({
-      testPath: TEST_PATH,
-      branch: MATCH,
+      testPath: reproPath(),
+      branch: reproBranch(),
     });
+    expect(reproPath()).toContain(caseToken);
     expect(createIssue.mock.calls[0][1]).not.toContain("Intake classify failed");
     expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
       action: "file",
@@ -346,7 +367,7 @@ describe("intake classify on the real route", () => {
 
     expect(getIssue).toHaveBeenCalledWith(72);
     expect(send).toHaveBeenCalledWith(expect.stringContaining(HOUSE));
-    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(dispatchRepro).toHaveBeenCalledWith(reproPath(), SHA);
     expect(createIssue.mock.calls[0][2]).toEqual(["repro-pending"]);
     expect(notifyIntakeClassification).toHaveBeenCalledWith(expect.objectContaining({
       action: "file",

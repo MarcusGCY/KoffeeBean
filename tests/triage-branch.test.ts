@@ -49,19 +49,38 @@ const SHA = "c".repeat(40);
 const MAIN = "a".repeat(40);
 const MATCH = "beanbox-triage/house-espresso-image-bc-74046";
 
+let caseToken = "";
+
+function reproPath(): string {
+  return caseToken ? `tests/repro/${caseToken}-house-espresso-image.test.ts` : TEST_PATH;
+}
+
+function reproBranch(): string {
+  return caseToken ? `beanbox-triage/${caseToken}-house-espresso-image-bc-74046` : MATCH;
+}
+
 function finished(result: string) {
   const wait = vi.fn(async () => {
     throw new Error("wait should not run on Vercel");
   });
-  const send = vi.fn(async () => ({ id: RUN, agentId: AGENT, wait }));
+  const send = vi.fn(async (prompt: string) => {
+    caseToken = String(prompt).match(/kb-[0-9a-f]{16}/)?.[0] ?? "";
+    const bound = caseToken
+      ? result
+        .replaceAll(MATCH, reproBranch())
+        .replaceAll("beanbox-triage/house-espresso-image\"", `beanbox-triage/${caseToken}-house-espresso-image"`)
+        .replaceAll(TEST_PATH, reproPath())
+      : result;
+    getRun.mockResolvedValueOnce({
+      id: RUN,
+      agentId: AGENT,
+      status: "finished",
+      result: bound,
+    });
+    return { id: RUN, agentId: AGENT, wait };
+  });
   const close = vi.fn();
   create.mockResolvedValueOnce({ agentId: AGENT, send, close });
-  getRun.mockResolvedValueOnce({
-    id: RUN,
-    agentId: AGENT,
-    status: "finished",
-    result,
-  });
 }
 
 beforeEach(() => {
@@ -92,12 +111,13 @@ beforeEach(() => {
   branchSha.mockResolvedValue(SHA);
   getFile.mockResolvedValue("import { expect, it } from 'vitest';\nit('image', () => { expect(true).toBe(false); });\n");
   findReproRun.mockResolvedValue(null);
-  compareAgainstMain.mockResolvedValue({
+  caseToken = "";
+  compareAgainstMain.mockImplementation(async () => ({
     baseSha: MAIN,
     ahead: 1,
     behind: 0,
-    files: [{ filename: TEST_PATH, status: "added" }],
-  });
+    files: [{ filename: reproPath(), status: "added" }],
+  }));
 });
 
 afterEach(() => {
@@ -114,15 +134,17 @@ describe("triage branch fallback", () => {
 
     await fileFeedback("house espresso image is wrong", "**Reported by:** Marcus");
 
-    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(dispatchRepro).toHaveBeenCalledWith(reproPath(), SHA);
     expect(closeIssue).not.toHaveBeenCalled();
     expect(createIssue.mock.calls[0][2]).toEqual(["repro-pending"]);
     expect(parsePending(createIssue.mock.calls[0][1] as string)).toMatchObject({
-      testPath: TEST_PATH,
-      branch: MATCH,
+      testPath: reproPath(),
+      branch: reproBranch(),
     });
-    expect(branchSha).toHaveBeenCalledWith(MATCH);
-    expect(compareAgainstMain).toHaveBeenCalledWith(MATCH);
+    expect(reproPath()).toContain(caseToken);
+    expect(reproBranch()).toContain(caseToken);
+    expect(branchSha).toHaveBeenCalledWith(reproBranch());
+    expect(compareAgainstMain).toHaveBeenCalledWith(reproBranch());
   });
 
   it("uses the exact branch when the decision omits testPath", async () => {
@@ -134,7 +156,7 @@ describe("triage branch fallback", () => {
 
     await fileFeedback("house espresso image is wrong", "**Reported by:** Marcus");
 
-    expect(dispatchRepro).toHaveBeenCalledWith(TEST_PATH, SHA);
+    expect(dispatchRepro).toHaveBeenCalledWith(reproPath(), SHA);
     expect(closeIssue).not.toHaveBeenCalled();
   });
 
@@ -160,15 +182,15 @@ describe("triage branch fallback", () => {
       `{"action":"create","title":"House espresso image","body":"The photo is wrong.","testPath":"${TEST_PATH}"}`,
       "```",
     ].join("\n"));
-    compareAgainstMain.mockResolvedValue({
+    compareAgainstMain.mockImplementation(async () => ({
       baseSha: MAIN,
       ahead: 1,
       behind: 0,
       files: [
-        { filename: TEST_PATH, status: "added" },
+        { filename: reproPath(), status: "added" },
         { filename: "src/lib/images.ts", status: "modified" },
       ],
-    });
+    }));
 
     await fileFeedback("house espresso image is wrong", "**Reported by:** Marcus");
 

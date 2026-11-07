@@ -181,12 +181,17 @@ export function fixCompletedMessage(input: {
   category?: string | null;
   reason?: string | null;
   caseId?: string | null;
+  branch?: string;
+  branchHasIssueToken?: boolean;
 }): string {
   return [
     severityLine(input),
     `Issue #${input.number}: ${oneLine(input.title)}`,
     ...referenceLines(input.number, input.caseId),
     input.prUrl ? `Pull request: ${input.prUrl}` : "No pull request was opened.",
+    input.branchHasIssueToken === false
+      ? `Nonconformance: branch ${input.branch ?? "unknown"} does not contain issue-${input.number}. The branch was not renamed.`
+      : "",
     `Run status: ${oneLine(input.status)}.`,
     "The pull request's own test report is not verification.",
     "Quality room: route this case to verification. Do not stop tracking at approval.",
@@ -196,7 +201,7 @@ export function fixCompletedMessage(input: {
       : "No verification link was included because the head sha was not read. Opening a URL would not be a GO.",
     "The verification POST does not merge and does not launch an agent.",
     input.mergeUrl ? "Merge remains the separate signed merge link." : "No signed merge link is available.",
-  ].join("\n");
+  ].filter((line) => line !== "").join("\n");
 }
 
 export function fixMergedMessage(input: {

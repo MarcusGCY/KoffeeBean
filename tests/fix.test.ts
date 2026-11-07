@@ -9,7 +9,7 @@ const comment = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const listFixingIssueNumbers = vi.hoisted(() => vi.fn());
 const getPullRequest = vi.hoisted(() => vi.fn());
-const updatePullTitle = vi.hoisted(() => vi.fn());
+const updatePull = vi.hoisted(() => vi.fn());
 const notifyFixCompleted = vi.hoisted(() => vi.fn());
 const notifyFixStarted = vi.hoisted(() => vi.fn());
 
@@ -24,7 +24,7 @@ vi.mock("@/lib/github", () => ({
   listComments,
   listFixingIssueNumbers,
   getPullRequest,
-  updatePullTitle,
+  updatePull,
   FEEDBACK_LABEL: "user-feedback",
   LABEL_APPROVED: "approved",
   LABEL_FIXING: "cursor-fixing",
@@ -71,7 +71,7 @@ beforeEach(() => {
   listComments.mockReset();
   listFixingIssueNumbers.mockReset();
   getPullRequest.mockReset();
-  updatePullTitle.mockReset();
+  updatePull.mockReset();
   notifyFixCompleted.mockReset();
   notifyFixStarted.mockReset();
   labels = ["user-feedback"];
@@ -97,7 +97,7 @@ beforeEach(() => {
     title: "Checkout total wrong",
     headRef: "cursor/beanbox-fix-14",
   });
-  updatePullTitle.mockResolvedValue(undefined);
+  updatePull.mockResolvedValue(undefined);
   listRuns.mockResolvedValue({ items: [] });
   notifyFixCompleted.mockResolvedValue("delivered");
   notifyFixStarted.mockResolvedValue("delivered");
@@ -146,7 +146,11 @@ describe("fixIssue", () => {
       head: "cursor/beanbox-fix-14",
     }));
     expect(comment).toHaveBeenCalledWith(14, expect.stringContaining(`"runId":"${RUN}"`));
-    expect(updatePullTitle).toHaveBeenCalledWith(15, "Issue #14: Checkout total wrong");
+    expect(updatePull).toHaveBeenCalledWith(15, expect.objectContaining({
+      title: "Issue #14: Checkout total wrong",
+    }));
+    expect(String(updatePull.mock.calls[0][1].body)).toContain("Issue #14");
+    expect(String(updatePull.mock.calls[0][1].body)).toContain("https://github.com/acme/beanbox/issues/14");
     expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       prTitle: "Issue #14: Checkout total wrong",
       branch: "cursor/beanbox-fix-14",

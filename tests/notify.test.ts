@@ -159,6 +159,29 @@ describe("fix progress webhooks", () => {
     expect(body.message).not.toContain("ada@");
   });
 
+  it("reports a fix branch that misses the issue token as nonconformance", async () => {
+    stubWebhook("Bearer secret");
+    process.env.GITHUB_REPO = "acme/beanbox";
+    await notifyFixCompleted({
+      number: 90,
+      title: "House Espresso image not loading",
+      url: "https://github.com/acme/beanbox/issues/90",
+      status: "finished",
+      prUrl: "https://github.com/acme/beanbox/pull/91",
+      summary: "Cursor opened a fix: https://github.com/acme/beanbox/pull/91",
+      quality: null,
+      branch: "cursor/fix-house-espresso-image-6573",
+      branchHasIssueToken: false,
+      prTitle: "Issue #90: House Espresso image not loading",
+    });
+    const body = postedJson() as { branchNonconformance?: boolean; message?: string; identity?: { issueToken?: string } };
+    expect(body.branchNonconformance).toBe(true);
+    expect(body.identity?.issueToken).toBe("issue-90");
+    expect(body.message).toContain("Nonconformance");
+    expect(body.message).toContain("issue-90");
+    expect(body.message).not.toContain("issue-9 ");
+  });
+
   it("posts fix_completed with status, prUrl, and the GitHub comment", async () => {
     stubWebhook("Bearer secret");
     process.env.GITHUB_REPO = "example/beanbox";

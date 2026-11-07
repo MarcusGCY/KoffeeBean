@@ -142,10 +142,37 @@ describe("triageFeedback", () => {
     create.mockResolvedValueOnce(made.agent);
     await triageFeedback("the tote will not add", [], { caseId: "kb-0123456789abcdef" });
     const sent = made.send.mock.calls[0][0] as string;
-    expect(sent).toContain("Provisional correlation id: kb-0123456789abcdef");
+    expect(sent).toContain("Provisional case token: kb-0123456789abcdef");
+    expect(sent).toContain("tests/repro/kb-0123456789abcdef-<slug>.test.ts");
+    expect(sent).toContain("beanbox-triage/kb-0123456789abcdef-<slug>-bc-00000");
     expect(sent).toContain("Do not invent an issue number");
-    expect(sent).toContain("beanbox-triage/<slug>-bc-00000");
     expect(sent).not.toContain("issue-");
+  });
+
+  it("rejects a new repro that omits the case token and keeps one that includes it", async () => {
+    const missing = fakeAgent({
+      status: "finished",
+      result: '{"action":"create","title":"Tote","body":"Cart skips the tote.","testPath":"tests/repro/tote-add.test.ts"}',
+    });
+    create.mockResolvedValueOnce(missing.agent);
+    const rejected = await triageFeedback("the tote will not add", [], { caseId: "kb-0123456789abcdef" });
+    expect(rejected.identityMismatch).toEqual({
+      expected: "kb-0123456789abcdef",
+      testPath: "tests/repro/tote-add.test.ts",
+      branch: "beanbox-triage/tote-add-bc-00000",
+    });
+    expect(rejected.testPath).toBeUndefined();
+    expect(rejected.branch).toBeUndefined();
+
+    const matched = fakeAgent({
+      status: "finished",
+      result: '{"action":"create","title":"Tote","body":"Cart skips the tote.","testPath":"tests/repro/kb-0123456789abcdef-tote-add.test.ts"}',
+    });
+    create.mockResolvedValueOnce(matched.agent);
+    const accepted = await triageFeedback("the tote will not add", [], { caseId: "kb-0123456789abcdef" });
+    expect(accepted.identityMismatch).toBeUndefined();
+    expect(accepted.testPath).toBe("tests/repro/kb-0123456789abcdef-tote-add.test.ts");
+    expect(accepted.branch).toBe("beanbox-triage/kb-0123456789abcdef-tote-add-bc-00000");
   });
 
   it("throws the confirmed error message, code, duration, request id, and a short preview", async () => {

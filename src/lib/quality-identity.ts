@@ -84,6 +84,51 @@ export function canonicalPrTitle(issue: number, title: string): string {
   return stripped ? `${heading}: ${stripped}` : heading;
 }
 
+/** True when `caseId` appears as a whole token, not as a prefix of a longer token. */
+export function caseTokenInArtifact(value: string | null | undefined, caseId: string | null | undefined): boolean {
+  const id = provisionalCaseId(caseId);
+  if (!id || !value) return false;
+  return new RegExp(`(?:^|[^a-z0-9])${id}(?:[^a-z0-9]|$)`).test(value.toLowerCase());
+}
+
+export type IdentityMismatch = {
+  expected: string;
+  testPath?: string;
+  branch?: string;
+};
+
+/**
+ * New triage runs must return a repro path and branch that both contain the case token.
+ * A missing path is not a mismatch; that stays the existing no-test result.
+ * Legacy artifacts are not checked here.
+ */
+export function reproIdentityMismatch(
+  caseId: string | null | undefined,
+  testPath: string | undefined,
+  branch: string | undefined,
+): IdentityMismatch | undefined {
+  const id = provisionalCaseId(caseId);
+  if (!id) return undefined;
+  if (!testPath && !branch) return undefined;
+  if (caseTokenInArtifact(testPath, id) && caseTokenInArtifact(branch, id)) return undefined;
+  return { expected: id, testPath, branch };
+}
+
+export function identityMismatchDetail(mismatch: IdentityMismatch): string {
+  return [
+    `Identity mismatch. Expected case token ${mismatch.expected} in the repro file and triage branch.`,
+    `Actual test: ${mismatch.testPath ?? "none"}.`,
+    `Actual branch: ${mismatch.branch ?? "none"}.`,
+    "No review is requested.",
+  ].join(" ");
+}
+
+export function branchNonconformance(branch: string | null | undefined, issue: number): string | undefined {
+  const token = issueToken(issue);
+  if (!token || branchHasIssueToken(branch, issue)) return undefined;
+  return `Nonconformance: branch ${branch ?? "unknown"} does not contain ${token}. The branch was not renamed.`;
+}
+
 export function branchHasIssueToken(branch: string | null | undefined, issue: number): boolean {
   const token = issueToken(issue);
   if (!token || !branch) return false;
