@@ -282,6 +282,11 @@ const READY_MUTATION = `mutation($id: ID!) {
 }`;
 
 /** GraphQL markPullRequestReadyForReview. REST cannot clear a draft. */
+export async function updatePullTitle(number: number, title: string): Promise<void> {
+  const { owner, repo: r } = repo();
+  await gh().pulls.update({ owner, repo: r, pull_number: number, title });
+}
+
 export async function markPullRequestReady(nodeId: string): Promise<void> {
   await gh().graphql(READY_MUTATION, { id: nodeId });
 }

@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { env } from "./env";
 import { safeEqual } from "./github-signature";
 import { appOrigin } from "./origin";
+import { issueHtmlUrl, provisionalCaseId } from "./quality-identity";
 import { redactText } from "./triage-redact";
 
 /** Signed adoption and verification links stay valid for 7 days. */
@@ -135,10 +136,12 @@ export function reviewRequestMessage(input: {
   severity?: string | null;
   category?: string | null;
   reason?: string | null;
+  caseId?: string | null;
 }): string {
   return [
     severityLine(input),
     `Issue #${input.number}: ${oneLine(input.title)}`,
+    ...referenceLines(input.number, input.caseId),
     oneLine(input.summary),
     "",
     "The app has not launched a fix. Approve or reject only with the signed links.",
@@ -154,10 +157,12 @@ export function fixStartedMessage(input: {
   severity?: string | null;
   category?: string | null;
   reason?: string | null;
+  caseId?: string | null;
 }): string {
   return [
     severityLine(input),
     `Issue #${input.number}: ${oneLine(input.title)}`,
+    ...referenceLines(input.number, input.caseId),
     `The app launched the only fix. Agent ${tokenId(input.agentId)}, run ${tokenId(input.runId)}.`,
     "Do not launch another agent and do not ask Triage or Engineering to start a second fix.",
     "Keep tracking this case after approval. The Quality room routes it; Engineering adoption is not a launch.",
@@ -175,10 +180,12 @@ export function fixCompletedMessage(input: {
   severity?: string | null;
   category?: string | null;
   reason?: string | null;
+  caseId?: string | null;
 }): string {
   return [
     severityLine(input),
     `Issue #${input.number}: ${oneLine(input.title)}`,
+    ...referenceLines(input.number, input.caseId),
     input.prUrl ? `Pull request: ${input.prUrl}` : "No pull request was opened.",
     `Run status: ${oneLine(input.status)}.`,
     "The pull request's own test report is not verification.",
@@ -198,10 +205,12 @@ export function fixMergedMessage(input: {
   severity?: string | null;
   category?: string | null;
   reason?: string | null;
+  caseId?: string | null;
 }): string {
   return [
     severityLine(input),
-    `Squash-merged pull request #${input.prNumber} for issue #${input.number}.`,
+    `Issue #${input.number}: squash-merged pull request #${input.prNumber}.`,
+    ...referenceLines(input.number, input.caseId),
     "Next owner: deploy. Blocker: deploy not observed by this app.",
   ].join("\n");
 }
@@ -212,9 +221,11 @@ export function intakeMessage(input: {
   summary?: string | null;
   severity?: string | null;
   category?: string | null;
+  caseId?: string | null;
 }): string {
   return [
     severityLine(input),
+    ...referenceLines(undefined, input.caseId),
     `Intake ${oneLine(input.action)} · ${cleanReason(input.reason) ?? "unspecified"}.`,
     input.summary ? oneLine(input.summary) : "",
     "No fix is launched from this message. Do not ask Triage or Engineering to start work.",
@@ -391,6 +402,18 @@ export function isAckStage(value: string): value is AckStage {
 
 export function deliveryAck(delivery: NotifyDelivery): QualityEvent["externalAck"] {
   return delivery === "delivered" ? "delivered" : "none";
+}
+
+function referenceLines(issue: number | undefined, caseId?: string | null): string[] {
+  const id = provisionalCaseId(caseId);
+  if (!issue || issue <= 0) {
+    return id ? [`Case ${id}`, "No GitHub issue number yet."] : [];
+  }
+  const lines: string[] = [];
+  const url = issueHtmlUrl(issue);
+  if (url) lines.push(url);
+  if (id) lines.push(`Case ${id}`);
+  return lines;
 }
 
 function oneLine(value: string): string {

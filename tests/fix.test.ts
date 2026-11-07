@@ -9,6 +9,7 @@ const comment = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const listFixingIssueNumbers = vi.hoisted(() => vi.fn());
 const getPullRequest = vi.hoisted(() => vi.fn());
+const updatePullTitle = vi.hoisted(() => vi.fn());
 const notifyFixCompleted = vi.hoisted(() => vi.fn());
 const notifyFixStarted = vi.hoisted(() => vi.fn());
 
@@ -23,6 +24,7 @@ vi.mock("@/lib/github", () => ({
   listComments,
   listFixingIssueNumbers,
   getPullRequest,
+  updatePullTitle,
   FEEDBACK_LABEL: "user-feedback",
   LABEL_APPROVED: "approved",
   LABEL_FIXING: "cursor-fixing",
@@ -69,6 +71,7 @@ beforeEach(() => {
   listComments.mockReset();
   listFixingIssueNumbers.mockReset();
   getPullRequest.mockReset();
+  updatePullTitle.mockReset();
   notifyFixCompleted.mockReset();
   notifyFixStarted.mockReset();
   labels = ["user-feedback"];
@@ -89,7 +92,12 @@ beforeEach(() => {
   });
   listComments.mockImplementation(async () => comments.map((c) => ({ ...c })));
   listFixingIssueNumbers.mockResolvedValue([]);
-  getPullRequest.mockResolvedValue({ headSha: "e".repeat(40) });
+  getPullRequest.mockResolvedValue({
+    headSha: "e".repeat(40),
+    title: "Checkout total wrong",
+    headRef: "cursor/beanbox-fix-14",
+  });
+  updatePullTitle.mockResolvedValue(undefined);
   listRuns.mockResolvedValue({ items: [] });
   notifyFixCompleted.mockResolvedValue("delivered");
   notifyFixStarted.mockResolvedValue("delivered");
@@ -115,6 +123,10 @@ describe("fixIssue", () => {
 
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
+    expect(handle.send.mock.calls[0][0]).toContain("Issue #14");
+    expect(handle.send.mock.calls[0][0]).toContain("issue-14");
+    expect(handle.send.mock.calls[0][0]).toContain("cursor/issue-14-slug");
+    expect(handle.send.mock.calls[0][0]).toContain("Do not rename tests/repro");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/rules/fix.mdc");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/minimal-fix/SKILL.md");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/pre-pr-self-check/SKILL.md");
@@ -134,6 +146,12 @@ describe("fixIssue", () => {
       head: "cursor/beanbox-fix-14",
     }));
     expect(comment).toHaveBeenCalledWith(14, expect.stringContaining(`"runId":"${RUN}"`));
+    expect(updatePullTitle).toHaveBeenCalledWith(15, "Issue #14: Checkout total wrong");
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      prTitle: "Issue #14: Checkout total wrong",
+      branch: "cursor/beanbox-fix-14",
+      branchHasIssueToken: false,
+    }));
     expect(notifyFixStarted).toHaveBeenCalledTimes(1);
     expect(notifyFixStarted).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,

@@ -134,6 +134,20 @@ describe("triageFeedback", () => {
     expect(attempt.send.mock.calls[0][0]).toContain("promo code does nothing");
   });
 
+  it("names the provisional case id and does not invent an issue number", async () => {
+    const made = fakeAgent({
+      status: "finished",
+      result: '{"action":"create","title":"Tote","body":"Cart skips the tote."}',
+    });
+    create.mockResolvedValueOnce(made.agent);
+    await triageFeedback("the tote will not add", [], { caseId: "kb-0123456789abcdef" });
+    const sent = made.send.mock.calls[0][0] as string;
+    expect(sent).toContain("Provisional correlation id: kb-0123456789abcdef");
+    expect(sent).toContain("Do not invent an issue number");
+    expect(sent).toContain("beanbox-triage/<slug>-bc-00000");
+    expect(sent).not.toContain("issue-");
+  });
+
   it("throws the confirmed error message, code, duration, request id, and a short preview", async () => {
     const tail = "TAIL-MARKER-SHOULD-BE-CUT";
     const long = `${"x".repeat(200)}${tail}`;

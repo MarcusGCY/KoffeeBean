@@ -40,6 +40,7 @@ const TRIAGE_MODEL: ModelSelection = {
 export async function triageFeedback(
   feedback: string,
   open: OpenIssue[],
+  identity?: { caseId?: string },
 ): Promise<Decision> {
   const apiKey = env("CURSOR_API_KEY");
   const startedAt = Date.now();
@@ -61,7 +62,7 @@ export async function triageFeedback(
     },
   });
   try {
-    const run = await agent.send(prompt(feedback, open, shortRunId(agent.agentId)));
+    const run = await agent.send(prompt(feedback, open, shortRunId(agent.agentId), identity?.caseId));
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
     const result = await trackTriageRun(run, apiKey, open);
     if (result.status !== "finished") throw triageRunError(result);
@@ -112,13 +113,22 @@ async function hydrateReply(
   return text ? { ...snapshot, result: text } : snapshot;
 }
 
-function prompt(feedback: string, open: OpenIssue[], suffix: string): string {
+function prompt(feedback: string, open: OpenIssue[], suffix: string, caseId?: string): string {
   const branch = suffix ? `beanbox-triage/<slug>-${suffix}` : "beanbox-triage/<slug>-<8 character run id>";
+  const correlation = caseId && /^kb-[0-9a-f]{16}$/.test(caseId)
+    ? [
+      `Provisional correlation id: ${caseId}.`,
+      "No GitHub issue exists for this report yet. Do not invent an issue number.",
+      "Do not put an issue number in the branch name or the test file name.",
+      "The branch stays beanbox-triage/<slug>-<suffix> and the test stays tests/repro/<slug>.test.ts.",
+    ]
+    : [];
   return [
     "You triage BeanBox feedback. Follow .cursor/rules/triage.mdc.",
     "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts; no edits under src/ and no workflow edits.",
     `The branch name is exactly \`${branch}\`. Run \`git fetch origin main\` and create that branch from the latest origin/main.`,
     "Never reuse or check out an existing branch. Push only to that name.",
+    ...correlation,
     "Use the write-repro-test and pre-pr-self-check skills (.cursor/skills/write-repro-test/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
     "",
     `## New feedback\n${feedback}`,

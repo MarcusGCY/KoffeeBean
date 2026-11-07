@@ -11,6 +11,7 @@ import {
 } from "./fix-marker";
 import * as gh from "./github";
 import { prNumberFromUrl } from "./merge-link";
+import { branchHasIssueToken, canonicalPrTitle, issueToken, suggestedFixBranch } from "./quality-identity";
 import { notifyFixCompleted, notifyFixStarted } from "./notify";
 import { recordQualityEvent, caseFields } from "./quality-audit";
 import { asDelivery, buildEvent, deliveryAck, parseCase } from "./quality-case";
@@ -67,16 +68,27 @@ export async function fixIssue(number: number) {
     },
   });
   try {
+    const token = issueToken(number);
+    const example = suggestedFixBranch(number, "slug");
+    const linked = parseCase(issue.body, number);
     const run = await agent.send(
       [
         `Fix GitHub issue #${number}: ${issue.title}`,
+        `Canonical identity: Issue #${number}`,
+        issue.url,
+        token ? `Machine token: ${token}` : "",
+        linked?.caseId ? `Secondary case id: ${linked.caseId}` : "",
+        `The git branch must contain ${token ?? "the issue token"}. Example: ${example ?? `cursor/issue-${number}-slug`}.`,
+        `The pull request title must start with "Issue #${number}: ".`,
+        `The pull request body must include ${issue.url} and Fixes #${number}.`,
         "",
         issue.body,
         "",
         "Follow .cursor/rules/fix.mdc. Hard rules: copy the repro test into the PR and make it pass; never skip or weaken it (no .skip or .todo); do not edit tests/repro beyond that copy.",
+        "Do not rename tests/repro. That file was created before this issue number existed.",
         "Use the minimal-fix and pre-pr-self-check skills (.cursor/skills/minimal-fix/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
         `Reference "Fixes #${number}" in the PR description.`,
-      ].join("\n"),
+      ].filter((line) => line !== "").join("\n"),
     );
     console.log(`[fix] agent=${agent.agentId} run=${run.id}`);
     const ref: FixRunRef = { agentId: agent.agentId, runId: run.id, startedAt };
@@ -220,6 +232,7 @@ async function publishFixResult(
   await gh.setLabels(issue.number, [gh.FEEDBACK_LABEL, gh.LABEL_APPROVED]);
   const quality = parseCase(current.body, issue.number);
   const run = comments.map((comment) => parseFixRun(comment.body)).find((parsed): parsed is FixRunRef => Boolean(parsed));
+  const named = await alignPullIdentity(meta?.prNumber, issue.number, issue.title, headOf(result));
   const delivery = asDelivery(await notifyFixCompleted({
     number: issue.number,
     title: issue.title,
@@ -230,7 +243,10 @@ async function publishFixResult(
     quality,
     agentId: run?.agentId,
     runId: run?.runId,
-    headSha: await pullHead(meta?.prNumber),
+    headSha: named.headSha,
+    branch: named.branch,
+    branchHasIssueToken: named.branchHasIssueToken,
+    prTitle: named.title,
   }));
   const at = new Date().toISOString();
   const fields = caseFields(quality);
@@ -272,14 +288,32 @@ async function publishFixResult(
   return { status: result.status, prUrl: pr, skipped: false };
 }
 
-async function pullHead(prNumber: number | undefined): Promise<string | undefined> {
-  if (!prNumber || typeof gh.getPullRequest !== "function") return undefined;
+async function alignPullIdentity(
+  prNumber: number | undefined,
+  issueNumber: number,
+  fallbackTitle: string,
+  reportedBranch: string | undefined,
+): Promise<{ title: string; headSha?: string; branch?: string; branchHasIssueToken: boolean }> {
+  const wanted = canonicalPrTitle(issueNumber, fallbackTitle);
+  if (!prNumber) {
+    return { title: wanted, branch: reportedBranch, branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber) };
+  }
   try {
     const pull = await gh.getPullRequest(prNumber);
-    return pull?.headSha;
+    const branch = pull?.headRef || reportedBranch;
+    const current = pull?.title?.trim() || fallbackTitle;
+    const title = canonicalPrTitle(issueNumber, current);
+    if (pull && pull.title !== title) {
+      await gh.updatePullTitle(prNumber, title);
+    }
+    return { title, headSha: pull?.headSha, branch, branchHasIssueToken: branchHasIssueToken(branch, issueNumber) };
   } catch (error) {
-    console.error(`[quality] head_read_failed pr=${prNumber} error=github_read_failed name=${error instanceof Error ? error.name : "Error"}`);
-    return undefined;
+    console.error(`[quality] title_align_failed issue=${issueNumber} pr=${prNumber} error=github_write_failed name=${error instanceof Error ? error.name : "Error"}`);
+    return {
+      title: wanted,
+      branch: reportedBranch,
+      branchHasIssueToken: branchHasIssueToken(reportedBranch, issueNumber),
+    };
   }
 }
 

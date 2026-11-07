@@ -220,6 +220,22 @@ When the app has a case id, each of those payloads also includes `caseId`, `corr
 
 An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/audit?issue=<n>` (Auth0 role `admin`, otherwise 404). The trail is GitHub comments signed with `APPROVAL_SECRET`. On a public repository those comments are public. They are not Auth0 `app_metadata` and not the BI tables. Webhook HTTP success is delivery, not proof the room showed it. Missing webhook results stay `not_recorded`. A failed comment write is not retried in the background.
 
+### Issue identity
+
+A report has a case id (`kb-` plus 16 hex characters) before any GitHub issue exists. That id is the provisional correlation. Triage runs before the issue is created, so the repro file stays `tests/repro/<slug>.test.ts` and the triage branch stays `beanbox-triage/<slug>-<short id>`. Those names cannot carry `issue-<n>` without inventing the number or changing the repro gate.
+
+Once the issue exists, `Issue #<n>` is the human prefix and `issue-<n>` is the machine token. The case id remains a secondary reference. Example for issue 90, which is only an illustration:
+
+| Where | Text |
+|---|---|
+| Before the issue | `Case kb-0123456789abcdef` and `No GitHub issue number yet.` |
+| Issue link | `https://github.com/MarcusGCY/KoffeeBean/issues/90` |
+| PR title | `Issue #90: House Espresso image not loading` |
+| Fix branch | contains `issue-90`, for example `cursor/issue-90-house-espresso` |
+| Notifications | `Issue #90`, the issue URL, and `Case kb-0123456789abcdef` |
+
+The app sets the pull request title to that prefix after the fix agent opens it. It records whether the branch actually contains `issue-<n>`. It does not rename an existing branch. Old webhook fields stay in place. `identity.canonical` is `provisional` or `issue`.
+
 ### Quality room routine
 
 The app is the sole launcher. Replace a filter that keeps only `feedback` and `intake_classification` with this rule:
