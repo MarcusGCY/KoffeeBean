@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolveCursorModel } from "./agent-model";
 import { env, repo } from "./env";
 import type { OpenIssue } from "./github";
+import { reproIdentityMismatch, type IdentityMismatch } from "./quality-identity";
 import { safeTestPath, shortRunId, slugFromTestPath, triageBranchName } from "./reproduce";
 import { followRun, readFinalAssistantText, reconcileRunResult, serverlessTrackBudgetMs } from "./run-status";
 
@@ -14,7 +15,12 @@ const Decision = z.object({
   testPath: z.string().optional(),
   branch: z.string().optional(),
 });
-export type Decision = z.infer<typeof Decision> & { branch?: string };
+export type Decision = z.infer<typeof Decision> & {
+  branch?: string;
+  agentId?: string;
+  runId?: string;
+  identityMismatch?: IdentityMismatch;
+};
 
 const PREVIEW_MAX = 160;
 
@@ -36,6 +42,7 @@ const TRIAGE_MODEL: ModelSelection = {
 export async function triageFeedback(
   feedback: string,
   open: OpenIssue[],
+  identity?: { caseId?: string },
 ): Promise<Decision> {
   const apiKey = env("CURSOR_API_KEY");
   const startedAt = Date.now();
@@ -57,15 +64,21 @@ export async function triageFeedback(
     },
   });
   try {
-    const run = await agent.send(prompt(feedback, open, shortRunId(agent.agentId)));
+    const run = await agent.send(prompt(feedback, open, shortRunId(agent.agentId), identity?.caseId));
     console.log(`[triage] agent=${agent.agentId} run=${run.id}`);
     const result = await trackTriageRun(run, apiKey, open);
     if (result.status !== "finished") throw triageRunError(result);
-    return parseDecision(result.result, open, result, {
+    const decision = await parseDecision(result.result, open, result, {
       startedAt,
       runId: run.id,
       agentId: agent.agentId,
     });
+    const mismatch = reproIdentityMismatch(identity?.caseId, decision.testPath, decision.branch);
+    if (!mismatch) return decision;
+    const rejected: Decision = { ...decision, identityMismatch: mismatch };
+    delete rejected.testPath;
+    delete rejected.branch;
+    return rejected;
   } finally {
     agent.close();
   }
@@ -108,13 +121,29 @@ async function hydrateReply(
   return text ? { ...snapshot, result: text } : snapshot;
 }
 
-function prompt(feedback: string, open: OpenIssue[], suffix: string): string {
-  const branch = suffix ? `beanbox-triage/<slug>-${suffix}` : "beanbox-triage/<slug>-<8 character run id>";
+function prompt(feedback: string, open: OpenIssue[], suffix: string, caseId?: string): string {
+  const bound = caseId && /^kb-[0-9a-f]{16}$/.test(caseId) ? caseId : undefined;
+  const branch = bound
+    ? `beanbox-triage/${bound}-<slug>-${suffix || "<8 character run id>"}`
+    : suffix
+      ? `beanbox-triage/<slug>-${suffix}`
+      : "beanbox-triage/<slug>-<8 character run id>";
+  const testPath = bound ? `tests/repro/${bound}-<slug>.test.ts` : "tests/repro/<slug>.test.ts";
+  const correlation = bound
+    ? [
+      `Provisional case token: ${bound}.`,
+      "No GitHub issue exists for this report yet. Do not invent an issue number.",
+      `The test path must be \`${testPath}\`.`,
+      `The branch name must be \`${branch}\`.`,
+      "Do not rename the test file after you create it.",
+    ]
+    : [];
   return [
     "You triage BeanBox feedback. Follow .cursor/rules/triage.mdc.",
-    "Hard rules: create or merge; exactly one failing test at tests/repro/<slug>.test.ts; no edits under src/ and no workflow edits.",
+    `Hard rules: create or merge; exactly one failing test at ${testPath}; no edits under src/ and no workflow edits.`,
     `The branch name is exactly \`${branch}\`. Run \`git fetch origin main\` and create that branch from the latest origin/main.`,
     "Never reuse or check out an existing branch. Push only to that name.",
+    ...correlation,
     "Use the write-repro-test and pre-pr-self-check skills (.cursor/skills/write-repro-test/SKILL.md and .cursor/skills/pre-pr-self-check/SKILL.md).",
     "",
     `## New feedback\n${feedback}`,
@@ -123,7 +152,7 @@ function prompt(feedback: string, open: OpenIssue[], suffix: string): string {
     "",
     "As your final answer, put one JSON object in a markdown json fenced code block:",
     "```json",
-    `{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"tests/repro/<slug>.test.ts","branch":"${branch}"}`,
+    `{"action":"merge"|"create","issueNumber":<n, merge only>,"title":"<short bug title>","body":"<markdown: summary, steps to reproduce, suspected file/root cause>","testPath":"${testPath}","branch":"${branch}"}`,
     "```",
   ].join("\n");
 }
@@ -183,7 +212,7 @@ async function resolveRepro(
 
   console.log(`[triage] decision testPath=${testPath ? "ok" : "missing"} branch=${branch ? "ok" : "missing"}`);
 
-  const next: Decision = { ...d };
+  const next: Decision = { ...d, agentId: ctx.agentId, runId: ctx.runId };
   if (testPath) next.testPath = testPath;
   else delete next.testPath;
   if (branch) next.branch = branch;

@@ -10,7 +10,7 @@ export function getProduct(id: string): Product | undefined {
 }
 
 export function addItem(cart: CartItem[], productId: string): CartItem[] {
-  const id = productId.replace("tote", "canvas-tote");
+  const id = productId;
   if (!getProduct(id)) return cart;
 
   const existing = cart.find((i) => i.productId === id);

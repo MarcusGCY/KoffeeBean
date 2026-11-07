@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { verifyMergeToken } from "@/lib/merge-link";
 import { notifyFixCompleted, notifyFixMerged, notifyFixStarted, notifyIntakeClassification, requestReview } from "@/lib/notify";
+import { qualityCase } from "@/lib/quality-case";
 
 const issue = {
   number: 7,
@@ -125,6 +126,62 @@ describe("fix progress webhooks", () => {
     });
   });
 
+  it("adds the severity line and a do-not-launch handoff when the case is known", async () => {
+    stubWebhook("Bearer secret");
+    const quality = qualityCase({
+      caseId: "kb-0123456789abcdef",
+      severity: "S2",
+      reason: "bug",
+      category: "images",
+    });
+    await notifyFixStarted({
+      number: 90,
+      title: "House Espresso image not loading",
+      url: "https://github.com/example/beanbox/issues/90",
+      quality,
+      agentId: "bc-d7dc6308-e103-4bd7-9c90-8b64a0816573",
+      runId: "run-ff80100e-2385-4236-a806-fa7ecdbd02a4",
+    });
+    const body = postedJson() as {
+      launched?: boolean;
+      doNotLaunch?: boolean;
+      severity?: string;
+      message?: string;
+      adoptionUrl?: string;
+    };
+    expect(body.launched).toBe(true);
+    expect(body.doNotLaunch).toBe(true);
+    expect(body.severity).toBe("S2");
+    expect(body.message?.startsWith("Severity S2 · images · bug")).toBe(true);
+    expect(body.message).toContain("Do not launch another agent");
+    expect(body.adoptionUrl).toContain("/api/quality/ack");
+    expect(body.adoptionUrl).toContain("stage=engineering");
+    expect(body.message).not.toContain("ada@");
+  });
+
+  it("reports a fix branch that misses the issue token as nonconformance", async () => {
+    stubWebhook("Bearer secret");
+    process.env.GITHUB_REPO = "acme/beanbox";
+    await notifyFixCompleted({
+      number: 90,
+      title: "House Espresso image not loading",
+      url: "https://github.com/acme/beanbox/issues/90",
+      status: "finished",
+      prUrl: "https://github.com/acme/beanbox/pull/91",
+      summary: "Cursor opened a fix: https://github.com/acme/beanbox/pull/91",
+      quality: null,
+      branch: "cursor/fix-house-espresso-image-6573",
+      branchHasIssueToken: false,
+      prTitle: "Issue #90: House Espresso image not loading",
+    });
+    const body = postedJson() as { branchNonconformance?: boolean; message?: string; identity?: { issueToken?: string } };
+    expect(body.branchNonconformance).toBe(true);
+    expect(body.identity?.issueToken).toBe("issue-90");
+    expect(body.message).toContain("Nonconformance");
+    expect(body.message).toContain("issue-90");
+    expect(body.message).not.toContain("issue-9 ");
+  });
+
   it("posts fix_completed with status, prUrl, and the GitHub comment", async () => {
     stubWebhook("Bearer secret");
     process.env.GITHUB_REPO = "example/beanbox";
@@ -241,7 +298,7 @@ describe("fix progress webhooks", () => {
       number: 7,
       title: "Bean images not loading",
       url: "https://github.com/example/beanbox/issues/7",
-    })).resolves.toBeUndefined();
+    })).resolves.toBe("failed");
     expect(err).toHaveBeenCalled();
   });
 
@@ -326,7 +383,7 @@ describe("fix progress webhooks", () => {
       url: "https://github.com/example/beanbox/issues/7",
       status: "finished",
       summary: "Cursor opened a fix: https://github.com/example/beanbox/pull/9",
-    })).resolves.toBeUndefined();
+    })).resolves.toBe("failed");
     expect(err).toHaveBeenCalled();
   });
 });

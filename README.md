@@ -214,6 +214,50 @@ Revert itself needs **Contents** read/write (to commit on `main`) and **Issues**
 
 `summary` on `fix_completed` is the human-readable GitHub issue comment (PR link, or the run status when no PR opened). A hidden HTML marker on that comment is not part of the payload. `prUrl` is omitted when there is no PR. `prNumber` and `mergeUrl` are omitted in that same case, and also when `prUrl` is not a pull request in `GITHUB_REPO`. The original `fix_completed` fields are unchanged, so an older bot can ignore `prNumber` and `mergeUrl`. A failed POST is logged and does not stop the fix. If `GROK_WEBHOOK_URL` is empty, BeanBox logs the `/review/<n>` page for review requests and skips the fix pings.
 
+When the app has a case id, each of those payloads also includes `caseId`, `correlationId`, `severity`, `reason`, `category`, `severityLine`, and `message`. Older routines can ignore the new fields. `severityLine` is `Severity S2 · images · bug` (or `unknown` / `unspecified` when that part was not stored). `message` is the text to post verbatim. It always starts with `severityLine`.
+
+`fix_started` is sent only after the app has created the one fix agent. It adds `launched: true`, `doNotLaunch: true`, `agentId`, `runId`, `adoptionUrl`, `nextOwner: "engineering"`, and `blocker`. `fix_completed` adds `doNotLaunch: true`, `selfReportedTestsAreVerification: false`, `verificationUrl` when the head sha was read, `adoptionUrl`, `nextOwner: "verification"`, and `blocker`. Those URLs are signed GET confirmations. Opening one records nothing. An Auth0 `admin` records a decision with a same-origin POST. Engineering `adopt` is not a launch and not a GO. Verification `go` requires evidence for one head. `no-go` and missing evidence do not pass. A later push makes an older GO stale. Neither POST merges or launches.
+
+An admin can read the trail at `/admin/quality?issue=<n>` or `GET /api/quality/audit?issue=<n>` (Auth0 role `admin`, otherwise 404). The trail is GitHub comments signed with `APPROVAL_SECRET`. On a public repository those comments are public. They are not Auth0 `app_metadata` and not the BI tables. Webhook HTTP success is delivery, not proof the room showed it. Missing webhook results stay `not_recorded`. A failed comment write is not retried in the background.
+
+### Issue identity
+
+A report has a case id (`kb-` plus 16 hex characters) before any GitHub issue exists. That id is the provisional case token. A new repro file is `tests/repro/<case-token>-<slug>.test.ts` and its triage branch is `beanbox-triage/<case-token>-<slug>-<short id>`. The file is not renamed after it is created, and the fix pull request copies that same path. Older repro files and branches without a case token still pass the gate. A new run whose returned path or branch lacks that exact token is an identity mismatch: no review is requested. `issue-9` is not `issue-90`.
+
+Once the issue exists, `Issue #<n>` is the human prefix and `issue-<n>` is the machine token. The case id remains a secondary reference. Example for issue 90, which is only an illustration:
+
+| Where | Text |
+|---|---|
+| Before the issue | `Case kb-0123456789abcdef` and `No GitHub issue number yet.` |
+| Issue link | `https://github.com/MarcusGCY/KoffeeBean/issues/90` |
+| PR title | `Issue #90: House Espresso image not loading` |
+| New repro file | `tests/repro/kb-0123456789abcdef-house-espresso.test.ts` |
+| New triage branch | `beanbox-triage/kb-0123456789abcdef-house-espresso-bc-84c2c` |
+| Legacy repro | `tests/repro/house-espresso-image.test.ts` still passes |
+| Fix branch | contains `issue-90`, for example `cursor/issue-90-house-espresso` |
+| Notifications | `Issue #90`, the issue URL, and `Case kb-0123456789abcdef` |
+
+The app sets the pull request title to that prefix only after GitHub accepts the update. A failed read or update reports `alignment: failed` and the title GitHub still has, not the title that was requested. `issue-<n>` matches only as a whole token: `notissue-90x` and `issue-90abc` do not match issue 90. Identity lines already in the pull request body are not added again. The body is left unsent when those lines are present, because a body write can overwrite a concurrent edit. If the branch lacks `issue-<n>`, `branchNonconformance` is true and the branch is not renamed.
+
+### Quality room routine
+
+The app is the sole launcher. Replace a filter that keeps only `feedback` and `intake_classification` with this rule:
+
+```
+Known webhook types are intake_classification, review_request, fix_started, fix_completed, and fix_merged.
+Do not drop a delivery because type is not feedback or intake_classification.
+For each known type, post the message field verbatim when it is present. Do not remove the Severity line.
+The app is the sole launcher. Do not start a cloud agent, a triage run, or a fix run from this routine.
+Before a GitHub issue exists, correlate on the case token only. Do not invent an issue number.
+A new repro file is tests/repro/<case-token>-<slug>.test.ts and its triage branch is beanbox-triage/<case-token>-<slug>-<short id>. Do not rename that file. The fix copies it byte for byte.
+If the returned repro path or branch does not contain that exact case token, it is an identity mismatch. Do not ask for review.
+Legacy repro files without a case token remain valid.
+review_request: show the signed Approve and Reject links from actions. Do not ask Triage or Engineering to start work. The app launches a fix only after /api/review returns approved-fix-started.
+fix_started: the app has already launched the only fix. Post the message in the Quality room and keep tracking the case after approval. Do not launch another agent. Do not ask Triage or Engineering to start a second fix. Engineering adoption is not a launch. Opening adoptionUrl records nothing. An admin POST of adopt records adoption only.
+fix_completed: post the message in the Quality room and route the case to verification. Do not stop tracking at approval. If branchNonconformance is true, say the branch does not contain issue-<n> and was not renamed. A pull request body's test report is not verification. Do not infer that a missing chat line means the webhook was ignored. Next owner is verification. Opening verificationUrl records nothing. ACK is not GO. A GO is an admin POST with evidence for that pull request and that head. NO-GO is not a pass. A later push invalidates a GO. The verification POST does not merge and does not launch an agent. Merge stays the separate mergeUrl when it is present.
+fix_merged: post the message. This app does not observe the Vercel deploy.
+```
+
 The bot shows the review summary with Approve and Reject buttons. Each button calls that action's `url`.
 
 ### Merge fix button
@@ -346,6 +390,84 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `AUTH0_MGMT_CLIENT_SECRET` | Machine-to-machine client secret. Scopes `read:users` and `update:users_app_metadata`. Leave it empty in git |
 | `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL for chat quotas and one-time confirm actions. Leave it empty in git |
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. Leave it empty in git |
+| `DATABASE_URL` | Optional. Neon Postgres connection string for the BI event log (see below). Leave it empty in git |
+| `BI_HASH_SECRET` | Optional. 16+ character secret that keys the shopper hash for BI events. Leave it empty in git |
+| `BI_API_SECRET` | Optional. Service token for the read-only `/api/bi/*` endpoints (see "BI read API"). Leave it empty in git |
+
+### BI event log (Neon Postgres)
+
+Foundation for the Barista to BI work. Neon holds **analytics only**: Auth0 stays the source of truth for carts and orders, and Upstash Redis stays the chat quota store. Events are emitted from `src/lib/bi-track.ts` (see "Emission points" below).
+
+1. Set `DATABASE_URL` to the pooled Neon connection string (`sslmode=require`) in `.env.local` and the Vercel project (mark it sensitive). The Neon project is KoffeeBean-BI (`proud-glitter-89179522`, `aws-ap-southeast-1`, branch `main`, database `koffeebean_bi`). No other connection variable name is used.
+2. Generate `BI_HASH_SECRET` with `openssl rand -hex 32` and set it the same way. Keep it stable: changing it breaks joins with older rows.
+3. The tables already exist on that branch. For a new branch or database, create them once: `psql "$DATABASE_URL" -f db/migrations/0001_bi_events.sql` (idempotent).
+
+Tables: `bi_events` (append-only by convention; `id`, `created_at`, `event_type`, `source`, `shopper_hash`, `session_id`, `payload` jsonb) and an optional `bi_orders` mirror for cross-shopper order aggregates (`items` jsonb and `attributed_sku_ids` text[]; no writer yet).
+
+- Every event has `source` of `live` or `demo`. BI queries should exclude `demo`.
+- `shopper_hash` comes from `hashShopperId(sub)` in `src/lib/bi-hash.ts`: HMAC-SHA256 of the Auth0 `sub`, keyed by `BI_HASH_SECRET`, as 64 hex characters. The raw `sub` is never stored.
+- No PII and no chat text. `src/lib/bi-events.ts` defines strict payload shapes for `barista.turn`, `recommend.shown`, `recommend.added`, `recommend.undone`, `order.placed`, and `order.cancelled`; unknown fields are rejected.
+- `recordBiEvent(...)` never throws. With `DATABASE_URL` or `BI_HASH_SECRET` unset, or if Neon is down or slow (2 second cap), it logs a short code and returns `{ ok: false }`, so checkout and chat are not affected.
+- BI is a separate path from `/api/feedback`, triage, and review. It does not call them.
+
+Emission points (all best effort, run after the response when possible):
+
+- `POST /api/chat`: `barista.turn` at turn end (tool ids, message length, latency; no text) and `recommend.shown` when cards were shown. The `products` SSE event carries the turn's `recommendationId`.
+- `POST` / `DELETE /api/cart/items` with a `recommendationId` (sent only by chat cards): `recommend.added` / `recommend.undone`. Adding marks the SKU in Redis for 30 minutes (`kb:bi:rec:<sub>:<productId>`).
+- `placeOrder` in `src/lib/store-meta.ts` (cart page and chat Confirm): `order.placed` plus a `bi_orders` upsert; `attributed_sku_ids` is the order's SKUs that are still marked.
+- `cancelOrder` in `src/lib/store-meta.ts`: `order.cancelled` plus `bi_orders.cancelled_at`.
+- `source` is `demo` when the signed-in user has the Auth0 `admin` role (the check behind `/admin/demo` and Demo Reset), otherwise `live`.
+
+### BI read API (for the BI bot)
+
+Read-only, service-token endpoints over `bi_events` for the Marcus-facing BI bot. This is a separate path from `/api/feedback`, triage, and review, and it never calls them. It does not use the Auth0 shopper session.
+
+**Auth.** Set `BI_API_SECRET` (generate with `openssl rand -hex 32`) in `.env.local` and the Vercel project (mark it sensitive), and give the same value to the BI bot. Send it as `Authorization: Bearer <BI_API_SECRET>`, or as `x-bi-secret: <BI_API_SECRET>`. A missing or wrong secret is `401`. If `BI_API_SECRET` is unset on the server the endpoints answer `503 unconfigured` (they never open up). If `DATABASE_URL` is unset they answer `503 database_unconfigured`; a Neon failure is `503 unavailable`. Responses are `private, no-store`. Bad query parameters are `400 { "error": "..." }`.
+
+**Privacy.** Rows are returned with `shopper_hash` only. The Auth0 `sub` and chat text are never stored in `bi_events`, so they cannot be returned.
+
+**Source.** Every query excludes demo and admin traffic by default (`source=live`). Pass `source=demo` for only demo rows, or `source=all` for both.
+
+`GET /api/bi/events` lists events, newest first.
+
+| Param | Meaning |
+| --- | --- |
+| `since`, `until` | ISO 8601 window on `created_at`. `since` is inclusive, `until` is exclusive. Both optional |
+| `event_type` | Optional. One of `barista.turn`, `recommend.shown`, `recommend.added`, `recommend.undone`, `order.placed`, `order.cancelled`. Repeat it or comma-separate |
+| `source` | `live` (default), `demo`, or `all` |
+| `limit` | Default 50, capped at 200 |
+| `cursor` (alias `after_id`) | The `nextCursor` of the previous page |
+
+Response: `{ "events": [{ "id", "created_at", "event_type", "source", "shopper_hash", "session_id", "payload" }], "nextCursor"? }`. `id` is a string. `nextCursor` is present only when more rows exist; pass it back as `cursor`.
+
+`GET /api/bi/summary` returns small aggregates for a window. `since` and `until` default to the last 7 days ending now, and `source` defaults to `live`.
+
+- `orders`: `placed` and `cancelled` event counts, `revenueCents` (sum of `order.placed` totals), `aovCents` (revenue / placed, `null` when none; cancelled orders are not netted out), `withCoupon`.
+- `topSkus`: top 10 by ordered quantity, `{ productId, qty, orders }`.
+- `coupons`: top 10 coupon codes by orders, `{ code, orders }`.
+- `recommendations`: `shown`, `added`, `undone` event counts, `shownRecommendations` and `addedRecommendations` (distinct `recommendationId`s), and `conversion` (`addedRecommendations / shownRecommendations`, `null` when nothing was shown).
+- `baristaTurns`: `total` and `byOutcome` (`replied`, `rate_limited`, `timeout`, `error`).
+
+```bash
+export BI_BASE_URL="https://<production-host>"
+export BI_API_SECRET="<your BI_API_SECRET>"
+
+curl -s -H "Authorization: Bearer $BI_API_SECRET" \
+  "$BI_BASE_URL/api/bi/events?event_type=order.placed,order.cancelled&since=2026-11-01T00:00:00Z&limit=20"
+
+curl -s -H "Authorization: Bearer $BI_API_SECRET" \
+  "$BI_BASE_URL/api/bi/summary?since=2026-11-01T00:00:00Z&until=2026-11-08T00:00:00Z"
+
+curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&limit=5"
+```
+
+### BI demo seed (`source=demo`)
+
+So the BI bot can show live vs demo contrast, the admin demo page (`/admin/demo`, Auth0 `admin` role only) has a **Seed BI demo story** button (`POST /api/demo/bi-seed`; admin session, same-origin and CSRF checked; no public route and no signed bot grant). It writes **analytics rows only** with `source=demo` into the BI event store (`bi_events` plus the `bi_orders` mirror). Auth0 `app_metadata` remains the source of truth for carts and orders; nothing in checkout, the cart, or order reads uses these rows, and no real order is created.
+
+Story, "Cancellation spike" (`src/lib/bi-demo-seed.ts`): five calm days (3 cheap bean/merch orders a day, one cancelled, a `SAVE10` order each day), then in the last ~30 hours 12 orders of the $250 Roast Day T-Shirt, all with `BEANS20`, of which 8 are cancelled. Each order has a `barista.turn`, `recommend.shown` and `recommend.added` in the same `demo-story:<n>` session. Expect `/api/bi/summary?source=demo` to show 27 placed and 9 cancelled (33% cancelled vs about 7% in the baseline), `BEANS20` on 12 of 27 orders, and the `tee` as top revenue SKU. `source=live` is unaffected.
+
+Rules: shoppers are synthetic subs (`demo-seed|shopper-N`) run through `hashShopperId`, events are validated by the same strict schemas as `recordBiEvent`, and there is no chat text or PII. Re-running is safe: it deletes only `source='demo'` rows whose `session_id` starts with `demo-story:` or `order_id` starts with `demo-story-`, then inserts a fresh story relative to now, in one transaction. `live` rows are never deleted. Needs `DATABASE_URL` and `BI_HASH_SECRET`.
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.

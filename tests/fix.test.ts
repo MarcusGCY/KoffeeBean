@@ -8,7 +8,10 @@ const setLabels = vi.hoisted(() => vi.fn());
 const comment = vi.hoisted(() => vi.fn());
 const listComments = vi.hoisted(() => vi.fn());
 const listFixingIssueNumbers = vi.hoisted(() => vi.fn());
+const getPullRequest = vi.hoisted(() => vi.fn());
+const updatePull = vi.hoisted(() => vi.fn());
 const notifyFixCompleted = vi.hoisted(() => vi.fn());
+const notifyFixStarted = vi.hoisted(() => vi.fn());
 
 vi.mock("@cursor/sdk", () => ({
   Agent: { create, getRun, listRuns },
@@ -20,6 +23,8 @@ vi.mock("@/lib/github", () => ({
   comment,
   listComments,
   listFixingIssueNumbers,
+  getPullRequest,
+  updatePull,
   FEEDBACK_LABEL: "user-feedback",
   LABEL_APPROVED: "approved",
   LABEL_FIXING: "cursor-fixing",
@@ -27,6 +32,7 @@ vi.mock("@/lib/github", () => ({
 
 vi.mock("@/lib/notify", () => ({
   notifyFixCompleted,
+  notifyFixStarted,
 }));
 
 import { fixIssue, resumeFix } from "@/lib/fix";
@@ -64,7 +70,10 @@ beforeEach(() => {
   comment.mockReset();
   listComments.mockReset();
   listFixingIssueNumbers.mockReset();
+  getPullRequest.mockReset();
+  updatePull.mockReset();
   notifyFixCompleted.mockReset();
+  notifyFixStarted.mockReset();
   labels = ["user-feedback"];
   comments.length = 0;
   process.env.CURSOR_API_KEY = API_KEY;
@@ -83,8 +92,15 @@ beforeEach(() => {
   });
   listComments.mockImplementation(async () => comments.map((c) => ({ ...c })));
   listFixingIssueNumbers.mockResolvedValue([]);
+  getPullRequest.mockResolvedValue({
+    headSha: "e".repeat(40),
+    title: "Checkout total wrong",
+    headRef: "cursor/beanbox-fix-14",
+  });
+  updatePull.mockResolvedValue(undefined);
   listRuns.mockResolvedValue({ items: [] });
-  notifyFixCompleted.mockResolvedValue(undefined);
+  notifyFixCompleted.mockResolvedValue("delivered");
+  notifyFixStarted.mockResolvedValue("delivered");
 });
 
 afterEach(() => {
@@ -107,6 +123,10 @@ describe("fixIssue", () => {
 
     expect(log).toHaveBeenCalledWith(`[fix] agent=${AGENT} run=${RUN}`);
     expect(outcome).toEqual({ status: "finished", prUrl: PR });
+    expect(handle.send.mock.calls[0][0]).toContain("Issue #14");
+    expect(handle.send.mock.calls[0][0]).toContain("issue-14");
+    expect(handle.send.mock.calls[0][0]).toContain("cursor/issue-14-slug");
+    expect(handle.send.mock.calls[0][0]).toContain("Do not rename tests/repro");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/rules/fix.mdc");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/minimal-fix/SKILL.md");
     expect(handle.send.mock.calls[0][0]).toContain(".cursor/skills/pre-pr-self-check/SKILL.md");
@@ -126,16 +146,72 @@ describe("fixIssue", () => {
       head: "cursor/beanbox-fix-14",
     }));
     expect(comment).toHaveBeenCalledWith(14, expect.stringContaining(`"runId":"${RUN}"`));
-    expect(notifyFixCompleted).toHaveBeenCalledWith({
+    expect(updatePull).toHaveBeenCalledWith(15, expect.objectContaining({
+      title: "Issue #14: Checkout total wrong",
+    }));
+    expect(String(updatePull.mock.calls[0][1].body)).toContain("Issue #14");
+    expect(String(updatePull.mock.calls[0][1].body)).toContain("https://github.com/acme/beanbox/issues/14");
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      prTitle: "Issue #14: Checkout total wrong",
+      alignment: "updated",
+      titleNonconformance: false,
+      branch: "cursor/beanbox-fix-14",
+      branchHasIssueToken: false,
+    }));
+    expect(notifyFixStarted).toHaveBeenCalledTimes(1);
+    expect(notifyFixStarted).toHaveBeenCalledWith(expect.objectContaining({
+      number: 14,
+      agentId: AGENT,
+      runId: RUN,
+    }));
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,
       title: issue.title,
       url: issue.url,
       status: "finished",
       prUrl: PR,
       summary: `Cursor opened a fix: ${PR}`,
-    });
+    }));
     expect(handle.close).toHaveBeenCalledOnce();
     log.mockRestore();
+  });
+
+  it("reports the observed title when the pull request update fails", async () => {
+    const handle = agentWith(async () => ({
+      id: RUN,
+      status: "finished",
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "cursor/beanbox-fix-14", prUrl: PR }] },
+    }));
+    create.mockResolvedValue(handle);
+    updatePull.mockRejectedValueOnce(new Error("github down"));
+
+    await fixIssue(14);
+
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
+      prTitle: "Checkout total wrong",
+      alignment: "failed",
+      alignmentError: "github_write_failed",
+      titleNonconformance: true,
+    }));
+  });
+
+  it("does not advertise a canonical title when the pull request cannot be read", async () => {
+    const handle = agentWith(async () => ({
+      id: RUN,
+      status: "finished",
+      git: { branches: [{ repoUrl: "https://github.com/acme/beanbox", branch: "cursor/notissue-90x", prUrl: PR }] },
+    }));
+    create.mockResolvedValue(handle);
+    getPullRequest.mockRejectedValueOnce(new Error("not found"));
+
+    await fixIssue(14);
+
+    expect(updatePull).not.toHaveBeenCalled();
+    const reported = notifyFixCompleted.mock.calls.at(-1)?.[0] as { prTitle?: string; alignment?: string; alignmentError?: string; branchHasIssueToken?: boolean };
+    expect(reported.alignment).toBe("failed");
+    expect(reported.alignmentError).toBe("github_read_failed");
+    expect(reported.prTitle).toBeUndefined();
+    expect(reported.branchHasIssueToken).toBe(false);
   });
 
   it("uses the polled PR when wait() returns a false error", async () => {
@@ -191,14 +267,14 @@ describe("fixIssue", () => {
     expect(summary).toContain("No PR was created.");
     expect(summary).not.toContain(API_KEY);
     expect(summary).not.toContain("not_found");
-    expect(notifyFixCompleted).toHaveBeenCalledWith({
+    expect(notifyFixCompleted).toHaveBeenCalledWith(expect.objectContaining({
       number: 14,
       title: issue.title,
       url: issue.url,
       status: "error",
       prUrl: undefined,
       summary,
-    });
+    }));
   });
 
   it("on Vercel publishes when getRun is already finished and does not call wait()", async () => {

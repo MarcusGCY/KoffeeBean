@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { biSessionId, biSource, emitBi, startTurn, trackTurn } from "@/lib/bi-track";
 import { CHAT_TIMEOUT, CHAT_UNAVAILABLE } from "@/lib/chat-response";
+import { CHAT_TOOLS } from "@/lib/chat-tools";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
@@ -83,9 +85,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "unavailable" }, { status: 503 });
   }
 
+  const bi = {
+    sub: shopper.id,
+    source: await biSource(),
+    sessionId: biSessionId(parsed.data.sessionId),
+  };
+  const userMessageChars = turns[turns.length - 1]?.content.length ?? 0;
+
   try {
     const limit = await chatLimiter.check(shopper.id);
     if (!limit.ok) {
+      emitBi(() => trackTurn(bi, { outcome: "rate_limited", userMessageChars, toolIds: [], latencyMs: 0 }));
       return NextResponse.json(
         { error: CHAT_RATE_LIMIT_MESSAGE },
         {
@@ -106,6 +116,12 @@ export async function POST(req: Request) {
   }
 
   const started = Date.now();
+  const turn = startTurn(
+    bi,
+    userMessageChars,
+    CHAT_TOOLS.map((tool) => tool.function.name),
+  );
+  let outcome: "replied" | "timeout" | "error" = "error";
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -130,9 +146,13 @@ export async function POST(req: Request) {
           userId: shopper.id,
           turns,
           signal: controllerAbort.signal,
+          onTool: (name) => turn.tool(name),
           sink: {
             status: (text) => send("status", { text }),
-            products: (products) => send("products", { products }),
+            products: (products) => {
+              const recommendationId = turn.shownProducts(products.map((product) => product.id));
+              send("products", { products, recommendationId });
+            },
             text: (delta) => send("text", { delta }),
             confirm: (card) => send("confirm", card),
             order: (order) => send("order", order),
@@ -140,11 +160,13 @@ export async function POST(req: Request) {
           },
         });
         if (result.ok) {
+          outcome = "replied";
           console.log(scrubSecrets(chatOkLine(Date.now() - started, result.reply.length, result.model, result)));
           send("done", { suggestions: result.suggestions });
         }
       } catch (err) {
         if (controllerAbort.signal.aborted) {
+          outcome = "timeout";
           console.error("[chat] timeout");
           send("error", { message: CHAT_TIMEOUT, retry: true });
         } else if (err instanceof StoreUnavailableError) {
@@ -155,6 +177,7 @@ export async function POST(req: Request) {
           send("error", { message: failure.status === 504 ? CHAT_TIMEOUT : CHAT_UNAVAILABLE, retry: true });
         }
       } finally {
+        turn.finish(outcome);
         clearInterval(heartbeat);
         clearTimeout(timer);
         if (!closed) {

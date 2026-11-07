@@ -48,6 +48,8 @@ export function SupportChat() {
   const [usual, setUsual] = useState<Usual>(null);
   const [added, setAdded] = useState<Record<string, boolean>>({});
   const generation = useRef(0);
+  const sessionId = useRef<string | null>(null);
+  const recommendations = useRef<Record<string, string>>({});
 
   useEffect(() => {
     const current = generation;
@@ -92,6 +94,7 @@ export function SupportChat() {
     const userEntry: Entry = { role: "user", content: text };
     const nextEntries = [...entries, userEntry].slice(-HISTORY);
     const mine = ++generation.current;
+    sessionId.current ??= `chat_${crypto.randomUUID()}`;
     setEntries(nextEntries);
     setDraft("");
     setNotice(null);
@@ -104,7 +107,7 @@ export function SupportChat() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages: history(nextEntries) }),
+        body: JSON.stringify({ messages: history(nextEntries), sessionId: sessionId.current }),
       });
       if (generation.current !== mine) return;
       const type = res.headers.get("content-type") ?? "";
@@ -125,7 +128,8 @@ export function SupportChat() {
               })),
             );
           },
-          onProducts: (products) => {
+          onProducts: (products, recommendationId) => {
+            if (recommendationId) for (const product of products) recommendations.current[product.id] = recommendationId;
             setEntries((current) =>
               withAssistant(current, mine, "", products, null, (entry) => ({ ...entry, products })),
             );
@@ -214,7 +218,7 @@ export function SupportChat() {
       const res = await fetch("/api/cart/items", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ productId: id }),
+        body: JSON.stringify({ productId: id, recommendationId: recommendations.current[id] }),
       });
       const body = (await res.json().catch(() => null)) as { items?: { productId?: string }[] } | null;
       const saved = res.ok && (body?.items ?? []).some((item) => item.productId === id);
@@ -235,7 +239,7 @@ export function SupportChat() {
       const res = await fetch("/api/cart/items", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ productId: id }),
+        body: JSON.stringify({ productId: id, recommendationId: recommendations.current[id] }),
       });
       if (!res.ok) {
         setNotice("That item wasn't removed.");
@@ -464,7 +468,7 @@ async function readJson(res: Response): Promise<{ error?: unknown } | null> {
 type Handlers = {
   onStatus: (text: string) => void;
   onText: (delta: string) => void;
-  onProducts: (products: ProductCard[]) => void;
+  onProducts: (products: ProductCard[], recommendationId?: string) => void;
   onOrder: (order: OrderCard) => void;
   onConfirm: (card: PendingAction) => void;
   onDone: (suggestions: string[]) => void;
@@ -483,7 +487,10 @@ function applyEvent(event: SseEvent, handlers: Handlers) {
   }
   if (event.event === "status" && typeof data.text === "string") handlers.onStatus(data.text);
   if (event.event === "text" && typeof data.delta === "string") handlers.onText(data.delta);
-  if (event.event === "products" && Array.isArray(data.products)) handlers.onProducts(cardsFrom(data.products));
+  if (event.event === "products" && Array.isArray(data.products)) {
+    const recommendationId = typeof data.recommendationId === "string" ? data.recommendationId : undefined;
+    handlers.onProducts(cardsFrom(data.products), recommendationId);
+  }
   if (event.event === "order") {
     const order = orderFrom(data);
     if (order) handlers.onOrder(order);

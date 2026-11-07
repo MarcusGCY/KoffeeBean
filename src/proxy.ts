@@ -18,8 +18,15 @@ function isDemoSurface(pathname: string): boolean {
   return pathname === "/admin/demo" || pathname.startsWith("/admin/demo/") || pathname.startsWith("/api/demo/");
 }
 
+function isOwnerSurface(pathname: string): boolean {
+  return isDemoSurface(pathname)
+    || pathname === "/admin/quality"
+    || pathname.startsWith("/admin/quality/")
+    || pathname === "/api/quality/audit";
+}
+
 export async function proxy(request: NextRequest) {
-  const demo = isDemoSurface(request.nextUrl.pathname);
+  const demo = isOwnerSurface(request.nextUrl.pathname);
   // Signed revert/reset grants are checked in the route. They have no Auth0 session.
   const signedPost = request.method === "POST" && request.nextUrl.pathname.startsWith("/api/demo/");
 

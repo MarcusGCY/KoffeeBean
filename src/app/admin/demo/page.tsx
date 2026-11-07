@@ -15,7 +15,7 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
-const FLASHES = new Set(["reverted", "already", "reset", "reset-already", "conflict", "error"]);
+const FLASHES = new Set(["reverted", "already", "reset", "reset-already", "conflict", "error", "bi-seeded", "bi-error"]);
 
 export default async function DemoPage({
   searchParams,
@@ -59,12 +59,16 @@ export default async function DemoPage({
           Revert a merged Cursor fix so the shop bug comes back after Vercel redeploys main.
           The feedback issue is closed and labeled <code className="font-mono">demo-reverted</code>,
           so the next report opens a fresh issue.
+          {" "}
+          <a className="font-medium text-amber-900 underline" href="/admin/quality">Quality audit</a>
+          {" "}
+          reads one issue&apos;s trail.
         </p>
 
         {notice && (
           <p
             className={`mt-4 rounded-lg border px-4 py-3 text-sm leading-relaxed ${
-              notice.flash === "conflict" || notice.flash === "error"
+              notice.flash === "conflict" || notice.flash === "error" || notice.flash === "bi-error"
                 ? "border-red-200 bg-red-50 text-red-950"
                 : "border-green-200 bg-green-50 text-green-950"
             }`}
@@ -102,6 +106,27 @@ export default async function DemoPage({
               fields={csrf ? { csrf } : {}}
               label="Reset all demo bugs"
               confirm="Restore the three planted demo bugs on main?"
+              disabled={!csrf}
+              tone="neutral"
+            />
+          </div>
+        </section>
+
+        <section className="mt-8 rounded-xl border border-stone-200 bg-white p-5">
+          <h2 className="text-lg font-semibold">Seed BI demo story</h2>
+          <p className="mt-1 text-sm leading-relaxed text-stone-600">
+            Replaces the synthetic cancellation-spike story in the BI event store with fresh rows, all
+            marked <code className="font-mono">source=demo</code>: a calm week, then 12 BEANS20 Roast Day
+            T-Shirt orders with 8 cancelled. Analytics rows only. Orders and carts stay in Auth0, and{" "}
+            <code className="font-mono">live</code> rows are never touched. View it with{" "}
+            <code className="font-mono">/api/bi/summary?source=demo</code>.
+          </p>
+          <div className="mt-4">
+            <DemoPostForm
+              action="/api/demo/bi-seed"
+              fields={csrf ? { csrf } : {}}
+              label="Seed BI demo story"
+              confirm="Write synthetic source=demo rows to the BI event store? Live rows are not touched."
               disabled={!csrf}
               tone="neutral"
             />
