@@ -251,7 +251,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
               value={code}
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Escape") {
+                if (e.key === "Enter") {
                   e.preventDefault();
                   void syncCoupon();
                 }
