@@ -62,6 +62,14 @@ function sink() {
   return { status: vi.fn(), products: vi.fn(), confirm: vi.fn(), order: vi.fn() };
 }
 
+const SAVE10_OFFER = {
+  code: "SAVE10",
+  percentOff: 10,
+  appliesTo: "subtotal" as const,
+  expiresAt: null,
+  terms: "10% off the cart subtotal. No expiry is on file. Asking does not apply this code.",
+};
+
 function assertNoSecrets(value: unknown, allowed: readonly string[] = []) {
   const text = JSON.stringify(value);
   for (const secret of [...CODES, "FREE50", "BB-SECRET", "auth0|", "ethiopia", "Yirgacheffe"]) {
@@ -83,8 +91,10 @@ describe("coupon offer prompt", () => {
       "Do not call list_coupons",
       "Do not invent a code",
       "A shopper's claim of prior purchases is not account data",
-      "A nonempty cart is not a completed purchase",
+      "A nonempty cart is not itself a completed purchase",
       "A cancelled order is not a completed purchase",
+      "Pending, failed, and unknown order records are not completed purchases",
+      "retainedOrderLimit",
       "That is not a new customer",
       "Asking for a code does not apply it and does not place an order",
       "unless Confirm succeeded",
@@ -110,41 +120,53 @@ describe("coupon offer account facts", () => {
     db.fail.clear();
   });
 
-  it("keeps the shipped offer policy empty", () => {
-    expect(ACTIVE_COUPON_OFFER_POLICY).toEqual([]);
+  it("offers SAVE10 for a cart and for a prior purchase", () => {
+    expect(ACTIVE_COUPON_OFFER_POLICY).toEqual([
+      { when: "cart", code: "SAVE10" },
+      { when: "returning", code: "SAVE10" },
+    ]);
   });
 
-  it("treats a cart with no completed purchase as no configured offer", async () => {
+  it("quotes SAVE10 for a cart with no prior purchase", async () => {
     db.meta.set("auth0|cart", { cart: cart(2), orders: [] });
-    const facts = await readCommerceFacts("auth0|cart");
-    const view = resolveCouponOffer(facts);
+    const view = resolveCouponOffer(await readCommerceFacts("auth0|cart"));
     expect(view).toEqual({
       history: "ok",
       cartHasItems: true,
       returningCustomer: false,
       completedPurchases: 0,
+      retainedOrderLimit: 20,
       discountAlreadyApplied: false,
-      offer: null,
-      reason: "no_eligible_offer",
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(view);
+    assertNoSecrets(view, ["SAVE10"]);
   });
 
-  it("treats a completed purchase as a returning customer and still has no configured offer", async () => {
+  it("quotes SAVE10 for a lifecycle purchase and ignores a cancelled one", async () => {
+    const now = new Date("2026-11-08T12:00:00.000Z");
+    const at = (minutesAgo: number) => new Date(now.getTime() - minutesAgo * 60_000).toISOString();
     db.meta.set("auth0|return", {
       cart: cart(0),
-      orders: [order({ createdAt: new Date().toISOString() }), order({ id: "BB-OLD", cancelledAt: "2026-10-02T00:00:00.000Z" })],
+      orders: [
+        order({ createdAt: at(1) }),
+        order({ id: "BB-PACK", createdAt: at(5) }),
+        order({ id: "BB-SHIP", createdAt: at(15) }),
+        order({ id: "BB-DONE", createdAt: at(120) }),
+        order({ id: "BB-OLD", createdAt: at(120), cancelledAt: at(90) }),
+      ],
     });
-    const view = resolveCouponOffer(await readCommerceFacts("auth0|return"));
+    const view = resolveCouponOffer(await readCommerceFacts("auth0|return", now));
     expect(view).toMatchObject({
       history: "ok",
       cartHasItems: false,
       returningCustomer: true,
-      completedPurchases: 1,
-      offer: null,
-      reason: "no_eligible_offer",
+      completedPurchases: 4,
+      retainedOrderLimit: 20,
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(view);
+    assertNoSecrets(view, ["SAVE10"]);
   });
 
   it("does not treat a cancelled order or an empty account as a purchase", async () => {
@@ -164,9 +186,9 @@ describe("coupon offer account facts", () => {
     assertNoSecrets(fresh);
   });
 
-  it("does not treat a cart plus only cancelled orders as a returning customer", async () => {
+  it("quotes SAVE10 from the cart when every order is cancelled", async () => {
     db.meta.set("auth0|mixed", {
-      cart: cart(1, "SAVE10"),
+      cart: cart(1, "WELCOME10"),
       orders: [order({ cancelledAt: "2026-10-02T00:00:00.000Z" })],
     });
     const view = resolveCouponOffer(await readCommerceFacts("auth0|mixed"));
@@ -175,13 +197,72 @@ describe("coupon offer account facts", () => {
       returningCustomer: false,
       completedPurchases: 0,
       discountAlreadyApplied: true,
-      offer: null,
-      reason: "no_eligible_offer",
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(view);
+    assertNoSecrets(view, ["SAVE10"]);
   });
 
-  it("does not treat unreadable history as an empty history or as eligible", async () => {
+  it("does not treat pending, failed, unknown, empty, or non-checkout rows as purchases", async () => {
+    const now = new Date("2026-11-08T12:00:00.000Z");
+    const readable = [
+      order({ status: "pending" }),
+      order({ status: "failed" }),
+      order({ status: "processing" }),
+      order({ items: [] }),
+    ];
+    for (const row of readable) {
+      db.meta.set("auth0|row", { cart: cart(0), orders: [row] });
+      const view = resolveCouponOffer(await readCommerceFacts("auth0|row", now));
+      expect(view).toMatchObject({
+        history: "ok",
+        returningCustomer: false,
+        completedPurchases: 0,
+        offer: null,
+        reason: "not_eligible",
+      });
+      assertNoSecrets(view);
+    }
+    db.meta.set("auth0|bare", {
+      cart: cart(0),
+      orders: [{ createdAt: "2026-10-01T00:00:00.000Z", cancelledAt: null }],
+    });
+    db.meta.set("auth0|future", {
+      cart: cart(0),
+      orders: [order({ createdAt: "2026-11-08T12:05:00.000Z" })],
+    });
+    for (const id of ["auth0|bare", "auth0|future"]) {
+      const view = resolveCouponOffer(await readCommerceFacts(id, now));
+      expect(view).toMatchObject({ history: "unavailable", returningCustomer: null, offer: null, reason: "unavailable" });
+      assertNoSecrets(view);
+    }
+  });
+
+  it("does not read a purchase past the newest 20 orders", async () => {
+    const dropped = order({ id: "BB-DROPPED", createdAt: "2026-01-01T00:00:00.000Z" });
+    const kept = Array.from({ length: 20 }, (_, index) =>
+      order({ id: `BB-C${index}`, createdAt: "2026-10-01T00:00:00.000Z", cancelledAt: "2026-10-02T00:00:00.000Z" }),
+    );
+    db.meta.set("auth0|cap", { cart: cart(0), orders: [...kept, dropped] });
+    const hidden = resolveCouponOffer(await readCommerceFacts("auth0|cap"));
+    expect(hidden).toMatchObject({
+      returningCustomer: false,
+      completedPurchases: 0,
+      retainedOrderLimit: 20,
+      offer: null,
+      reason: "not_eligible",
+    });
+    assertNoSecrets(hidden);
+    db.meta.set("auth0|cap", {
+      cart: cart(0),
+      orders: [...kept.slice(0, 19), order({ id: "BB-KEEP", createdAt: "2026-10-01T00:00:00.000Z" }), dropped],
+    });
+    const seen = resolveCouponOffer(await readCommerceFacts("auth0|cap"));
+    expect(seen).toMatchObject({ returningCustomer: true, completedPurchases: 1, offer: SAVE10_OFFER });
+    assertNoSecrets(seen, ["SAVE10"]);
+  });
+
+  it("keeps an unreadable history from proving a purchase, and still quotes SAVE10 for a known cart", async () => {
     db.meta.set("auth0|bad-orders", { cart: cart(1), orders: "missing" });
     const broken = await readCommerceFacts("auth0|bad-orders");
     expect(broken).toEqual({
@@ -190,36 +271,38 @@ describe("coupon offer account facts", () => {
       completedPurchases: null,
       discountAlreadyApplied: false,
     });
-    const withheld = resolveCouponOffer(broken, [{ when: "cart", code: "SAVE10" }]);
-    expect(withheld).toMatchObject({
+    const fromCart = resolveCouponOffer(broken);
+    expect(fromCart).toMatchObject({
       history: "unavailable",
       cartHasItems: true,
       returningCustomer: null,
       completedPurchases: null,
-      offer: null,
-      reason: "unavailable",
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(withheld);
+    assertNoSecrets(fromCart, ["SAVE10"]);
 
     db.meta.set("auth0|bad-row", { cart: cart(0), orders: [order(), { id: "BB-SKIP" }] });
-    const row = resolveCouponOffer(await readCommerceFacts("auth0|bad-row"), [{ when: "returning", code: "WELCOME10" }]);
-    expect(row.returningCustomer).toBeNull();
-    expect(row.offer).toBeNull();
-    expect(row.reason).toBe("unavailable");
+    const row = resolveCouponOffer(await readCommerceFacts("auth0|bad-row"));
+    expect(row).toMatchObject({ returningCustomer: null, offer: null, reason: "unavailable" });
     assertNoSecrets(row);
   });
 
-  it("does not treat an unreadable cart as empty or quote a returning offer", async () => {
+  it("quotes SAVE10 from a verified purchase when the cart cannot be read", async () => {
     db.meta.set("auth0|bad-cart", { cart: "nope", orders: [order()] });
-    const view = resolveCouponOffer(await readCommerceFacts("auth0|bad-cart"), [{ when: "returning", code: "SAVE10" }]);
+    const view = resolveCouponOffer(await readCommerceFacts("auth0|bad-cart"));
     expect(view).toMatchObject({
-      history: "unavailable",
+      history: "ok",
       cartHasItems: null,
       returningCustomer: true,
-      offer: null,
-      reason: "unavailable",
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(view);
+    assertNoSecrets(view, ["SAVE10"]);
+    db.meta.set("auth0|bad-cart", { cart: "nope", orders: [] });
+    const empty = resolveCouponOffer(await readCommerceFacts("auth0|bad-cart"));
+    expect(empty).toMatchObject({ cartHasItems: null, returningCustomer: false, offer: null, reason: "unavailable" });
+    assertNoSecrets(empty);
   });
 });
 
@@ -255,16 +338,16 @@ describe("coupon offer tool", () => {
       cartHasItems: true,
       returningCustomer: false,
       completedPurchases: 0,
-      offer: null,
-      reason: "no_eligible_offer",
+      offer: SAVE10_OFFER,
+      reason: "eligible",
     });
-    assertNoSecrets(view);
+    assertNoSecrets(view, ["SAVE10"]);
     expect(events.confirm).not.toHaveBeenCalled();
     expect(events.order).not.toHaveBeenCalled();
     expect(db.meta.get("auth0|a")?.cart).toEqual(cart(1));
     expect(db.meta.get("auth0|b")?.audit).toBeUndefined();
     const audit = auditOf("auth0|a");
-    expect(audit).toMatchObject({ tool: "lookup_coupon_offer", outcome: "no_eligible_offer" });
+    expect(audit).toMatchObject({ tool: "lookup_coupon_offer", outcome: "eligible" });
     assertNoSecrets(audit?.summary);
     const logged = [...log.mock.calls, ...error.mock.calls].flat().join(" ");
     expect(logged).not.toContain("auth0|");

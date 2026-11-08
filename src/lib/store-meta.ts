@@ -1,7 +1,7 @@
 import type { CartItem } from "./types";
 import { addItem, getProduct, removeItem, total } from "./cart";
 import { checkout, type Order } from "./checkout";
-import type { CommerceFacts } from "./coupon-offer";
+import { ORDER_HISTORY_LIMIT, type CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
@@ -19,7 +19,7 @@ import type { CartSnapshot, OrderDetail, OrderSummary } from "./store-types";
  * Keys: `cart`, `orders` (newest 20), `chat_limits`, `audit` (newest 50).
  */
 
-const ORDER_CAP = 20;
+const ORDER_CAP = ORDER_HISTORY_LIMIT;
 const AUDIT_CAP = 50;
 
 type StoredItem = { productId: string; name: string; unitPriceCents: number; qty: number };
@@ -186,19 +186,65 @@ function cartFacts(meta: Record<string, unknown>): { ok: true; itemCount: number
   return { ok: true, itemCount: rows.length, discountAlreadyApplied };
 }
 
-function purchaseFacts(meta: Record<string, unknown>): { ok: true; completedPurchases: number } | { ok: false } {
+const PURCHASE_STATUSES = new Set(["placed", "packed", "shipped", "delivered"]);
+
+/**
+ * A prior purchase is a stored checkout on the demo lifecycle.
+ * `placed`, `packed`, `shipped`, and `delivered` count. `cancelled` does not.
+ * An explicit `pending`, `failed`, or other status is not a purchase.
+ * A row that is not a checkout record makes the list unreadable.
+ * Only the newest `ORDER_CAP` rows are read.
+ */
+function classifyOrderRow(row: unknown, now: Date): "purchase" | "not_purchase" | "unreadable" {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return "unreadable";
+  const record = row as Record<string, unknown>;
+  if ("status" in record) {
+    if (typeof record.status !== "string") return "unreadable";
+    if (record.status === "pending" || record.status === "failed" || record.status === "cancelled") return "not_purchase";
+    if (!PURCHASE_STATUSES.has(record.status)) return "not_purchase";
+  }
+  if (typeof record.id !== "string" || record.id.trim() === "") return "unreadable";
+  if (typeof record.createdAt !== "string") return "unreadable";
+  const createdAt = new Date(record.createdAt);
+  if (Number.isNaN(createdAt.getTime()) || createdAt.getTime() > now.getTime()) return "unreadable";
+  const subtotalCents = finite(record.subtotalCents);
+  const discountCents = finite(record.discountCents);
+  const taxCents = finite(record.taxCents);
+  const totalCents = finite(record.totalCents);
+  if (subtotalCents == null || discountCents == null || taxCents == null || totalCents == null) return "unreadable";
+  if (subtotalCents < 0 || discountCents < 0 || taxCents < 0 || totalCents < 0) return "unreadable";
+  if (!Array.isArray(record.items)) return "unreadable";
+  if (record.items.length === 0) return "not_purchase";
+  for (const item of record.items) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return "unreadable";
+    const line = item as Record<string, unknown>;
+    const unitPriceCents = finite(line.unitPriceCents);
+    const qty = finite(line.qty);
+    if (typeof line.productId !== "string" || !line.productId) return "unreadable";
+    if (typeof line.name !== "string" || !line.name) return "unreadable";
+    if (unitPriceCents == null || unitPriceCents < 0 || qty == null || !validQty(qty)) return "unreadable";
+  }
+  let cancelledAt: Date | null = null;
+  if (record.cancelledAt != null) {
+    if (typeof record.cancelledAt !== "string") return "unreadable";
+    cancelledAt = new Date(record.cancelledAt);
+    if (Number.isNaN(cancelledAt.getTime())) return "unreadable";
+  }
+  const derived = orderStatus(createdAt, cancelledAt, now);
+  if ("status" in record && record.status !== derived) return "unreadable";
+  if (derived === "cancelled") return "not_purchase";
+  if (PURCHASE_STATUSES.has(derived)) return "purchase";
+  return "unreadable";
+}
+
+function purchaseFacts(meta: Record<string, unknown>, now: Date): { ok: true; completedPurchases: number } | { ok: false } {
   if (!Object.hasOwn(meta, "orders") || meta.orders == null) return { ok: true, completedPurchases: 0 };
   if (!Array.isArray(meta.orders)) return { ok: false };
   let completedPurchases = 0;
-  for (const row of meta.orders) {
-    if (!row || typeof row !== "object" || Array.isArray(row)) return { ok: false };
-    const record = row as { createdAt?: unknown; cancelledAt?: unknown };
-    if (typeof record.createdAt !== "string" || Number.isNaN(new Date(record.createdAt).getTime())) return { ok: false };
-    if (record.cancelledAt == null) {
-      completedPurchases += 1;
-      continue;
-    }
-    if (typeof record.cancelledAt !== "string" || Number.isNaN(new Date(record.cancelledAt).getTime())) return { ok: false };
+  for (const row of meta.orders.slice(0, ORDER_CAP)) {
+    const kind = classifyOrderRow(row, now);
+    if (kind === "unreadable") return { ok: false };
+    if (kind === "purchase") completedPurchases += 1;
   }
   return { ok: true, completedPurchases };
 }
@@ -208,10 +254,10 @@ function purchaseFacts(meta: Record<string, unknown>): { ok: true; completedPurc
  * A missing cart or orders key is an empty account. A value that cannot be
  * classified is unreadable and is not reported as zero. Orders are not returned.
  */
-export async function readCommerceFacts(userId: string): Promise<CommerceFacts> {
+export async function readCommerceFacts(userId: string, now = new Date()): Promise<CommerceFacts> {
   const meta = await getAppMetadata(userId);
   const cart = cartFacts(meta);
-  const purchases = purchaseFacts(meta);
+  const purchases = purchaseFacts(meta, now);
   if (!cart.ok || !purchases.ok) {
     return {
       ok: false,

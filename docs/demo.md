@@ -4,7 +4,7 @@ Sign in first. The shop is at `/`. Support is the button at the bottom left.
 
 1. **Open Support.** Signed-in shoppers with a past order see "Your usual" with **Reorder** and **Change**. Reorder shows **Confirm**. The cart does not change until Confirm. Guests do not see the card.
 2. **Ask.** Try "Something fruity". The reply streams, with a status line while the catalog is searched. Up to three product cards show the photo, name, price, and blurb from the catalog. **Add** calls the cart API. It becomes "Added ✓ · Undo".
-3. **Coupon.** Type `Please apply SAVE10` in the chat and ask to apply it. Press **Confirm**. Asking for a discount does not apply a code. No cart or returning-customer offer is configured, so the bot does not tell you a code. It only applies a code you typed.
+3. **Coupon.** Ask for a discount with something in the cart, or after a past order. The bot can tell you `SAVE10`: 10% off the subtotal, no expiry. It does not apply the code. Type `Please apply SAVE10` and press **Confirm**. A cancelled order does not count. Only the newest 20 orders are kept.
 4. **Checkout and reports.** Place, cancel, and report from the shop buttons. Those are not chat tools. Confirm still checks a signed action before any chat write.
 
 Prices in the chat come from the catalogue. More than 20 chats an hour or 60 a day returns a short "try again" message.

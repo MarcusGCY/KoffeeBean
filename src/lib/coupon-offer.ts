@@ -12,12 +12,20 @@ export type CommerceFacts =
 export type CouponOfferRule = { when: "cart" | "returning"; code: string };
 
 /**
- * Which existing code may be quoted for a cart or a returning customer.
- * Empty on purpose. SAVE10 (10%), BEANS20 (20%), and WELCOME10 (10%) are valid
- * typed codes with no expiry and no cart or purchase rule. Choosing one to
- * quote is a business decision this file does not make.
+ * Newest orders kept on the shopper's Auth0 `orders` key. `placeOrder` drops
+ * anything older. A purchase past this window is not visible and is not proof
+ * that the shopper has no prior purchase.
  */
-export const ACTIVE_COUPON_OFFER_POLICY: readonly CouponOfferRule[] = Object.freeze([]);
+export const ORDER_HISTORY_LIMIT = 20;
+
+/**
+ * SAVE10 for a nonempty cart or a verified prior purchase. The percent, the
+ * subtotal base, and the lack of an expiry come from the catalog entry.
+ */
+export const ACTIVE_COUPON_OFFER_POLICY: readonly CouponOfferRule[] = Object.freeze([
+  { when: "cart", code: "SAVE10" },
+  { when: "returning", code: "SAVE10" },
+]);
 
 export type QuotedCoupon = {
   code: string;
@@ -32,6 +40,8 @@ export type CouponOfferView = {
   cartHasItems: boolean | null;
   returningCustomer: boolean | null;
   completedPurchases: number | null;
+  /** Newest orders still stored. Older checkouts are outside this window. */
+  retainedOrderLimit: number;
   discountAlreadyApplied: boolean | null;
   offer: QuotedCoupon | null;
   reason: "eligible" | "not_eligible" | "no_eligible_offer" | "unavailable";
@@ -68,20 +78,25 @@ export function resolveCouponOffer(
 ): CouponOfferView {
   const cartHasItems = facts.cartItemCount == null ? null : facts.cartItemCount > 0;
   const returningCustomer = facts.completedPurchases == null ? null : facts.completedPurchases > 0;
+  const history: CouponOfferView["history"] = facts.completedPurchases == null ? "unavailable" : "ok";
   const base = {
+    history,
     cartHasItems,
     returningCustomer,
     completedPurchases: facts.completedPurchases,
+    retainedOrderLimit: ORDER_HISTORY_LIMIT,
     discountAlreadyApplied: facts.discountAlreadyApplied,
   };
-  if (!facts.ok || cartHasItems == null || returningCustomer == null) {
-    return { history: "unavailable", ...base, offer: null, reason: "unavailable" };
+  const cartQualifies = cartHasItems === true;
+  const purchaseQualifies = returningCustomer === true;
+  if (!cartQualifies && !purchaseQualifies) {
+    if (cartHasItems == null || returningCustomer == null) return { ...base, offer: null, reason: "unavailable" };
+    return { ...base, offer: null, reason: "not_eligible" };
   }
-  if (!cartHasItems && !returningCustomer) {
-    return { history: "ok", ...base, offer: null, reason: "not_eligible" };
-  }
-  const matched = policy.filter((rule) => (rule.when === "cart" && cartHasItems) || (rule.when === "returning" && returningCustomer));
+  const matched = policy.filter(
+    (rule) => (rule.when === "cart" && cartQualifies) || (rule.when === "returning" && purchaseQualifies),
+  );
   const offer = quote(matched);
-  if (!offer) return { history: "ok", ...base, offer: null, reason: "no_eligible_offer" };
-  return { history: "ok", ...base, offer, reason: "eligible" };
+  if (!offer) return { ...base, offer: null, reason: "no_eligible_offer" };
+  return { ...base, offer, reason: "eligible" };
 }

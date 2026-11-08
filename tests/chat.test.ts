@@ -434,7 +434,7 @@ describe("POST /api/chat", () => {
             },
           ]);
         }
-        return xaiReply("No offer is available for this account.");
+        return xaiReply("SAVE10 is 10% off the subtotal. No expiry is on file.");
       }),
     );
     const raw = await (
@@ -443,9 +443,9 @@ describe("POST /api/chat", () => {
       })
     ).text();
     expect(raw).not.toContain("BEANS20");
-    expect(raw).not.toContain("SAVE10");
     expect(raw).not.toContain("WELCOME10");
     expect(raw).not.toContain("auth0|other");
+    expect(raw).not.toContain("BB-1");
     const first = JSON.parse(seen[0]?.body ?? "{}") as {
       messages?: { role: string; content?: string }[];
       tools?: { function: { name: string } }[];
@@ -463,14 +463,22 @@ describe("POST /api/chat", () => {
       cartHasItems: true,
       returningCustomer: false,
       completedPurchases: 0,
+      retainedOrderLimit: 20,
       discountAlreadyApplied: true,
-      offer: null,
-      reason: "no_eligible_offer",
+      offer: {
+        code: "SAVE10",
+        percentOff: 10,
+        appliesTo: "subtotal",
+        expiresAt: null,
+        terms: "10% off the cart subtotal. No expiry is on file. Asking does not apply this code.",
+      },
+      reason: "eligible",
     });
-    expect(tool?.content).not.toContain("SAVE10");
+    expect(tool?.content).not.toContain("BEANS20");
+    expect(tool?.content).not.toContain("minimum");
     expect(bags.meta.get("auth0|offer")?.cart).toEqual({ items: [{ productId: "mug", qty: 1 }], coupon: "SAVE10" });
     const events = eventsOf(raw);
-    expect(textOf(events)).toBe("No offer is available for this account.");
+    expect(textOf(events)).toBe("SAVE10 is 10% off the subtotal. No expiry is on file.");
     expect(events.some((event) => event.event === "confirm")).toBe(false);
   });
 
