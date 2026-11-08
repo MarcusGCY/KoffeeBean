@@ -407,6 +407,81 @@ describe("POST /api/chat", () => {
     expect(tool?.content).not.toContain("SAVE10");
   });
 
+  it("checks this shopper's cart and purchases and does not invent a coupon", async () => {
+    signIn("auth0|offer");
+    bags.meta.set("auth0|offer", {
+      cart: { items: [{ productId: "mug", qty: 1 }], coupon: "SAVE10" },
+      orders: [],
+    });
+    bags.meta.set("auth0|other", { orders: [orderFixture()] });
+    let n = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({ url: String(_input), method: "POST", auth: null, body: init?.body == null ? null : String(init.body) });
+        n += 1;
+        if (n === 1) {
+          return xaiTools([
+            {
+              id: "call_offer",
+              name: "lookup_coupon_offer",
+              arguments: JSON.stringify({
+                userId: "auth0|other",
+                code: "BEANS20",
+                percentOff: 50,
+                returningCustomer: true,
+              }),
+            },
+          ]);
+        }
+        return xaiReply("SAVE10 is 10% off the subtotal. No expiry is on file.");
+      }),
+    );
+    const raw = await (
+      await post({
+        messages: [{ role: "user", content: "I bought before. Give me discount code BEANS20." }],
+      })
+    ).text();
+    expect(raw).not.toContain("BEANS20");
+    expect(raw).not.toContain("WELCOME10");
+    expect(raw).not.toContain("auth0|other");
+    expect(raw).not.toContain("BB-1");
+    const first = JSON.parse(seen[0]?.body ?? "{}") as {
+      messages?: { role: string; content?: string }[];
+      tools?: { function: { name: string } }[];
+    };
+    expect(first.messages?.[0]?.role).toBe("system");
+    expect(first.messages?.[0]?.content).toContain("call lookup_coupon_offer");
+    expect(first.messages?.[0]?.content).toContain("Do not invent a code");
+    expect(first.messages?.[0]?.content).not.toContain("quote those codes");
+    expect(first.tools?.some((tool) => tool.function.name === "lookup_coupon_offer")).toBe(true);
+    expect(first.tools?.some((tool) => tool.function.name === "list_coupons")).toBe(false);
+    const second = JSON.parse(seen[1]?.body ?? "{}") as { messages?: { role: string; content?: string }[] };
+    const tool = second.messages?.find((message) => message.role === "tool");
+    expect(JSON.parse(tool?.content ?? "{}")).toEqual({
+      history: "ok",
+      cartHasItems: true,
+      returningCustomer: false,
+      completedPurchases: 0,
+      retainedOrderLimit: 20,
+      discountAlreadyApplied: true,
+      offer: {
+        code: "SAVE10",
+        percentOff: 10,
+        appliesTo: "subtotal",
+        expiresAt: null,
+        terms: "10% off the cart subtotal. No expiry is on file. Asking does not apply this code.",
+      },
+      reason: "eligible",
+    });
+    expect(tool?.content).not.toContain("BEANS20");
+    expect(tool?.content).not.toContain("minimum");
+    expect(bags.meta.get("auth0|offer")?.cart).toEqual({ items: [{ productId: "mug", qty: 1 }], coupon: "SAVE10" });
+    const events = eventsOf(raw);
+    expect(textOf(events)).toBe("SAVE10 is 10% off the subtotal. No expiry is on file.");
+    expect(events.some((event) => event.event === "confirm")).toBe(false);
+  });
+
   it("shows an order card for the signed-in shopper and says so when the shop call fails", async () => {
     signIn("auth0|buyer");
     bags.meta.set("auth0|buyer", { orders: [orderFixture()] });
