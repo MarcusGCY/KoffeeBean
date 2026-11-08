@@ -232,7 +232,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
             {cart.items.map((item) => (
               <li key={item.productId} className="flex items-center justify-between text-sm">
                 <span>
-                  {getProduct(item.productId)?.name ?? item.productId} × {item.qty + 1}
+                  {getProduct(item.productId)?.name ?? item.productId} × {item.qty}
                 </span>
                 <button
                   type="button"
