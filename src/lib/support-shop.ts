@@ -1,7 +1,8 @@
 import products from "@/data/products.json";
 import { loadFaq } from "@/lib/faq";
+import { resolveCouponOffer, type CouponOfferView } from "@/lib/coupon-offer";
 import { proposeAction } from "@/lib/pending-action";
-import { getCart, getOrder, listOrders, recordAudit } from "@/lib/store-meta";
+import { getCart, getOrder, listOrders, readCommerceFacts, recordAudit } from "@/lib/store-meta";
 
 export type Principal = { principalId?: string } | null | undefined;
 
@@ -56,6 +57,25 @@ export async function viewCart(auth: Principal, input: ToolInput) {
     };
   } catch {
     return { error: "shop_unavailable" };
+  }
+}
+
+function offerAudit(view: CouponOfferView): string {
+  const cart = view.cartHasItems == null ? "unknown" : view.cartHasItems ? "yes" : "no";
+  const returning = view.returningCustomer == null ? "unknown" : view.returningCustomer ? "yes" : "no";
+  const completed = view.completedPurchases == null ? "unknown" : String(view.completedPurchases);
+  return `cart=${cart} returning=${returning} completed=${completed} reason=${view.reason}`;
+}
+
+/** Reads this shopper's cart and completed purchases. Does not apply a coupon. */
+export async function lookupCouponOffer(auth: Principal, input: ToolInput) {
+  const userId = customerId(auth, input);
+  try {
+    const view = resolveCouponOffer(await readCommerceFacts(userId));
+    await note(userId, "lookup_coupon_offer", offerAudit(view), view.reason);
+    return view;
+  } catch {
+    return { error: "shop_unavailable" as const };
   }
 }
 

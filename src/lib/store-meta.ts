@@ -1,6 +1,7 @@
 import type { CartItem } from "./types";
 import { addItem, getProduct, removeItem, total } from "./cart";
 import { checkout, type Order } from "./checkout";
+import type { CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
@@ -165,6 +166,66 @@ async function consume(meta: Record<string, unknown>, kind: "cartWrites" | "orde
 export async function getCart(userId: string): Promise<CartSnapshot> {
   const cart = readCart(await getAppMetadata(userId));
   return snapshot(cart.items, cart.coupon);
+}
+
+function cartFacts(meta: Record<string, unknown>): { ok: true; itemCount: number; discountAlreadyApplied: boolean } | { ok: false } {
+  if (!Object.hasOwn(meta, "cart") || meta.cart == null) return { ok: true, itemCount: 0, discountAlreadyApplied: false };
+  const cart = meta.cart;
+  if (typeof cart !== "object" || Array.isArray(cart)) return { ok: false };
+  const record = cart as { items?: unknown; coupon?: unknown };
+  if (record.items != null && !Array.isArray(record.items)) return { ok: false };
+  const rows = Array.isArray(record.items) ? record.items : [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return { ok: false };
+    const line = row as { productId?: unknown; qty?: unknown };
+    if (typeof line.productId !== "string" || !line.productId) return { ok: false };
+    if (typeof line.qty !== "number" || !validQty(line.qty)) return { ok: false };
+  }
+  const code = typeof record.coupon === "string" ? record.coupon : "";
+  const discountAlreadyApplied = Boolean(findCoupon(code));
+  return { ok: true, itemCount: rows.length, discountAlreadyApplied };
+}
+
+function purchaseFacts(meta: Record<string, unknown>): { ok: true; completedPurchases: number } | { ok: false } {
+  if (!Object.hasOwn(meta, "orders") || meta.orders == null) return { ok: true, completedPurchases: 0 };
+  if (!Array.isArray(meta.orders)) return { ok: false };
+  let completedPurchases = 0;
+  for (const row of meta.orders) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return { ok: false };
+    const record = row as { createdAt?: unknown; cancelledAt?: unknown };
+    if (typeof record.createdAt !== "string" || Number.isNaN(new Date(record.createdAt).getTime())) return { ok: false };
+    if (record.cancelledAt == null) {
+      completedPurchases += 1;
+      continue;
+    }
+    if (typeof record.cancelledAt !== "string" || Number.isNaN(new Date(record.cancelledAt).getTime())) return { ok: false };
+  }
+  return { ok: true, completedPurchases };
+}
+
+/**
+ * Cart and purchase counts for this shopper's Auth0 `app_metadata` only.
+ * A missing cart or orders key is an empty account. A value that cannot be
+ * classified is unreadable and is not reported as zero. Orders are not returned.
+ */
+export async function readCommerceFacts(userId: string): Promise<CommerceFacts> {
+  const meta = await getAppMetadata(userId);
+  const cart = cartFacts(meta);
+  const purchases = purchaseFacts(meta);
+  if (!cart.ok || !purchases.ok) {
+    return {
+      ok: false,
+      cartItemCount: cart.ok ? cart.itemCount : null,
+      completedPurchases: purchases.ok ? purchases.completedPurchases : null,
+      discountAlreadyApplied: cart.ok ? cart.discountAlreadyApplied : null,
+    };
+  }
+  return {
+    ok: true,
+    cartItemCount: cart.itemCount,
+    completedPurchases: purchases.completedPurchases,
+    discountAlreadyApplied: cart.discountAlreadyApplied,
+  };
 }
 
 /** Adds via addItem. */

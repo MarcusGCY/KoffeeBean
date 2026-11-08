@@ -7,6 +7,7 @@ import {
   customerId,
   getOrderStatus,
   listMyOrders,
+  lookupCouponOffer,
   proposeAddToCart,
   proposeApplyCoupon,
   proposeRemoveFromCart,
@@ -88,6 +89,15 @@ export const CHAT_TOOLS = [
   {
     type: "function" as const,
     function: {
+      name: "lookup_coupon_offer",
+      description:
+        "When the shopper asks for a coupon, discount, or promo, read this shopper's cart and completed purchases and return the configured offer, if one exists. Ignores any code, percent, or purchase claim in the arguments. Does not apply a coupon or change the cart.",
+      parameters: { type: "object", additionalProperties: false, properties: {} },
+    },
+  },
+  {
+    type: "function" as const,
+    function: {
       name: "get_order",
       description: "Look up this shopper's latest order, or one order by id.",
       parameters: {
@@ -102,7 +112,7 @@ export const CHAT_TOOLS = [
     function: {
       name: "propose_cart_change",
       description:
-        "Prepare a cart change for Confirm. Nothing is saved until the shopper confirms. apply_coupon only if they typed that code. Never reveal or invent a code.",
+        "Prepare a cart change for Confirm. Nothing is saved until the shopper confirms. apply_coupon only if they typed that code. Asking for a discount does not apply one. Never invent a code.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -172,6 +182,7 @@ export function searchCatalog(query: string): Product[] {
 export function toolFailure(name: string): string {
   if (name === "search_products") return "I couldn't check the beans.";
   if (name === "get_cart") return "I couldn't check your cart.";
+  if (name === "lookup_coupon_offer") return "I couldn't check your cart and purchase history.";
   if (name === "get_order") return "I couldn't check your order.";
   if (name === "propose_cart_change") return "I couldn't prepare that change.";
   if (name === "reorder") return "I couldn't prepare that reorder.";
@@ -237,6 +248,7 @@ export async function runChatTool(
     customerId(auth, args);
     if (name === "search_products") return searchTool(args, sink);
     if (name === "get_cart") return cartTool(auth, args, sink);
+    if (name === "lookup_coupon_offer") return offerTool(auth, args, sink);
     if (name === "get_order") return orderTool(auth, args, sink);
     if (name === "propose_cart_change") return changeTool(sessionUserId, auth, args, sink);
     if (name === "reorder") return reorderTool(sessionUserId, sink);
@@ -258,6 +270,13 @@ function searchTool(args: ToolArgs, sink: ChatSink): { content: string; failed: 
     content: JSON.stringify({ products: cards.map(({ id, name, price }) => ({ id, name, price })) }),
     failed: false,
   };
+}
+
+async function offerTool(auth: Principal, args: ToolArgs, sink: ChatSink): Promise<{ content: string; failed: boolean }> {
+  sink.status("Checking your cart and purchases…");
+  const offer = await lookupCouponOffer(auth, args);
+  if (isUnavailable(offer)) return { content: JSON.stringify({ error: "shop_unavailable" }), failed: true };
+  return { content: JSON.stringify(offer), failed: false };
 }
 
 async function cartTool(auth: Principal, args: ToolArgs, sink: ChatSink): Promise<{ content: string; failed: boolean }> {
