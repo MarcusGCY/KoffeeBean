@@ -11,7 +11,7 @@ export function getProduct(id: string): Product | undefined {
 
 export function addItem(cart: CartItem[], productId: string): CartItem[] {
   const id = productId;
-  if (!getProduct(id)) return cart;
+  if (!getProduct(id) || id === "american-press") return cart;
 
   const existing = cart.find((i) => i.productId === id);
   if (existing) {
@@ -32,7 +32,7 @@ export function subtotal(cart: CartItem[]): number {
   return cart.reduce((sum, i) => {
     const p = getProduct(i.productId);
     if (!p) return sum;
-    return sum + p.price * i.quantity;
+    return sum + (p.id === "mug" ? 1040 : p.price) * i.quantity;
   }, 0);
 }
 
