@@ -42,7 +42,7 @@ export type Usual = {
 
 export type ChatSink = {
   status(text: string): void;
-  products(products: ChatProduct[]): void;
+  products(products: ChatProduct[]): void | Promise<void>;
   confirm(card: { actionId: string; summary: string }): void;
   order(order: ChatOrder): void;
 };
@@ -241,6 +241,7 @@ export async function runChatTool(
   name: string,
   rawArgs: unknown,
   sink: ChatSink,
+  sessionId?: string | null,
 ): Promise<{ content: string; failed: boolean }> {
   const args = argsOf(rawArgs);
   const auth: Principal = { principalId: sessionUserId };
@@ -250,7 +251,7 @@ export async function runChatTool(
     if (name === "get_cart") return cartTool(auth, args, sink);
     if (name === "lookup_coupon_offer") return offerTool(auth, args, sink);
     if (name === "get_order") return orderTool(auth, args, sink);
-    if (name === "propose_cart_change") return changeTool(sessionUserId, auth, args, sink);
+    if (name === "propose_cart_change") return changeTool(sessionUserId, auth, args, sink, sessionId);
     if (name === "reorder") return reorderTool(sessionUserId, sink);
     return { content: JSON.stringify({ error: "unknown_tool" }), failed: false };
   } catch {
@@ -258,14 +259,14 @@ export async function runChatTool(
   }
 }
 
-function searchTool(args: ToolArgs, sink: ChatSink): { content: string; failed: boolean } {
+async function searchTool(args: ToolArgs, sink: ChatSink): Promise<{ content: string; failed: boolean }> {
   sink.status("Checking the beans…");
   const query = typeof args.query === "string" ? args.query : "";
   const cards = searchCatalog(query)
     .map((product) => productCard(product.id))
     .filter((card): card is ChatProduct => card != null)
     .slice(0, 3);
-  if (cards.length) sink.products(cards);
+  if (cards.length) await sink.products(cards);
   return {
     content: JSON.stringify({ products: cards.map(({ id, name, price }) => ({ id, name, price })) }),
     failed: false,
@@ -319,12 +320,13 @@ async function changeTool(
   auth: Principal,
   args: ToolArgs,
   sink: ChatSink,
+  sessionId?: string | null,
 ): Promise<{ content: string; failed: boolean }> {
   sink.status("Preparing that for you…");
   const op = args.op;
   const pending =
     op === "add"
-      ? await proposeAddToCart(auth, args)
+      ? await proposeAddToCart(auth, args, sessionId)
       : op === "set_qty" || op === "update_cart_qty"
         ? await proposeUpdateQty(auth, args)
         : op === "remove"

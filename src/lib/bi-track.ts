@@ -16,6 +16,12 @@ import { redisPipeline } from "./upstash";
 /** How long an "added from a recommendation" mark can credit a later order. */
 export const ATTRIBUTION_TTL_SEC = 30 * 60;
 
+/**
+ * How long a shown recommendation can be matched to a later Confirm add
+ * for the same shopper and chat session. Same window as checkout attribution.
+ */
+export const SHOWN_TTL_SEC = ATTRIBUTION_TTL_SEC;
+
 const SQL_TIMEOUT_MS = 2000;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const SAFE_SESSION = /^[A-Za-z0-9_.:-]{1,64}$/;
@@ -202,6 +208,52 @@ export async function trackOrderCancelled(
 
 function attributionKey(sub: string, productId: string): string {
   return `kb:bi:rec:${sub}:${productId}`;
+}
+
+function shownKey(sub: string, sessionId: string, productId: string): string {
+  return `kb:bi:shown:${sub}:${sessionId}:${productId}`;
+}
+
+/**
+ * Remembers that this shopper was shown these products under one recommendation
+ * in this chat session. Best effort. A Redis miss later means no attribution.
+ */
+export async function rememberShownRecommendation(
+  sub: string,
+  sessionId: string | null | undefined,
+  recommendationId: string,
+  productIds: readonly string[],
+): Promise<void> {
+  const session = biSessionId(sessionId);
+  const recommendation = biId(recommendationId);
+  if (!sub || !session || !recommendation) return;
+  const ids = [...new Set(productIds.filter((id) => biId(id)))].slice(0, 20);
+  if (ids.length === 0) return;
+  try {
+    await redisPipeline(
+      ids.map((productId) => ["SET", shownKey(sub, session, productId), recommendation, "EX", SHOWN_TTL_SEC]),
+    );
+  } catch {
+    console.error("[bi] shown write failed");
+  }
+}
+
+/** Recommendation id previously shown to this shopper and session for this product. Null on any miss. */
+export async function lookupShownRecommendation(
+  sub: string,
+  sessionId: string | null | undefined,
+  productId: string,
+): Promise<string | null> {
+  const session = biSessionId(sessionId);
+  const product = biId(productId);
+  if (!sub || !session || !product) return null;
+  try {
+    const [value] = await redisPipeline([["GET", shownKey(sub, session, product)]]);
+    return biId(value);
+  } catch {
+    console.error("[bi] shown read failed");
+    return null;
+  }
 }
 
 /** Marks a SKU as recently added from a recommendation. Best effort. */
