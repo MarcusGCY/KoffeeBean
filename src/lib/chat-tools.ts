@@ -5,8 +5,7 @@ import { confirmedCard } from "@/lib/pending-action";
 import { getOrder, listOrders } from "@/lib/store-meta";
 import {
   customerId,
-  getOrderStatus,
-  listMyOrders,
+  listOrderHistory,
   lookupCouponOffer,
   proposeAddToCart,
   proposeApplyCoupon,
@@ -15,6 +14,7 @@ import {
   viewCart,
   type Principal,
 } from "@/lib/support-shop";
+import type { OrderDetail } from "@/lib/store-types";
 import type { Product } from "@/lib/types";
 
 export type ChatProduct = {
@@ -99,7 +99,8 @@ export const CHAT_TOOLS = [
     type: "function" as const,
     function: {
       name: "get_order",
-      description: "Look up this shopper's latest order, or one order by id.",
+      description:
+        "Read this signed-in shopper's stored orders. Omit orderId unless the shopper typed an order number. Returns purchases and completedBeanIds for completed orders still stored. A cancelled newest order does not remove older completed orders.",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -287,32 +288,59 @@ async function cartTool(auth: Principal, args: ToolArgs, sink: ChatSink): Promis
   return { content: JSON.stringify(cart), failed: false };
 }
 
+const COMPLETED_STATUS = new Set(["placed", "packed", "shipped", "delivered"]);
+
+function orderCard(order: OrderDetail): ChatOrder {
+  return {
+    id: order.id,
+    status: order.status,
+    totalCents: order.totalCents,
+    items: order.items.map((item) => ({ name: item.name, qty: item.qty })),
+  };
+}
+
+/** Completed purchases only. Cancelled, pending, and failed rows stay out of the bean list. */
+function purchaseHistory(orders: OrderDetail[]) {
+  const purchases = orders
+    .filter((order) => COMPLETED_STATUS.has(order.status))
+    .map((order) => ({
+      id: order.id,
+      status: order.status,
+      items: order.items.map((item) => ({ productId: item.productId, name: item.name, qty: item.qty })),
+    }));
+  const completedBeanIds: string[] = [];
+  for (const purchase of purchases) {
+    for (const item of purchase.items) {
+      const product = getProduct(item.productId);
+      if (product?.category !== "beans" || completedBeanIds.includes(item.productId)) continue;
+      completedBeanIds.push(item.productId);
+    }
+  }
+  return { purchases, completedBeanIds };
+}
+
 async function orderTool(auth: Principal, args: ToolArgs, sink: ChatSink): Promise<{ content: string; failed: boolean }> {
   sink.status("Checking your order…");
-  const requested = typeof args.orderId === "string" ? args.orderId : "";
-  let result: Awaited<ReturnType<typeof getOrderStatus>>;
+  const listed = await listOrderHistory(auth, args);
+  if (isUnavailable(listed)) return { content: JSON.stringify({ error: "shop_unavailable" }), failed: true };
+  const orders = listed.orders ?? [];
+  const history = purchaseHistory(orders);
+  const requested = typeof args.orderId === "string" ? args.orderId.trim() : "";
   if (requested) {
-    result = await getOrderStatus(auth, { orderId: requested });
-  } else {
-    const listed = await listMyOrders(auth, args);
-    if (isUnavailable(listed)) return { content: JSON.stringify({ error: "shop_unavailable" }), failed: true };
-    const first = listed.orders?.[0];
-    if (!first) return { content: JSON.stringify({ orders: [] }), failed: false };
-    result = await getOrderStatus(auth, { orderId: first.id });
-  }
-  if (isUnavailable(result)) return { content: JSON.stringify({ error: "shop_unavailable" }), failed: true };
-  if (result && "id" in result && typeof result.id === "string" && Array.isArray(result.items)) {
-    const order: ChatOrder = {
-      id: result.id,
-      status: String(result.status),
-      totalCents: result.totalCents,
-      items: result.items.map((item) => ({ name: item.name, qty: item.qty })),
-    };
+    if (requested.length > 40 || requested.includes("/")) {
+      return { content: JSON.stringify({ error: "invalid_order", ...history }), failed: false };
+    }
+    const match = orders.find((order) => order.id === requested);
+    if (!match) return { content: JSON.stringify({ error: "not_found", ...history }), failed: false };
+    const order = orderCard(match);
     sink.order(order);
-    return { content: JSON.stringify(order), failed: false };
+    return { content: JSON.stringify({ order, ...history }), failed: false };
   }
-  const error = result && "error" in result ? result.error : "not_found";
-  return { content: JSON.stringify({ error }), failed: false };
+  const latest = orders[0];
+  if (!latest) return { content: JSON.stringify({ orders: [], ...history }), failed: false };
+  const order = orderCard(latest);
+  sink.order(order);
+  return { content: JSON.stringify({ order, ...history }), failed: false };
 }
 
 async function changeTool(
