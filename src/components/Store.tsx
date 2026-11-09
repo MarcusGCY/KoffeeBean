@@ -185,7 +185,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
                     {/* Native img so a missing bean src shows the browser broken-image icon. */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={p.id === "mug" ? "" : productImageUrl(p.id)}
+                      src={productImageUrl(p.id)}
                       alt={p.name}
                       width={320}
                       height={200}
