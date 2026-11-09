@@ -213,12 +213,21 @@ export function SupportChat() {
     }
   }
 
+  function cartBody(id: string) {
+    const session = sessionId.current;
+    return {
+      productId: id,
+      recommendationId: recommendations.current[id],
+      ...(session ? { sessionId: session } : {}),
+    };
+  }
+
   async function addProduct(id: string) {
     try {
       const res = await fetch("/api/cart/items", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ productId: id, recommendationId: recommendations.current[id] }),
+        body: JSON.stringify(cartBody(id)),
       });
       const body = (await res.json().catch(() => null)) as { items?: { productId?: string }[] } | null;
       const saved = res.ok && (body?.items ?? []).some((item) => item.productId === id);
@@ -239,7 +248,7 @@ export function SupportChat() {
       const res = await fetch("/api/cart/items", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ productId: id, recommendationId: recommendations.current[id] }),
+        body: JSON.stringify(cartBody(id)),
       });
       if (!res.ok) {
         setNotice("That item wasn't removed.");

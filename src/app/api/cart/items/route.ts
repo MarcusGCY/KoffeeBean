@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { biId, emitBi, trackAdded, trackUndone } from "@/lib/bi-track";
+import { biId, biSessionId, emitBi, trackAdded, trackUndone } from "@/lib/bi-track";
 import { getProduct } from "@/lib/cart";
 import { addToCart, removeFromCart } from "@/lib/store-meta";
 import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
@@ -10,6 +10,7 @@ const Body = z
     productId: z.string().trim().min(1).max(80),
     qty: z.number().int().min(1).max(99).optional(),
     recommendationId: z.string().optional(),
+    sessionId: z.string().max(200).optional(),
   })
   .strip();
 
@@ -36,10 +37,12 @@ async function change(req: Request, op: "add" | "remove") {
     const recommendationId = biId(parsed.data.recommendationId);
     if (recommendationId && getProduct(parsed.data.productId)) {
       const productId = parsed.data.productId;
+      const sessionId = biSessionId(parsed.data.sessionId);
+      const ctx = sessionId ? { sub: auth.userId, sessionId } : { sub: auth.userId };
       emitBi(() =>
         op === "add"
-          ? trackAdded({ sub: auth.userId }, { recommendationId, productId, qty })
-          : trackUndone({ sub: auth.userId }, { recommendationId, productId }),
+          ? trackAdded(ctx, { recommendationId, productId, qty })
+          : trackUndone(ctx, { recommendationId, productId }),
       );
     }
     return NextResponse.json(result);

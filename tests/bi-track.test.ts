@@ -17,9 +17,12 @@ vi.mock("@/lib/upstash", () => ({ redisPipeline: redisMock }));
 
 import {
   ATTRIBUTION_TTL_SEC,
+  SHOWN_TTL_SEC,
   biSessionId,
   biSource,
   emitBi,
+  lookupShownRecommendation,
+  rememberShownRecommendation,
   startTurn,
   takeAttributedSkus,
   trackAdded,
@@ -125,6 +128,38 @@ describe("event helpers", () => {
     expect(recordMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "recommend.undone", payload: { recommendationId: "rec_1", productId: "mug" } }),
     );
+  });
+
+  it("remembers a shown recommendation for this shopper and session only", async () => {
+    await rememberShownRecommendation(SUB, "chat_abc", "rec_shown01", ["mug", "not a safe id"]);
+    expect(redisMock).toHaveBeenCalledWith([
+      ["SET", `kb:bi:shown:${SUB}:chat_abc:mug`, "rec_shown01", "EX", SHOWN_TTL_SEC],
+    ]);
+
+    redisMock.mockClear();
+    await rememberShownRecommendation(SUB, "bad session", "rec_shown01", ["mug"]);
+    await rememberShownRecommendation("auth0|other", "chat_abc", "rec_other01", ["tote"]);
+    expect(redisMock).toHaveBeenCalledTimes(1);
+    expect(redisMock).toHaveBeenCalledWith([
+      ["SET", `kb:bi:shown:auth0|other:chat_abc:tote`, "rec_other01", "EX", SHOWN_TTL_SEC],
+    ]);
+
+    redisMock.mockResolvedValueOnce(["rec_shown01"]);
+    expect(await lookupShownRecommendation(SUB, "chat_abc", "mug")).toBe("rec_shown01");
+    expect(redisMock).toHaveBeenLastCalledWith([["GET", `kb:bi:shown:${SUB}:chat_abc:mug`]]);
+
+    redisMock.mockResolvedValueOnce([null]);
+    expect(await lookupShownRecommendation(SUB, "chat_other", "mug")).toBeNull();
+    redisMock.mockClear();
+    expect(await lookupShownRecommendation(SUB, "bad session", "mug")).toBeNull();
+    expect(redisMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores a shown-recommendation write when Redis is down", async () => {
+    redisMock.mockRejectedValueOnce(new Error("redis down"));
+    await expect(rememberShownRecommendation(SUB, "chat_abc", "rec_shown01", ["mug"])).resolves.toBeUndefined();
+    redisMock.mockRejectedValueOnce(new Error("redis down"));
+    await expect(lookupShownRecommendation(SUB, "chat_abc", "mug")).resolves.toBeNull();
   });
 
   it("still records the event when Redis attribution fails", async () => {

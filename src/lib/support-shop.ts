@@ -125,10 +125,17 @@ export async function getOrderStatus(auth: Principal, input: ToolInput & { order
   }
 }
 
-export function proposeAddToCart(auth: Principal, input: ToolInput & { productId?: unknown; qty?: unknown }) {
+export function proposeAddToCart(
+  auth: Principal,
+  input: ToolInput & { productId?: unknown; qty?: unknown },
+  sessionId?: string | null,
+) {
   const productId = typeof input.productId === "string" ? input.productId.trim() : "";
   const qty = typeof input.qty === "number" ? input.qty : 1;
-  return proposeAction(customerId(auth, input), { op: "add_to_cart", productId, qty });
+  const userId = customerId(auth, input);
+  const action = { op: "add_to_cart" as const, productId, qty };
+  if (typeof sessionId !== "string" || !sessionId) return proposeAction(userId, action);
+  return proposeAction(userId, action, { sessionId });
 }
 
 export function proposeUpdateQty(auth: Principal, input: ToolInput & { productId?: unknown; qty?: unknown }) {

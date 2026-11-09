@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { biSessionId, biSource, emitBi, startTurn, trackTurn } from "@/lib/bi-track";
+import { biSessionId, biSource, emitBi, rememberShownRecommendation, startTurn, trackTurn } from "@/lib/bi-track";
 import { CHAT_TIMEOUT, CHAT_UNAVAILABLE } from "@/lib/chat-response";
 import { CHAT_TOOLS } from "@/lib/chat-tools";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
@@ -146,12 +146,15 @@ export async function POST(req: Request) {
           userId: shopper.id,
           turns,
           signal: controllerAbort.signal,
+          sessionId: bi.sessionId,
           onTool: (name) => turn.tool(name),
           sink: {
             status: (text) => send("status", { text }),
-            products: (products) => {
-              const recommendationId = turn.shownProducts(products.map((product) => product.id));
+            products: async (products) => {
+              const productIds = products.map((product) => product.id);
+              const recommendationId = turn.shownProducts(productIds);
               send("products", { products, recommendationId });
+              await rememberShownRecommendation(shopper.id, bi.sessionId, recommendationId, productIds);
             },
             text: (delta) => send("text", { delta }),
             confirm: (card) => send("confirm", card),

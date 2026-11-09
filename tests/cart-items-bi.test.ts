@@ -49,6 +49,17 @@ describe("cart items BI events", () => {
     expect(trackAdded).toHaveBeenCalledTimes(1);
   });
 
+  it("passes a validated chat session through to add and undo", async () => {
+    await call(POST, { productId: "mug", recommendationId: "rec_abc123", sessionId: "chat_abc-1" });
+    expect(trackAdded).toHaveBeenCalledWith(
+      { sub: "auth0|abc", sessionId: "chat_abc-1" },
+      { recommendationId: "rec_abc123", productId: "mug", qty: 1 },
+    );
+
+    await call(DELETE, { productId: "mug", recommendationId: "rec_abc123", sessionId: "bad session" });
+    expect(trackUndone).toHaveBeenCalledWith({ sub: "auth0|abc" }, { recommendationId: "rec_abc123", productId: "mug" });
+  });
+
   it("emits recommend.undone on DELETE with a recommendation id", async () => {
     await call(DELETE, { productId: "mug", recommendationId: "rec_abc123" });
     expect(trackUndone).toHaveBeenCalledWith({ sub: "auth0|abc" }, { recommendationId: "rec_abc123", productId: "mug" });

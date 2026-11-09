@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
+import { biId, biSessionId, emitBi, lookupShownRecommendation, trackAdded } from "./bi-track";
 import { getProduct } from "./cart";
 import { findCoupon } from "./coupons";
 import { safeEqual } from "./github-signature";
@@ -24,9 +25,15 @@ export const ACTION_TTL_SEC = 300;
 
 const Qty = z.number().int().min(1).max(99);
 const ProductId = z.string().trim().min(1).max(80);
+const RecommendationId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 
 export const ActionBody = z.discriminatedUnion("op", [
-  z.strictObject({ op: z.literal("add_to_cart"), productId: ProductId, qty: Qty.optional() }),
+  z.strictObject({
+    op: z.literal("add_to_cart"),
+    productId: ProductId,
+    qty: Qty.optional(),
+    recommendationId: RecommendationId.optional(),
+  }),
   z.strictObject({ op: z.literal("update_cart_qty"), productId: ProductId, qty: Qty }),
   z.strictObject({ op: z.literal("remove_from_cart"), productId: ProductId, qty: Qty.optional() }),
   z.strictObject({ op: z.literal("apply_coupon"), code: z.string().trim().min(1).max(40) }),
@@ -45,6 +52,8 @@ type SignedAction = {
   summary: string;
   action: ShopAction;
   cartHash?: string;
+  /** Chat session bound at propose time. Set only with a verified recommendation id. */
+  sessionId?: string;
 };
 
 export type PendingAction = { pending: true; actionId: string; summary: string };
@@ -138,14 +147,16 @@ export function verifyAction(token: string, rawSecret: string, nowMs = Date.now(
     const action = ActionBody.safeParse(claims.action);
     if (!action.success) return null;
     if (action.data.op === "place_order" && (typeof claims.cartHash !== "string" || !claims.cartHash)) return null;
+    const sessionId = biSessionId(claims.sessionId);
     return {
       typ: "action",
       sub: claims.sub,
       exp: claims.exp,
       jti: claims.jti,
       summary: claims.summary,
-      action: action.data,
+      action: signedAction(action.data),
       cartHash: claims.cartHash,
+      ...(sessionId ? { sessionId } : {}),
     };
   } catch {
     return null;
@@ -199,15 +210,44 @@ async function summaryFor(userId: string, action: ShopAction): Promise<string | 
   return `Send report: ${shown}`;
 }
 
+/**
+ * Drops any caller-supplied recommendation id. An add keeps one only when this
+ * shopper and chat session were shown that product, and the id is the server's.
+ */
+async function verifiedAdd(userId: string, action: ShopAction, sessionId: string | null): Promise<ShopAction> {
+  if (action.op === "report_problem") {
+    return { op: "report_problem", message: action.message.trim().slice(0, 500) };
+  }
+  if (action.op !== "add_to_cart") return action;
+  const base: ShopAction =
+    action.qty === undefined
+      ? { op: "add_to_cart", productId: action.productId }
+      : { op: "add_to_cart", productId: action.productId, qty: action.qty };
+  if (!sessionId) return base;
+  const known = await lookupShownRecommendation(userId, sessionId, action.productId);
+  if (!known) return base;
+  return { ...base, recommendationId: known };
+}
+
+function signedAction(action: ShopAction): ShopAction {
+  if (action.op !== "add_to_cart" || action.recommendationId) return action;
+  return action.qty === undefined
+    ? { op: "add_to_cart", productId: action.productId }
+    : { op: "add_to_cart", productId: action.productId, qty: action.qty };
+}
+
 /** Signs a pending action. Does not change the cart, orders, or feedback. */
-export async function proposeAction(userId: string, action: ShopAction): Promise<PendingAction | { error: string }> {
+export async function proposeAction(
+  userId: string,
+  action: ShopAction,
+  opts?: { sessionId?: string | null },
+): Promise<PendingAction | { error: string }> {
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
-  const stored: ShopAction =
-    action.op === "report_problem"
-      ? { op: "report_problem", message: action.message.trim().slice(0, 500) }
-      : action;
+  const sessionId = action.op === "add_to_cart" ? biSessionId(opts?.sessionId) : null;
+  const stored = await verifiedAdd(userId, action, sessionId);
   const cartHash = action.op === "place_order" ? cartFingerprint(await getCart(userId)) : undefined;
+  const boundSession = stored.op === "add_to_cart" && stored.recommendationId && sessionId ? sessionId : undefined;
   const claims: SignedAction = {
     typ: "action",
     sub: userId,
@@ -216,6 +256,7 @@ export async function proposeAction(userId: string, action: ShopAction): Promise
     summary,
     action: stored,
     ...(cartHash ? { cartHash } : {}),
+    ...(boundSession ? { sessionId: boundSession } : {}),
   };
   await issueNonce(claims.jti, ACTION_TTL_SEC);
   return { pending: true, actionId: signActionToken(claims, secret()), summary };
@@ -249,7 +290,7 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
   }
   if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
 
-  const outcome = await perform(userId, claims.action, shopper);
+  const outcome = await perform(userId, claims.action, shopper, claims.sessionId);
   if (!outcome.ok) {
     await rearmNonce(claims.jti, claims.exp - Math.floor(Date.now() / 1000));
     return outcome;
@@ -257,10 +298,27 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
   return outcome;
 }
 
-async function perform(userId: string, action: ShopAction, shopper: Shopper): Promise<CommitResult> {
+function noteRecommendedAdd(userId: string, action: ShopAction, sessionId?: string): void {
+  if (action.op !== "add_to_cart") return;
+  const recommendationId = biId(action.recommendationId);
+  const productId = biId(action.productId);
+  if (!recommendationId || !productId) return;
+  const qty = action.qty ?? 1;
+  const session = biSessionId(sessionId);
+  emitBi(() =>
+    trackAdded(session ? { sub: userId, sessionId: session } : { sub: userId }, {
+      recommendationId,
+      productId,
+      qty,
+    }),
+  );
+}
+
+async function perform(userId: string, action: ShopAction, shopper: Shopper, sessionId?: string): Promise<CommitResult> {
   if (action.op === "add_to_cart") {
     const result = await addToCart(userId, action.productId, action.qty ?? 1);
     if ("error" in result) return writeError(result);
+    noteRecommendedAdd(userId, action, sessionId);
     return { ok: true, summary: cartLine("Cart updated.", result) };
   }
   if (action.op === "update_cart_qty") {

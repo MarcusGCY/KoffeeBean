@@ -164,6 +164,7 @@ export async function runXaiChat(input: {
   userId: string;
   turns: { role: "user" | "assistant"; content: string }[];
   signal: AbortSignal;
+  sessionId?: string | null;
   onTool?: (name: string) => void;
   sink: ChatSink & { text(delta: string): void; error(message: string, retry?: boolean): void };
 }): Promise<XaiRun> {
@@ -177,7 +178,7 @@ export async function runXaiChat(input: {
   const productIds: string[] = [];
   const sink: ChatSink = {
     status: (text) => input.sink.status(text),
-    products(cards) {
+    async products(cards) {
       for (const card of cards) {
         if (productIds.length >= 3) break;
         if (!productIds.includes(card.id)) productIds.push(card.id);
@@ -188,7 +189,7 @@ export async function runXaiChat(input: {
       });
       if (shown.length) {
         showedProducts = true;
-        input.sink.products(shown);
+        await input.sink.products(shown);
       }
     },
     confirm: (card) => input.sink.confirm(card),
@@ -222,7 +223,7 @@ export async function runXaiChat(input: {
     messages.push({ role: "assistant", content: choice?.content ?? "", tool_calls: choice?.tool_calls });
     for (const call of calls) {
       input.onTool?.(call.name);
-      const result = await runChatTool(input.userId, call.name, call.arguments, sink);
+      const result = await runChatTool(input.userId, call.name, call.arguments, sink, input.sessionId);
       messages.push({ role: "tool", tool_call_id: call.id, content: result.content });
       if (result.failed) {
         input.sink.error(toolFailure(call.name), true);
