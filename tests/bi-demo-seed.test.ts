@@ -79,6 +79,20 @@ describe("buildDemoStory", () => {
 });
 
 describe("seedBiDemoStory", () => {
+  it("emits source=demo and never a live row", async () => {
+    const { sql, calls } = fakeSql();
+    await seedBiDemoStory(sql as never, NOW);
+    const inserts = calls.filter((call) => call.text.startsWith("INSERT"));
+    expect(inserts).toHaveLength(2);
+    for (const call of inserts) {
+      expect(call.text).toContain("'demo'");
+      expect(call.text).not.toContain("'live'");
+    }
+    const orders = JSON.parse(calls[3]!.params[0] as string) as { order_id: string }[];
+    expect(orders.every((order) => order.order_id.startsWith("demo-story-"))).toBe(true);
+    expect(orders.some((order) => order.order_id.startsWith("BB-"))).toBe(false);
+  });
+
   it("replaces only demo-prefixed demo rows in one transaction", async () => {
     const { sql, calls, transaction } = fakeSql();
     const result = await seedBiDemoStory(sql as never, NOW);

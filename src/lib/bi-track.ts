@@ -3,7 +3,6 @@ import { after } from "next/server";
 import { biPayloadSchemas, recordBiEvent, type BiEventPayloads, type BiSource } from "./bi-events";
 import { biDbConfigured, getBiSql } from "./bi-db";
 import { hashShopperId } from "./bi-hash";
-import { readAdmin } from "./demo-session";
 import { redisPipeline } from "./upstash";
 
 /**
@@ -29,22 +28,18 @@ const SAFE_SESSION = /^[A-Za-z0-9_.:-]{1,64}$/;
 export type BiContext = {
   /** Raw Auth0 `sub` of the signed-in shopper. */
   sub: string;
-  /** Pass when already known; otherwise it is read from the session (admin => demo). */
+  /** Pass when the caller already resolved it. Omitted means `live`. */
   source?: BiSource;
   sessionId?: string | null;
 };
 
 /**
- * `demo` when the signed-in user has the Auth0 `admin` role (the same check that
- * gates `/admin/demo` and Demo Reset), `live` for every other shopper. Any failure
- * to read the session falls back to `live`; the caller already authenticated.
+ * Shopper traffic is `live`, including a signed-in Auth0 admin checking out on
+ * production. The admin role still gates `/admin/demo`. Only `seedBiDemoStory`
+ * writes `source = 'demo'`.
  */
 export async function biSource(): Promise<BiSource> {
-  try {
-    return (await readAdmin()) ? "demo" : "live";
-  } catch {
-    return "live";
-  }
+  return "live";
 }
 
 /** Opaque chat session id from the client, or null when it is not BI-safe. */

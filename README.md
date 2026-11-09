@@ -416,7 +416,7 @@ Emission points (all best effort, run after the response when possible):
 - `POST` / `DELETE /api/cart/items` with a `recommendationId` (sent only by chat cards): `recommend.added` / `recommend.undone`. Adding marks the SKU in Redis for 30 minutes (`kb:bi:rec:<sub>:<productId>`).
 - `placeOrder` in `src/lib/store-meta.ts` (cart page and chat Confirm): `order.placed` plus a `bi_orders` upsert; `attributed_sku_ids` is the order's SKUs that are still marked.
 - `cancelOrder` in `src/lib/store-meta.ts`: `order.cancelled` plus `bi_orders.cancelled_at`.
-- `source` is `demo` when the signed-in user has the Auth0 `admin` role (the check behind `/admin/demo` and Demo Reset), otherwise `live`.
+- `source` is `live` for every real shopper action (checkout, cancellation, a coupon on that order, `recommend.added`, and chat), including when the signed-in user has the Auth0 `admin` role. `demo` is written only by the BI demo seed.
 
 ### BI read API (for the BI bot)
 
@@ -426,7 +426,7 @@ Read-only, service-token endpoints over `bi_events` for the Marcus-facing BI bot
 
 **Privacy.** Rows are returned with `shopper_hash` only. The Auth0 `sub` and chat text are never stored in `bi_events`, so they cannot be returned.
 
-**Source.** Every query excludes demo and admin traffic by default (`source=live`). Pass `source=demo` for only demo rows, or `source=all` for both.
+**Source.** Every query defaults to real shopper traffic (`source=live`). Pass `source=demo` for the seeded story only, or `source=all` for both.
 
 `GET /api/bi/events` lists events, newest first.
 

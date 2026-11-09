@@ -67,7 +67,7 @@ export function isBiEventType(value: unknown): value is BiEventType {
 
 export type BiEventInput<T extends BiEventType = BiEventType> = {
   type: T;
-  /** `demo` for demo, Reset, and admin traffic. BI queries exclude it by default. */
+  /** `live` for real shopper traffic. `demo` is written only by the BI demo seed. */
   source: BiSource;
   /** Raw Auth0 `sub`. Hashed here; never stored or logged. */
   shopperSub: string;

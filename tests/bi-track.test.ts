@@ -68,16 +68,14 @@ async function flush() {
 }
 
 describe("biSource", () => {
-  it("tags admin sessions as demo and everyone else as live", async () => {
+  it("tags every signed-in shopper as live, including an admin", async () => {
     adminMock.mockResolvedValueOnce({ id: SUB, email: "admin@example.com" });
-    expect(await biSource()).toBe("demo");
+    expect(await biSource()).toBe("live");
     adminMock.mockResolvedValueOnce(null);
     expect(await biSource()).toBe("live");
-  });
-
-  it("falls back to live when the session cannot be read", async () => {
     adminMock.mockRejectedValueOnce(new Error("no request"));
     expect(await biSource()).toBe("live");
+    expect(adminMock).not.toHaveBeenCalled();
   });
 });
 
@@ -99,7 +97,7 @@ describe("event helpers", () => {
     );
     expect(recordMock).toHaveBeenCalledWith({
       type: "barista.turn",
-      source: "demo",
+      source: "live",
       shopperSub: SUB,
       sessionId: null,
       payload: { outcome: "replied", userMessageChars: 12, toolIds: ["search_products"], latencyMs: 40 },
