@@ -415,6 +415,11 @@ export async function listOrders(userId: string, now = new Date()): Promise<Orde
   return readOrders(await getAppMetadata(userId)).map((order) => summarize(order, now));
 }
 
+/** One Management API read of this shopper's retained orders, including line items. */
+export async function listOrderDetails(userId: string, now = new Date()): Promise<OrderDetail[]> {
+  return readOrders(await getAppMetadata(userId)).map((order) => detail(order, now));
+}
+
 export async function getOrder(userId: string, id: string, now = new Date()): Promise<OrderDetail | null> {
   const order = readOrders(await getAppMetadata(userId)).find((item) => item.id === id);
   return order ? detail(order, now) : null;

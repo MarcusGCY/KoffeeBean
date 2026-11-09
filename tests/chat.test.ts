@@ -6,7 +6,7 @@ import { CHAT_HOUR_LIMIT, CHAT_RATE_LIMIT_MESSAGE } from "@/lib/chat-rate-limit"
 import { CHAT_UNAVAILABLE, takeSseEvents } from "@/lib/chat-response";
 import { getShopper } from "@/lib/shopper";
 import { verifyAction } from "@/lib/pending-action";
-import { XAI_CHAT_URL, cappedTurns } from "@/lib/xai-chat";
+import { BARISTA_SYSTEM, XAI_CHAT_URL, cappedTurns } from "@/lib/xai-chat";
 
 vi.mock("@/lib/shopper", () => ({
   getShopper: vi.fn(),
@@ -152,6 +152,26 @@ function orderFixture() {
     totalCents: 1944,
     coupon: "SAVE10",
     items: [{ productId: "ethiopia-250", name: "Ethiopia Yirgacheffe 250g", unitPriceCents: 1800, qty: 1 }],
+  };
+}
+
+function storedOrder(
+  id: string,
+  createdAt: string,
+  cancelledAt: string | null,
+  items: { productId: string; name: string; unitPriceCents: number; qty: number }[],
+) {
+  const subtotalCents = items.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0);
+  return {
+    id,
+    createdAt,
+    cancelledAt,
+    subtotalCents,
+    discountCents: 0,
+    taxCents: 0,
+    totalCents: subtotalCents,
+    coupon: null,
+    items,
   };
 }
 
@@ -512,6 +532,83 @@ describe("POST /api/chat", () => {
       retry: true,
     });
     expect(failed.some((event) => event.event === "done")).toBe(false);
+  });
+
+  it("returns completed bean purchases when the newest order is cancelled", async () => {
+    expect(BARISTA_SYSTEM).toContain("call get_order and omit orderId");
+    expect(BARISTA_SYSTEM).toContain("Do not ask for an order number");
+    expect(BARISTA_SYSTEM).toContain("completedBeanIds");
+    expect(BARISTA_SYSTEM).toContain("recommend by taste with search_products");
+    signIn("auth0|buyer");
+    bags.meta.set("auth0|buyer", {
+      orders: [
+        storedOrder("BB-NEW", "2020-01-03T00:00:00.000Z", "2020-01-03T00:10:00.000Z", [
+          { productId: "espresso-1kg", name: "House Espresso 1kg", unitPriceCents: 4200, qty: 1 },
+        ]),
+        storedOrder("BB-MID", "2020-01-02T00:00:00.000Z", null, [
+          { productId: "colombia-250", name: "Colombia Huila 250g", unitPriceCents: 1600, qty: 1 },
+          { productId: "mug", name: "BeanBox Ceramic Mug", unitPriceCents: 1400, qty: 1 },
+        ]),
+        storedOrder("BB-OLD", "2020-01-01T00:00:00.000Z", null, [
+          { productId: "ethiopia-250", name: "Ethiopia Yirgacheffe 250g", unitPriceCents: 1800, qty: 1 },
+        ]),
+      ],
+    });
+    bags.meta.set("auth0|other", {
+      orders: [
+        storedOrder("BB-OTHER", "2020-01-01T00:00:00.000Z", null, [
+          { productId: "kenya-ichangi-200", name: "Kenya Ichangi 200g", unitPriceCents: 2450, qty: 1 },
+        ]),
+      ],
+    });
+
+    const ask = async (args: Record<string, unknown>) => {
+      seen.length = 0;
+      let n = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+          seen.push({ url: String(_input), method: "POST", auth: null, body: init?.body == null ? null : String(init.body) });
+          n += 1;
+          if (n === 1) {
+            return xaiTools([{ id: "call_hist", name: "get_order", arguments: JSON.stringify(args) }]);
+          }
+          return xaiReply("Here are beans from your past orders.");
+        }),
+      );
+      const raw = await (await post({ messages: [{ role: "user", content: "Recommend beans based on my past orders" }] })).text();
+      const second = JSON.parse(seen[1]?.body ?? "{}") as { messages?: { role: string; content?: string }[] };
+      const tool = second.messages?.find((message) => message.role === "tool");
+      return { raw, tool: JSON.parse(tool?.content ?? "{}") as Record<string, unknown> };
+    };
+
+    const listed = await ask({ userId: "auth0|other" });
+    expect(listed.raw).not.toContain("auth0|other");
+    expect(listed.raw).not.toContain("kenya-ichangi-200");
+    expect(listed.tool.completedBeanIds).toEqual(["colombia-250", "ethiopia-250"]);
+    expect(listed.tool.purchases).toEqual([
+      {
+        id: "BB-MID",
+        status: "delivered",
+        items: [
+          { productId: "colombia-250", name: "Colombia Huila 250g", qty: 1 },
+          { productId: "mug", name: "BeanBox Ceramic Mug", qty: 1 },
+        ],
+      },
+      {
+        id: "BB-OLD",
+        status: "delivered",
+        items: [{ productId: "ethiopia-250", name: "Ethiopia Yirgacheffe 250g", qty: 1 }],
+      },
+    ]);
+    expect(JSON.stringify(listed.tool)).not.toContain("SAVE10");
+    expect(eventsOf(listed.raw).find((event) => event.event === "order")?.data).toMatchObject({ id: "BB-NEW", status: "cancelled" });
+
+    const missed = await ask({ userId: "auth0|other", orderId: "BB-MISSING" });
+    expect(missed.tool.error).toBe("not_found");
+    expect(missed.tool.completedBeanIds).toEqual(["colombia-250", "ethiopia-250"]);
+    expect(eventsOf(missed.raw).some((event) => event.event === "order")).toBe(false);
+    expect(missed.raw).not.toContain("kenya-ichangi-200");
   });
 
   it("stops after three tool rounds", async () => {

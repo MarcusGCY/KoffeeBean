@@ -2,7 +2,7 @@ import products from "@/data/products.json";
 import { loadFaq } from "@/lib/faq";
 import { resolveCouponOffer, type CouponOfferView } from "@/lib/coupon-offer";
 import { proposeAction } from "@/lib/pending-action";
-import { getCart, getOrder, listOrders, readCommerceFacts, recordAudit } from "@/lib/store-meta";
+import { getCart, getOrder, listOrderDetails, listOrders, readCommerceFacts, recordAudit } from "@/lib/store-meta";
 
 export type Principal = { principalId?: string } | null | undefined;
 
@@ -98,6 +98,18 @@ export async function listMyOrders(auth: Principal, input: ToolInput) {
     };
   } catch {
     return { error: "shop_unavailable" };
+  }
+}
+
+/** Retained orders for this shopper, including line items. A user id on the input is ignored. */
+export async function listOrderHistory(auth: Principal, input: ToolInput) {
+  const userId = customerId(auth, input);
+  try {
+    const orders = await listOrderDetails(userId);
+    await note(userId, "list_my_orders", `${orders.length} orders`, "ok");
+    return { orders };
+  } catch {
+    return { error: "shop_unavailable" as const };
   }
 }
 
