@@ -32,7 +32,7 @@ export function subtotal(cart: CartItem[]): number {
   return cart.reduce((sum, i) => {
     const p = getProduct(i.productId);
     if (!p) return sum;
-    return sum + (p.id === "mug" ? 1040 : p.price) * i.quantity;
+    return sum + p.price * i.quantity;
   }, 0);
 }
 
