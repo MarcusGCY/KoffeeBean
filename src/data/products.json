@@ -12,5 +12,6 @@
   { "id": "tote", "name": "Canvas Tote Bag", "category": "merch", "price": 1200, "blurb": "Fits two 1kg bags." },
   { "id": "tee", "name": "Roast Day T-Shirt", "category": "merch", "price": 25000, "blurb": "100% organic cotton." },
   { "id": "american-press", "name": "American Press", "category": "merch", "price": 2000, "blurb": "Immersion and Pressure Combined" },
-  { "id": "hosco-blend-mix-250g", "name": "HOSCO Mixed Blend Coffee Bean 250 g", "category": "beans", "price": 1700, "blurb": "Malty, Granola" }
+  { "id": "hosco-blend-mix-250g", "name": "HOSCO Mixed Blend Coffee Bean 250 g", "category": "beans", "price": 1700, "blurb": "Malty, Granola" },
+  { "id": "italian-commercial-blends-1kg", "name": "Italian & Commercial Blends 1kg", "category": "beans", "price": 3000, "blurb": "Low acidity with classic, heavy notes of dark chocolate, nuts, and spice." }
 ]
