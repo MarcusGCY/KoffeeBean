@@ -4,8 +4,9 @@
 --   psql "$DATABASE_URL" -f db/migrations/0001_bi_events.sql
 --
 -- No PII and no chat text. shopper_hash is an HMAC-SHA256 of the Auth0 `sub`
--- (see src/lib/bi-hash.ts). source separates real shoppers from demo/admin traffic;
--- BI queries exclude 'demo' by default. bi_events is append-only by convention: the
+-- (see src/lib/bi-hash.ts). source is 'live' for real shopper traffic and 'demo'
+-- only for the explicit demo seed. BI queries exclude 'demo' by default.
+-- bi_events is append-only by convention: the
 -- app only inserts.
 
 CREATE TABLE IF NOT EXISTS bi_events (
