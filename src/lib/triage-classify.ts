@@ -2,7 +2,7 @@ import { z } from "zod";
 import { XAI_CHAT_URL, scrubSecrets, xaiFailureLine } from "@/lib/xai-chat";
 import { redactText, type PiiType } from "@/lib/triage-redact";
 
-/** Text and image in, structured output. $1.25 / $2.50 per 1M tokens under 200k. */
+/** Text in, structured output. $1.25 / $2.50 per 1M tokens under 200k. */
 export const DEFAULT_TRIAGE_GROK_MODEL = "grok-4.20-0309-non-reasoning";
 const INPUT_PER_M = 1.25;
 const OUTPUT_PER_M = 2.5;

@@ -1,7 +1,9 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { verify } from "@/lib/approval";
 import * as gh from "@/lib/github";
-import { fixIssue } from "@/lib/fix";
+// Temporary: fixIssue stays off so Approve does not start the Cursor cloud agent.
+// import { after } from "next/server";
+// import { fixIssue } from "@/lib/fix";
 import { caseFields, recordQualityEvent } from "@/lib/quality-audit";
 import { buildEvent, parseCase } from "@/lib/quality-case";
 
@@ -50,12 +52,13 @@ export async function GET(req: Request) {
     blocker: null,
     externalAck: "acknowledged",
   }));
-  after(async () => {
-    try {
-      await fixIssue(issue);
-    } catch (e) {
-      console.error("[review] fix failed", e instanceof Error ? e.name : "Error");
-    }
-  });
+  // Temporary: do not launch the Cursor fix agent. Restore the after(fixIssue) block to turn it back on.
+  // after(async () => {
+  //   try {
+  //     await fixIssue(issue);
+  //   } catch (e) {
+  //     console.error("[review] fix failed", e instanceof Error ? e.name : "Error");
+  //   }
+  // });
   return NextResponse.json({ status: "approved-fix-started" });
 }
