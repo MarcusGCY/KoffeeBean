@@ -11,7 +11,7 @@ export function getProduct(id: string): Product | undefined {
 
 export function addItem(cart: CartItem[], productId: string): CartItem[] {
   const id = productId;
-  if (!getProduct(id) || id === "american-press") return cart;
+  if (!getProduct(id)) return cart;
 
   const existing = cart.find((i) => i.productId === id);
   if (existing) {
