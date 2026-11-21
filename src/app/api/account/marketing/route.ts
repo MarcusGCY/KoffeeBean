@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { bestEffort } from "@/lib/agent-activity";
 import { grantMarketing, readMarketing, withdrawMarketing } from "@/lib/marketing-consent";
+import { clearWithdrawalPending, markWithdrawalPending } from "@/lib/marketing-sync";
 import { MARKETING_CONSENT_VERSION } from "@/lib/marketing-text";
 import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 import { mirrorProfileToBi, recordAudit } from "@/lib/store-meta";
@@ -47,6 +48,7 @@ export async function PUT(req: Request) {
   try {
     const marketing = await grantMarketing(auth.userId);
     await audit(auth.userId, "marketing.consent", `Opted in to marketing (consent ${marketing.version})`);
+    await clearWithdrawalPending(auth.userId);
     const biSynced = await mirrorProfileToBi(auth.userId);
     return NextResponse.json({ marketing, biSynced }, { headers: NO_STORE });
   } catch (err) {
@@ -54,7 +56,12 @@ export async function PUT(req: Request) {
   }
 }
 
-/** Withdraws the opt-in and mirrors that to BI before answering, so the row stops listing the shopper. */
+/**
+ * Withdraws the opt-in. Auth0 is written first (the source of truth), then the withdrawal is recorded for
+ * retry, then BI is written before answering. If the BI write fails the record stays, so
+ * `/api/privacy/reconcile-marketing` corrects the row and `/api/bi/profiles` stops listing it meanwhile.
+ * `retryQueued` says whether that record exists.
+ */
 export async function DELETE(req: Request) {
   const auth = await requireShopper();
   if (auth instanceof NextResponse) return auth;
@@ -63,8 +70,10 @@ export async function DELETE(req: Request) {
   try {
     const marketing = await withdrawMarketing(auth.userId);
     await audit(auth.userId, "marketing.withdraw", "Withdrew marketing consent");
+    const recorded = await markWithdrawalPending(auth.userId);
     const biSynced = await mirrorProfileToBi(auth.userId);
-    return NextResponse.json({ marketing, biSynced }, { headers: NO_STORE });
+    if (biSynced) await clearWithdrawalPending(auth.userId);
+    return NextResponse.json({ marketing, biSynced, retryQueued: !biSynced && recorded }, { headers: NO_STORE });
   } catch (err) {
     return dbFailure(err);
   }

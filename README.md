@@ -394,6 +394,8 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `BI_HASH_SECRET` | Optional. 16+ character secret that keys the shopper hash for BI events. Leave it empty in git |
 | `DEMO_SHOPPER_SUB` | Optional. Auth0 `sub` of the one demo shopper (see "Demo shopper"). Unset means no demo shopper. Set the value in your host, never in git |
 | `BI_API_SECRET` | Optional. Service token for the read-only `/api/bi/*` endpoints (see "BI read API"). Leave it empty in git |
+| `PRIVACY_MAINTENANCE_SECRET` | Optional. 16+ character service token for `POST /api/privacy/*` (see "Personalization data and retention"). Separate from `BI_API_SECRET` so the BI bot cannot delete or rewrite. Unset means those routes answer 503. Leave it empty in git |
+| `PRIVACY_RETENTION_MONTHS` | Optional. Retention period in whole months, 1 to 120. Unset or invalid means 24. The 24 is pending the privacy owner |
 
 ### BI event log (Neon Postgres)
 
@@ -465,6 +467,8 @@ curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&
 `GET /api/bi/profiles` reads `bi_customer_profiles` (migration `0003`, written but not applied; until it is applied the route answers `503 unavailable`). Same secret auth as above. `source` defaults to `live`; `limit` (default 50, max 200) and `cursor` page the per-shopper rows.
 
 - `aggregates` is the default view: `shoppers`, `marketingConsented`, `segments` (`prospect`, `new`, `repeat`, `lapsed`), `regions` (`{ region, shoppers }`), `preferredRoasts`, `avgAovCents`, `avgOrders90d`, `medianCadenceDays`.
+- `regions` never lists a district with fewer than `BI_MIN_GROUP_SIZE` (5, in `src/lib/bi-privacy.ts`) shoppers. Those are added up in `{ "region": "other", "shoppers": n }`. `other` is only published when it holds at least 5; if the hidden districts alone are fewer, the smallest shown districts are folded in, so `shoppers` minus the named districts can never give back one hidden district. A per-shopper row in a hidden district has `region: null`.
+- `consentCheck` says how `rows` was gated: `auth0_withdrawals` (also checked against withdrawals not yet written to BI), `bi_only` (no Upstash configured, so only the BI flag applied) or `unavailable` (the check failed, so `rows` is empty on purpose).
 - `rows` lists a shopper (`shopper_hash`, `segment`, `cadence_days`, `aov_cents`, `orders_90d`, `preferred_roast`, `region`, `consent_at`, `updated_at`) **only where `marketing_consent = true`**. `nextCursor` is the last `shopper_hash`.
 - Test shoppers (`is_test`) are left out of both and only counted in `excludedTest`.
 - `region` is only the 2-digit postal district of a shopper who opted in to location use. A postcode is never stored in BI and never returned.
@@ -482,13 +486,23 @@ What is stored, where, and for how long. The consent versions and times below ar
 | One row per shopper: segment, cadence, AOV, orders in 90 days, roast, **2-digit region**, `is_test`, `marketing_consent`, `consent_at` | Neon `bi_customer_profiles`, keyed by `shopper_hash` | Order events and the account changes above | Overwritten in place; no history is kept |
 
 - A consent given under an older `MARKETING_CONSENT_VERSION` does not count. The shopper sees the option off and must agree again.
-- Withdrawing marketing consent writes `marketing_consent = false` and `consent_at = NULL` to BI before the API answers. The response carries `biSynced: false` if that write failed; the shopper's choice is still saved in Auth0, which is the source of truth, and the BI row is corrected by that shopper's next order or account change. `GET /api/bi/profiles` only lists a shopper while the row says `marketing_consent = true`.
+- Withdrawing marketing consent writes Auth0 first (the source of truth), records the withdrawal in two small Upstash sets (shoppers to retry, and their hashes), then writes `marketing_consent = false` and `consent_at = NULL` to BI before the API answers, and clears the record. If the BI write fails the response carries `biSynced: false` and `retryQueued: true`, the record stays, and `GET /api/bi/profiles` leaves that shopper out of `rows` until BI is corrected. If Upstash is down at that moment `retryQueued` is `false`; the scan below still catches it.
 - A postcode never leaves Auth0. BI holds the 2-digit region only.
 
-**Retention is a policy, not something this code enforces.** There is no scheduled job, TTL or purge that deletes BI profile rows or ages out Auth0 values; they stay until the shopper withdraws or resets, or an operator deletes them. Until a job exists, an operator should:
+**Maintenance routes.** Both are `POST` only, need `Authorization: Bearer <PRIVACY_MAINTENANCE_SECRET>`, return counts and never identifiers, and answer 503 `unconfigured` when the secret, `DATABASE_URL`, `BI_HASH_SECRET` or the Auth0 management credentials are missing.
+
+- `POST /api/privacy/reconcile-marketing` re-syncs BI consent from Auth0. It first rewrites the BI row of every queued withdrawal from Auth0's current answer, then scans Auth0 users and turns off `marketing_consent` on any BI row whose shopper has no current consent (a missed withdrawal, a deleted account, consent under older wording). The sweep only runs when the scan reached every user; Auth0 stops offset paging at 1000 users, so with more than that it is skipped and `scan.complete` is `false`. It only ever turns consent off in the sweep and never creates rows. Safe to repeat: a second run changes nothing.
+- `POST /api/privacy/purge` deletes `bi_customer_profiles` rows whose `updated_at` is older than the retention period, and removes `barista_profile`, `location` and `marketing_consent` from Auth0 users with no activity (an order, or a change to any of those three) since then. Orders, the cart and the audit trail are kept, and `bi_events` is not touched. Send `{ "dryRun": true }` to count without deleting.
+
+```bash
+export PRIVACY_BASE_URL="https://<production-host>"
+curl -s -X POST -H "Authorization: Bearer $PRIVACY_MAINTENANCE_SECRET" "$PRIVACY_BASE_URL/api/privacy/reconcile-marketing"
+curl -s -X POST -H "Authorization: Bearer $PRIVACY_MAINTENANCE_SECRET" -H "content-type: application/json" -d '{"dryRun":true}' "$PRIVACY_BASE_URL/api/privacy/purge"
+```
+
+**Retention period.** `PRIVACY_RETENTION_MONTHS`, default **24 months**, is a placeholder pending the privacy owner. **There is no scheduled job in this repo**: `vercel.json` has no cron for these routes, so nothing is purged or reconciled until a scheduler or an operator calls them. Vercel Cron sends `GET`, which these routes refuse, so schedule them from something that can `POST`. Also still manual:
 
 - Delete a closed account's row: `DELETE FROM bi_customer_profiles WHERE shopper_hash = $1`, with the hash computed by `hashShopperId` for that Auth0 user.
-- Periodically remove stale rows, for example `DELETE FROM bi_customer_profiles WHERE updated_at < now() - interval '24 months'`. The 24 months is a suggested starting point to confirm with whoever owns the privacy policy.
 - After rotating `BI_HASH_SECRET`, delete all rows: they are keyed by hashes the app can no longer reproduce, so they would not be updated or removed again.
 
 ### BI demo seed (`source=demo`)

@@ -31,7 +31,7 @@ type Canned = {
 };
 
 function install(canned: Partial<Canned> = {}) {
-  const data: Canned = { rows: [consentedRow(1), consentedRow(2)], excluded: 4, regions: [{ region: "23", n: 7 }, { region: "10", n: 2 }], ...canned };
+  const data: Canned = { rows: [consentedRow(1), consentedRow(2)], excluded: 4, regions: [{ region: "23", n: 7 }, { region: "10", n: 6 }], ...canned };
   queryMock.mockImplementation(async (text: string) => {
     if (text.includes("percentile_cont")) {
       return [{ shoppers: 12, consented: 3, avg_aov_cents: 2399.6, avg_orders_90d: 2.456, median_cadence_days: 14 }];
@@ -123,7 +123,7 @@ describe("GET /api/bi/profiles", () => {
       segments: { prospect: 0, new: 3, repeat: 8, lapsed: 1 },
       regions: [
         { region: "23", shoppers: 7 },
-        { region: "10", shoppers: 2 },
+        { region: "10", shoppers: 6 },
       ],
       preferredRoasts: { medium: 6, light: 2 },
       avgAovCents: 2400,
@@ -171,12 +171,12 @@ describe("GET /api/bi/profiles", () => {
   it("returns only a 2-digit region, never a postcode, even if a stored value were malformed", async () => {
     install({
       rows: [consentedRow(1, { region: "238823" }), consentedRow(2, { region: "23 " }), consentedRow(3, { region: "68" })],
-      regions: [{ region: "238823", n: 1 }, { region: "68", n: 2 }],
+      regions: [{ region: "238823", n: 1 }, { region: "68", n: 6 }],
     });
     const raw = await (await call()).text();
     const body = JSON.parse(raw) as { aggregates: { regions: { region: string }[] }; rows: { region: string | null }[] };
     expect(body.rows.map((row) => row.region)).toEqual([null, null, "68"]);
-    expect(body.aggregates.regions).toEqual([{ region: "68", shoppers: 2 }]);
+    expect(body.aggregates.regions).toEqual([{ region: "68", shoppers: 6 }]);
     expect(raw).not.toContain("238823");
     expect(raw).not.toMatch(/postcode/i);
     expect(raw).not.toMatch(/"\d{6}"/);

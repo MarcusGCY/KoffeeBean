@@ -119,3 +119,44 @@ export async function patchAppMetadata(
     body: JSON.stringify({ app_metadata: patch }),
   });
 }
+
+/** Auth0 stops offset paging at 1000 users, so a scan of more than that is never complete. */
+export const AUTH0_LIST_MAX = 1000;
+const AUTH0_LIST_PAGE = 100;
+
+export type ListedUser = { userId: string; appMetadata: Record<string, unknown> };
+
+/**
+ * Reads every user's `app_metadata` page by page. `complete` is false when Auth0 has more users than a
+ * scan can reach, so callers must not treat an absent user as "has no consent".
+ */
+export async function listUsersAppMetadata(): Promise<{ users: ListedUser[]; complete: boolean }> {
+  const token = await getManagementToken();
+  const users: ListedUser[] = [];
+  let total = 0;
+  for (let page = 0; users.length < AUTH0_LIST_MAX; page += 1) {
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://${auth0Domain()}/api/v2/users?page=${page}&per_page=${AUTH0_LIST_PAGE}&include_totals=true&fields=user_id,app_metadata&include_fields=true`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+    } catch {
+      fail();
+    }
+    if (!response.ok) {
+      console.error("[auth0] list status", response.status);
+      fail();
+    }
+    const body = (await response.json()) as { users?: unknown; total?: unknown };
+    if (!Array.isArray(body.users)) fail();
+    total = typeof body.total === "number" ? body.total : users.length + body.users.length;
+    for (const item of body.users as { user_id?: unknown; app_metadata?: unknown }[]) {
+      if (typeof item?.user_id === "string" && item.user_id) {
+        users.push({ userId: item.user_id, appMetadata: metadataObject(item.app_metadata) });
+      }
+    }
+    if (body.users.length < AUTH0_LIST_PAGE || users.length >= total) break;
+  }
+  return { users, complete: total <= AUTH0_LIST_MAX && users.length >= total };
+}
