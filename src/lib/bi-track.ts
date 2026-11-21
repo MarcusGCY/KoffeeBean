@@ -4,6 +4,7 @@ import { biPayloadSchemas, recordBiEvent, type BiEventPayloads, type BiSource } 
 import { getAppMetadata } from "./auth0-mgmt";
 import { biDbConfigured, getBiSql } from "./bi-db";
 import { hashShopperId } from "./bi-hash";
+import { upsertBiProfile, type BiProfileFacts } from "./bi-profiles";
 import { isDemoShopperSub } from "./demo-shopper";
 import { redisPipeline } from "./upstash";
 
@@ -35,6 +36,11 @@ export type BiContext = {
   sessionId?: string | null;
   /** Test traffic marker, e.g. from `isTestShopper(app_metadata)`. Omitted means not test. */
   isTest?: boolean;
+  /**
+   * The shopper's customer-profile traits, when the caller has them. Order events then also refresh the
+   * `bi_customer_profiles` row. Only a 2-digit region, never a postcode (see `bi-profiles.ts`).
+   */
+  profile?: BiProfileFacts;
 };
 
 /**
@@ -220,6 +226,7 @@ export async function trackOrderPlaced(ctx: BiContext, order: PlacedOrder): Prom
   );
   await recordBiEvent({ type: "order.placed", source, shopperSub: ctx.sub, sessionId: ctx.sessionId, payload, ...testFlag(ctx) });
   await upsertBiOrder(ctx.sub, source, order.createdAt, payload, attributed, ctx.isTest === true);
+  if (ctx.profile) await writeBiProfile(ctx.sub, source, ctx.profile);
 }
 
 /** `order.cancelled` event plus `bi_orders.cancelled_at`. */
@@ -237,6 +244,19 @@ export async function trackOrderCancelled(
     ...testFlag(ctx),
   });
   await markBiOrderCancelled(ctx.sub, order.id, order.cancelledAt);
+  if (ctx.profile) await writeBiProfile(ctx.sub, source, ctx.profile);
+}
+
+/** Refreshes this shopper's `bi_customer_profiles` row. Never throws. */
+export async function trackProfile(ctx: BiContext, facts: BiProfileFacts): Promise<void> {
+  const { source } = await resolve(ctx);
+  await writeBiProfile(ctx.sub, source, facts);
+}
+
+async function writeBiProfile(sub: string, source: BiSource, facts: BiProfileFacts): Promise<void> {
+  await biSql(async (sql) => {
+    await upsertBiProfile(sql, sub, source, facts);
+  });
 }
 
 function attributionKey(sub: string, productId: string): string {

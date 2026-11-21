@@ -4,7 +4,7 @@ import { bestEffort } from "@/lib/agent-activity";
 import { clearLocation, grantLocation, readLocation } from "@/lib/location-consent";
 import { parsePostcode } from "@/lib/location-text";
 import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
-import { recordAudit } from "@/lib/store-meta";
+import { emitBiProfile, recordAudit } from "@/lib/store-meta";
 
 const NO_STORE = { "cache-control": "private, no-store" };
 
@@ -42,6 +42,7 @@ export async function PUT(req: Request) {
   try {
     const location = await grantLocation(auth.userId, postcode);
     await audit(auth.userId, "location.consent", "Allowed use of postal district");
+    emitBiProfile(auth.userId);
     return NextResponse.json({ location }, { headers: NO_STORE });
   } catch (err) {
     return dbFailure(err);
@@ -57,6 +58,7 @@ export async function DELETE(req: Request) {
   try {
     await clearLocation(auth.userId);
     await audit(auth.userId, "location.withdraw", "Withdrew postcode consent and cleared it");
+    emitBiProfile(auth.userId);
     return NextResponse.json({ location: null }, { headers: NO_STORE });
   } catch (err) {
     return dbFailure(err);
