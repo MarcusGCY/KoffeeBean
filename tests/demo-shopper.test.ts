@@ -32,7 +32,8 @@ import {
 } from "@/lib/bi-demo-seed";
 import { demoCsrfToken } from "@/lib/demo-auth";
 import { demoShopperSub, isDemoShopperSub } from "@/lib/demo-shopper";
-import { listOrders, normalizeAgentPrefs, normalizeShopperFlags, isTestShopper } from "@/lib/store-meta";
+import { isTestShopper } from "@/lib/bi-track";
+import { listOrders, normalizeAgentPrefs, normalizeShopperFlags } from "@/lib/store-meta";
 
 const NOW = new Date("2026-11-21T12:00:00.000Z");
 const DEMO_SUB = "auth0|demo-shopper";
@@ -107,17 +108,16 @@ describe("normalizeShopperFlags and isTestShopper", () => {
     expect(normalizeShopperFlags({ is_test: 1 }).isTest).toBe(false);
   });
 
-  it("isTestShopper follows app_metadata.is_test", async () => {
-    expect(await isTestShopper("auth0|someone")).toBe(false);
-    db.meta = { is_test: true };
-    expect(await isTestShopper("auth0|someone")).toBe(true);
+  it("isTestShopper follows app_metadata.is_test", () => {
+    expect(isTestShopper({}, "auth0|someone")).toBe(false);
+    expect(isTestShopper({ is_test: true }, "auth0|someone")).toBe(true);
   });
 
-  it("isTestShopper is true for the configured demo shopper without an Auth0 read", async () => {
+  it("isTestShopper is true for the configured demo shopper whatever the metadata says", () => {
     process.env.DEMO_SHOPPER_SUB = DEMO_SUB;
-    expect(await isTestShopper(DEMO_SUB)).toBe(true);
-    expect(db.reads).toEqual([]);
-    expect(await isTestShopper("auth0|someone")).toBe(false);
+    expect(isTestShopper({}, DEMO_SUB)).toBe(true);
+    expect(isTestShopper({}, "auth0|someone")).toBe(false);
+    expect(isTestShopper({})).toBe(false);
   });
 });
 

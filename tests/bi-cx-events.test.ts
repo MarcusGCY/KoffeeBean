@@ -5,6 +5,7 @@ const recordMock = vi.hoisted(() => vi.fn());
 const sqlMock = vi.hoisted(() => vi.fn());
 const getShopper = vi.hoisted(() => vi.fn());
 const addToCart = vi.hoisted(() => vi.fn());
+const takeProductViewSlot = vi.hoisted(() => vi.fn());
 vi.mock("@neondatabase/serverless", () => ({ neon: neonMock }));
 vi.mock("next/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/server")>()),
@@ -13,7 +14,7 @@ vi.mock("next/server", async (importOriginal) => ({
   },
 }));
 vi.mock("@/lib/shopper", () => ({ getShopper }));
-vi.mock("@/lib/store-meta", () => ({ addToCart, removeFromCart: vi.fn() }));
+vi.mock("@/lib/store-meta", () => ({ addToCart, removeFromCart: vi.fn(), takeProductViewSlot }));
 vi.mock("@/lib/store-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/store-http")>()),
   requireShopper: async () => ({ userId: "auth0|abc" }),
@@ -160,6 +161,7 @@ describe("routes", () => {
     neonMock.mockReset().mockReturnValue(sql);
     getShopper.mockReset().mockResolvedValue({ id: "auth0|abc" });
     addToCart.mockReset().mockResolvedValue({ items: [{ productId: "mug", qty: 1 }] });
+    takeProductViewSlot.mockReset().mockResolvedValue({ ok: true, isTest: false });
   });
 
   const post = (url: string, body: unknown) =>
