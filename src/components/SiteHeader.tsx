@@ -43,6 +43,9 @@ export function SiteHeader({
               <Link href="/account/agents" className="text-sm font-medium text-amber-800 hover:underline">
                 Agents
               </Link>
+              <Link href="/account/profile" className="text-sm font-medium text-amber-800 hover:underline">
+                Profile
+              </Link>
               {demoHref && (
                 <Link href={demoHref} className="text-sm font-medium text-amber-800 hover:underline">
                   Demo

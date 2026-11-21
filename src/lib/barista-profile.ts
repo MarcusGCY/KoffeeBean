@@ -1,4 +1,5 @@
 import products from "@/data/products.json";
+import { MAX_CADENCE_DAYS } from "./barista-profile-limits";
 import { normalizeLocation } from "./location-text";
 import { DEFAULT_GRAMS_PER_DAY, estimateReorder, suggestNextBean, type NudgeOrder, type NudgeProduct } from "./reorder-nudge";
 import { ROASTS, type Roast } from "./types";
@@ -22,7 +23,7 @@ export const META_BUDGET_BYTES = 15_000;
 export const TOP_PRODUCTS = 5;
 export const MIN_GRAMS_PER_DAY = 5;
 export const MAX_GRAMS_PER_DAY = 60;
-export const MAX_CADENCE_DAYS = 180;
+export { MAX_CADENCE_DAYS };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
