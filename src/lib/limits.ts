@@ -2,20 +2,24 @@ export const CHAT_HOUR_LIMIT = 20;
 export const CHAT_DAY_LIMIT = 60;
 export const CART_WRITE_HOUR_LIMIT = 30;
 export const ORDER_WRITE_HOUR_LIMIT = 10;
+export const PRODUCT_VIEW_HOUR_LIMIT = 120;
 export const CHAT_HOUR_MS = 60 * 60 * 1000;
 export const CHAT_DAY_MS = 24 * CHAT_HOUR_MS;
 
 export const CHAT_RATE_LIMIT_MESSAGE = "Too many messages. Please try again in a little while.";
 export const CART_RATE_LIMIT_MESSAGE = "Too many cart updates. Please try again in a little while.";
 export const ORDER_RATE_LIMIT_MESSAGE = "Too many order updates. Please try again in a little while.";
+export const PRODUCT_VIEW_RATE_LIMIT_MESSAGE = "Too many product views. Please try again in a little while.";
 
-export type LimitKind = "messages" | "cartWrites" | "orderWrites";
+export type LimitKind = "messages" | "cartWrites" | "orderWrites" | "productViews";
 
 /** Timestamps live under the app_metadata `chat_limits` key, including cart and order writes. */
 export type ChatLimits = {
   messages: number[];
   cartWrites: number[];
   orderWrites: number[];
+  /** Left out while empty, so existing `chat_limits` values keep their exact shape. */
+  productViews?: number[];
 };
 
 export type RateLimited = {
@@ -35,10 +39,12 @@ function stamps(value: unknown): number[] {
 
 export function normalizeLimits(value: unknown): ChatLimits {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const productViews = stamps(record.productViews);
   return {
     messages: stamps(record.messages),
     cartWrites: stamps(record.cartWrites),
     orderWrites: stamps(record.orderWrites),
+    ...(productViews.length ? { productViews } : {}),
   };
 }
 
@@ -53,10 +59,12 @@ function retryAfter(oldest: number | undefined, windowMs: number, at: number): n
  * Auth0 replaces that whole key, so cart and order stamps travel with chat stamps.
  */
 export function takeSlot(limits: ChatLimits, kind: LimitKind, now: number): SlotDecision {
+  const views = (limits.productViews ?? []).filter((ts) => now - ts < CHAT_HOUR_MS);
   const next: ChatLimits = {
     messages: limits.messages.filter((ts) => now - ts < CHAT_DAY_MS),
     cartWrites: limits.cartWrites.filter((ts) => now - ts < CHAT_HOUR_MS),
     orderWrites: limits.orderWrites.filter((ts) => now - ts < CHAT_HOUR_MS),
+    ...(views.length ? { productViews: views } : {}),
   };
 
   if (kind === "messages") {
@@ -71,6 +79,14 @@ export function takeSlot(limits: ChatLimits, kind: LimitKind, now: number): Slot
     return { ok: true, limits: next };
   }
 
+  if (kind === "productViews") {
+    if (views.length >= PRODUCT_VIEW_HOUR_LIMIT) {
+      return { ok: false, retryAfterSec: retryAfter(views[0], CHAT_HOUR_MS, now), limits: next };
+    }
+    next.productViews = [...views, now];
+    return { ok: true, limits: next };
+  }
+
   const bucket = kind === "cartWrites" ? next.cartWrites : next.orderWrites;
   const cap = kind === "cartWrites" ? CART_WRITE_HOUR_LIMIT : ORDER_WRITE_HOUR_LIMIT;
   if (bucket.length >= cap) {
@@ -82,10 +98,16 @@ export function takeSlot(limits: ChatLimits, kind: LimitKind, now: number): Slot
   return { ok: true, limits: next };
 }
 
-export function rateLimited(kind: "cartWrites" | "orderWrites", retryAfterSec: number): RateLimited {
+export function rateLimited(kind: "cartWrites" | "orderWrites" | "productViews", retryAfterSec: number): RateLimited {
+  const message =
+    kind === "cartWrites"
+      ? CART_RATE_LIMIT_MESSAGE
+      : kind === "productViews"
+        ? PRODUCT_VIEW_RATE_LIMIT_MESSAGE
+        : ORDER_RATE_LIMIT_MESSAGE;
   return {
     error: "rate_limited",
-    message: kind === "cartWrites" ? CART_RATE_LIMIT_MESSAGE : ORDER_RATE_LIMIT_MESSAGE,
+    message,
     retryAfterSec,
   };
 }
