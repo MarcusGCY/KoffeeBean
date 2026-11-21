@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import {
   STATUS_LABEL,
   activitySentence,
-  agentDisplayName,
+  entryAgentName,
   BARISTA,
   type ActivityGroup,
   type ActivityStatus,
@@ -25,7 +25,7 @@ const PILL: Record<ActivityStatus, string> = {
   undone: "border border-stone-300 bg-white text-stone-600",
 };
 
-function Avatar({ agent }: { agent: string }) {
+function Avatar({ agent, name }: { agent: string; name: string }) {
   if (agent === BARISTA) {
     return (
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-100 bg-amber-50">
@@ -35,7 +35,7 @@ function Avatar({ agent }: { agent: string }) {
   }
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-stone-800 text-sm font-semibold text-white">
-      {agentDisplayName(agent).charAt(0)}
+      {name.charAt(0)}
     </span>
   );
 }
@@ -89,7 +89,7 @@ function Row({ row, open, onToggle }: { row: ActivityRow; open: boolean; onToggl
         onClick={onToggle}
         className="flex min-h-16 w-full items-start gap-3 px-4 py-3 text-left"
       >
-        <Avatar agent={row.agent} />
+        <Avatar agent={row.agent} name={entryAgentName(row)} />
         <span className="min-w-0 flex-1">
           <span className="block text-[15px] leading-snug text-stone-900">{activitySentence(row)}</span>
           <span className="mt-1 flex items-center gap-2 text-[13px] text-stone-500">
@@ -110,7 +110,7 @@ function Row({ row, open, onToggle }: { row: ActivityRow; open: boolean; onToggl
           <p>{row.reason}</p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px] text-stone-600">
             <dt className="text-stone-500">Agent</dt>
-            <dd>{agentDisplayName(row.agent)}</dd>
+            <dd>{entryAgentName(row)}</dd>
             {row.amountCents != null && (
               <>
                 <dt className="text-stone-500">Amount</dt>

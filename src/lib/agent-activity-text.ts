@@ -13,6 +13,9 @@ export const ACTIVITY_ACTIONS = [
   "cancel_order",
   "report_problem",
   "consent",
+  "pause",
+  "resume",
+  "revoke",
 ] as const;
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];
 
@@ -44,9 +47,15 @@ export const STATUS_LABEL: Record<ActivityStatus, string> = {
 
 export const BARISTA = "barista";
 
+/** Outside agents are named in `subject`; Barista rows use `subject` for what was ordered. */
+export function entryAgentName(entry: Pick<ActivityEntry, "agent" | "subject">): string {
+  return entry.agent === BARISTA ? "Barista" : entry.subject || agentDisplayName(entry.agent);
+}
+
 export function agentDisplayName(agent: string): string {
   if (agent === BARISTA) return "Barista";
-  return agent.charAt(0).toUpperCase() + agent.slice(1);
+  const spaced = agent.replace(/[-_]+/g, " ");
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 function sgd(cents: number): string {
@@ -63,7 +72,7 @@ const GENERIC: Partial<Record<ActivityAction, [string, string]>> = {
 };
 
 /** The row's sentence, worded from the entry. Barista rows follow the C mockup. */
-export function activitySentence(entry: ActivityEntry, agentName = agentDisplayName(entry.agent)): string {
+export function activitySentence(entry: ActivityEntry, agentName = entryAgentName(entry)): string {
   const amount = entry.amountCents != null ? `, ${sgd(entry.amountCents)}` : "";
   const what = entry.subject;
   const { action, status } = entry;
@@ -72,6 +81,9 @@ export function activitySentence(entry: ActivityEntry, agentName = agentDisplayN
       ? `You allowed ${agentName} to order up to ${sgd(entry.amountCents)} per order`
       : `You allowed ${agentName} to order for you`;
   }
+  if (action === "pause") return `You paused ${agentName}`;
+  if (action === "resume") return `You resumed ${agentName}`;
+  if (action === "revoke") return `You revoked ${agentName}`;
   if (action === "suggest") {
     if (status === "declined") return `${agentName} suggested a reorder. You said not now.`;
     if (status === "done") return `${agentName} suggested a reorder of ${what}. You said yes.`;
