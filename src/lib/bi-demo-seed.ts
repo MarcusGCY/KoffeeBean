@@ -2,6 +2,8 @@ import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import type { BiSql } from "./bi-db";
 import { shapeBiEvent, type BiEventInput, type BiEventPayloads } from "./bi-events";
 import { hashShopperId } from "./bi-hash";
+import { biProfileSchema, buildBiProfileFacts, type BiProfileFacts } from "./bi-profiles";
+import { computeProfile } from "./barista-profile";
 import { getProduct, total } from "./cart";
 import { ORDER_HISTORY_LIMIT } from "./coupon-offer";
 import { demoShopperSub } from "./demo-shopper";
@@ -248,6 +250,78 @@ export async function seedBiDemoStory(
   ]);
 
   return { events: story.events.length, orders: story.orders.length };
+}
+
+/**
+ * Demo rows for `bi_customer_profiles` (migration 0003), one per synthetic story shopper. Regions are 2-digit
+ * districts, the first three shoppers are marketing-consented and the last is flagged `is_test`, so
+ * `/api/bi/profiles?source=demo` shows consented rows and an `excludedTest` count.
+ */
+export const DEMO_PROFILE_REGIONS = ["10", "18", "23", "27", "31", "68"] as const;
+
+export type DemoProfileRow = { shopperHash: string; facts: BiProfileFacts };
+
+export function buildDemoProfiles(now: Date = new Date()): DemoProfileRow[] {
+  const story = buildDemoStory(now);
+  return Array.from({ length: SHOPPER_COUNT }, (_, index) => {
+    const shopperHash = hashShopperId(`demo-seed|shopper-${index + 1}`);
+    const orders = story.orders.filter((order) => order.shopperHash === shopperHash);
+    const mapped = orders.map((order) => ({
+      createdAt: order.createdAt.toISOString(),
+      cancelledAt: order.cancelledAt ? order.cancelledAt.toISOString() : null,
+      totalCents: order.totalCents,
+      items: order.items.map((item) => ({ productId: item.productId, qty: item.qty })),
+    }));
+    const rows = mapped.map((row) => ({ createdAt: row.createdAt, cancelledAt: row.cancelledAt, totalCents: row.totalCents }));
+    const profile = computeProfile(mapped, { now });
+    const consented = index < 3;
+    const facts = buildBiProfileFacts({
+      orders: rows,
+      profile,
+      region: DEMO_PROFILE_REGIONS[index] ?? null,
+      marketing: consented ? { consent: true, at: new Date(now.getTime() - (index + 1) * 10 * DAY).toISOString() } : { consent: false, at: null },
+      isTest: index === SHOPPER_COUNT - 1,
+      now,
+    });
+    return { shopperHash, facts: biProfileSchema.parse(facts) };
+  });
+}
+
+/**
+ * Upserts the demo profile rows in one statement. Only rows that are already `source = 'demo'` can be
+ * overwritten, so a live row is never touched. Run apart from the story transaction, so a database without
+ * migration 0003 still seeds the story; the caller treats a failure here as "no profiles".
+ */
+export async function seedBiDemoProfiles(sql: BiSql, now: Date = new Date()): Promise<number> {
+  const rows = buildDemoProfiles(now).map(({ shopperHash, facts }) => ({
+    shopper_hash: shopperHash,
+    segment: facts.segment,
+    cadence_days: facts.cadenceDays,
+    aov_cents: facts.aovCents,
+    orders_90d: facts.orders90d,
+    preferred_roast: facts.preferredRoast,
+    region: facts.region,
+    is_test: facts.isTest,
+    marketing_consent: facts.marketingConsent,
+    consent_at: facts.consentAt,
+  }));
+  await sql.query(
+    `INSERT INTO bi_customer_profiles (shopper_hash, segment, cadence_days, aov_cents, orders_90d, preferred_roast,
+                                       region, is_test, marketing_consent, consent_at, source, updated_at)
+     SELECT r.shopper_hash, r.segment, r.cadence_days, r.aov_cents, r.orders_90d, r.preferred_roast,
+            r.region, r.is_test, r.marketing_consent, r.consent_at, 'demo', $2::timestamptz
+     FROM jsonb_to_recordset($1::jsonb) AS r(
+       shopper_hash text, segment text, cadence_days int, aov_cents int, orders_90d int, preferred_roast text,
+       region text, is_test boolean, marketing_consent boolean, consent_at timestamptz)
+     ON CONFLICT (shopper_hash) DO UPDATE SET
+       segment = EXCLUDED.segment, cadence_days = EXCLUDED.cadence_days, aov_cents = EXCLUDED.aov_cents,
+       orders_90d = EXCLUDED.orders_90d, preferred_roast = EXCLUDED.preferred_roast, region = EXCLUDED.region,
+       is_test = EXCLUDED.is_test, marketing_consent = EXCLUDED.marketing_consent, consent_at = EXCLUDED.consent_at,
+       updated_at = EXCLUDED.updated_at
+     WHERE bi_customer_profiles.source = 'demo'`,
+    [JSON.stringify(rows), now.toISOString()],
+  );
+  return rows.length;
 }
 
 /**

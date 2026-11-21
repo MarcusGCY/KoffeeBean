@@ -4,7 +4,10 @@ import { checkout, type Order } from "./checkout";
 import { ORDER_HISTORY_LIMIT, type CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
-import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
+import { biDbConfigured } from "./bi-db";
+import { biHashConfigured } from "./bi-hash";
+import { biProfileFromMeta, type BiProfileFacts } from "./bi-profiles";
+import { emitBi, trackOrderCancelled, trackOrderPlaced, trackProfile } from "./bi-track";
 import { normalizeProfile, profileIsStale, profilePatch, type BaristaProfile } from "./barista-profile";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus, undoDeadline } from "./order-status";
@@ -212,6 +215,29 @@ export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
     demo: flags.isTest || isDemoShopperSub(userId),
     orders: nudgeOrders(readOrders(meta)),
   };
+}
+
+/**
+ * The traits mirrored to `bi_customer_profiles`. `isTest` is the one `isTestShopper` check plus the configured
+ * demo shopper. `profile` is the profile just written, or undefined to use the stored one.
+ */
+function biFacts(
+  userId: string,
+  meta: Record<string, unknown>,
+  orders: readonly StoredOrder[],
+  now: Date,
+  profile?: BaristaProfile,
+): BiProfileFacts {
+  return biProfileFromMeta(meta, orders, { isTest: isTestShopper(meta) || isDemoShopperSub(userId), now, profile });
+}
+
+/** After a change to location or profile settings: refreshes this shopper's BI row, after the response. */
+export function emitBiProfile(userId: string, now = new Date()): void {
+  emitBi(async () => {
+    if (!biDbConfigured() || !biHashConfigured()) return;
+    const meta = await getAppMetadata(userId);
+    await trackProfile({ sub: userId }, biFacts(userId, meta, readOrders(meta), now));
+  });
 }
 
 /** The shopper's retained orders as the nudge and profile engines read them. */
@@ -547,8 +573,10 @@ export async function placeOrder(
   };
   const nextOrders = [stored, ...existing].slice(0, ORDER_CAP);
   const changes = { orders: nextOrders, cart: storedCart([], null), chat_limits: decision.limits };
-  await patchAppMetadata(userId, { ...changes, ...profilePatch(meta, nudgeOrders(nextOrders), now, changes) });
-  emitBi(() => trackOrderPlaced({ sub: userId }, stored));
+  const learned = profilePatch(meta, nudgeOrders(nextOrders), now, changes);
+  await patchAppMetadata(userId, { ...changes, ...learned });
+  const facts = biFacts(userId, meta, nextOrders, now, learned.barista_profile);
+  emitBi(() => trackOrderPlaced({ sub: userId, profile: facts }, stored));
   return summarize(stored, now);
 }
 
@@ -606,10 +634,12 @@ export async function cancelOrder(
   next[index] = updated;
   const activity = undoActivityForOrder(normalizeActivity(meta.agent_activity), updated.id, now);
   const changes = { orders: next, chat_limits: decision.limits, ...(activity ? { agent_activity: activity } : {}) };
-  await patchAppMetadata(userId, { ...changes, ...profilePatch(meta, nudgeOrders(next), now, changes) });
+  const learned = profilePatch(meta, nudgeOrders(next), now, changes);
+  await patchAppMetadata(userId, { ...changes, ...learned });
+  const facts = biFacts(userId, meta, next, now, learned.barista_profile);
   emitBi(() =>
     trackOrderCancelled(
-      { sub: userId },
+      { sub: userId, profile: facts },
       { id: updated.id, totalCents: updated.totalCents, cancelledAt: now.toISOString() },
     ),
   );

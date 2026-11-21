@@ -11,7 +11,7 @@ import {
   type AccountResult,
 } from "@/lib/profile-account";
 import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
-import { recordAudit } from "@/lib/store-meta";
+import { emitBiProfile, recordAudit } from "@/lib/store-meta";
 import { ROASTS } from "@/lib/types";
 
 const NO_STORE = { "cache-control": "private, no-store" };
@@ -35,6 +35,7 @@ async function respond(userId: string, result: AccountResult) {
   }
   const { tool, summary } = auditFor(result.change);
   await bestEffort(recordAudit(userId, { ts: new Date().toISOString(), tool, summary, outcome: "ok" }));
+  emitBiProfile(userId);
   return NextResponse.json({ profile: result.view }, { headers: NO_STORE });
 }
 

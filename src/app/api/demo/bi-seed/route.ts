@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { biDbConfigured, getBiSql } from "@/lib/bi-db";
 import { mgmtConfigured } from "@/lib/auth0-mgmt";
-import { seedBiDemoStory, seedDemoShopperOrders } from "@/lib/bi-demo-seed";
+import { seedBiDemoProfiles, seedBiDemoStory, seedDemoShopperOrders } from "@/lib/bi-demo-seed";
 import { BiHashConfigError } from "@/lib/bi-hash";
 import { isSameOrigin, verifyDemoCsrf } from "@/lib/demo-auth";
 import { demoShopperSub } from "@/lib/demo-shopper";
@@ -39,8 +39,9 @@ export async function POST(req: Request) {
 
   try {
     const result = await seedBiDemoStory(sql);
+    const profiles = await seedProfiles(sql);
     const shopper = await seedShopperOrders();
-    const detail = `Seeded ${result.events} demo events and ${result.orders} demo order mirrors (source=demo). Live rows were not touched. ${shopper}`;
+    const detail = `Seeded ${result.events} demo events and ${result.orders} demo order mirrors (source=demo). ${profiles} demo customer profiles. Live rows were not touched. ${shopper}`;
     if (json) return NextResponse.json({ flash: "bi-seeded", detail, ...result });
     return redirectDemo(req, "bi-seeded", detail);
   } catch (error) {
@@ -49,6 +50,15 @@ export async function POST(req: Request) {
     }
     console.error("[demo] bi seed failed", error instanceof Error ? error.name : "unknown");
     return fail(req, json, "bi-error", "Could not seed the BI demo story. Neon rejected the write.", 500);
+  }
+}
+
+async function seedProfiles(sql: NonNullable<ReturnType<typeof getBiSql>>): Promise<string> {
+  try {
+    return `Seeded ${await seedBiDemoProfiles(sql)}`;
+  } catch {
+    console.error("[demo] demo profile seed skipped");
+    return "Skipped 0 (bi_customer_profiles is missing: migration 0003 is not applied)";
   }
 }
 
