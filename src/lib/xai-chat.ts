@@ -166,11 +166,17 @@ export async function runXaiChat(input: {
   turns: { role: "user" | "assistant"; content: string }[];
   signal: AbortSignal;
   sessionId?: string | null;
+  /** A prebuilt `Shopper profile:` block (see `profile-prompt.ts`). Sent as a second system message. */
+  profile?: string | null;
   onTool?: (name: string) => void;
   sink: ChatSink & { text(delta: string): void; error(message: string, retry?: boolean): void };
 }): Promise<XaiRun> {
   const model = chatModel();
-  const messages: ApiMessage[] = [{ role: "system", content: SYSTEM }, ...input.turns];
+  const messages: ApiMessage[] = [
+    { role: "system", content: SYSTEM },
+    ...(input.profile ? [{ role: "system", content: input.profile }] : []),
+    ...input.turns,
+  ];
   let tokensIn = 0;
   let tokensOut = 0;
   let sawUsage = false;
