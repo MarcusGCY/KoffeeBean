@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { biId, biSessionId, emitBi, trackAdded, trackCartAdded, trackUndone } from "@/lib/bi-track";
+import { biId, biSessionId, emitBi, shopperIsTest, trackAdded, trackCartAdded, trackUndone } from "@/lib/bi-track";
 import { getProduct } from "@/lib/cart";
 import { addToCart, removeFromCart } from "@/lib/store-meta";
 import { dbFailure, rateLimited, readJson, requireShopper, requireWrite } from "@/lib/store-http";
@@ -40,7 +40,7 @@ async function change(req: Request, op: "add" | "remove") {
       const sessionId = biSessionId(parsed.data.sessionId);
       const ctx = sessionId ? { sub: auth.userId, sessionId } : { sub: auth.userId };
       const source = recommendationId || sessionId ? "barista" : "ui";
-      emitBi(() => trackCartAdded(ctx, { productId, qty, source }));
+      emitBi(async () => trackCartAdded({ ...ctx, isTest: await shopperIsTest(auth.userId) }, { productId, qty, source }));
     }
     if (recommendationId && getProduct(parsed.data.productId)) {
       const productId = parsed.data.productId;
