@@ -31,7 +31,16 @@ export type BiContext = {
   /** Pass when the caller already resolved it. Omitted means `live`. */
   source?: BiSource;
   sessionId?: string | null;
+  /** Test traffic marker, e.g. from `isTestShopper(app_metadata)`. Omitted means not test. */
+  isTest?: boolean;
 };
+
+/** Defensive read of `app_metadata.is_test`: only a literal `true` counts. */
+export function isTestShopper(meta: unknown): boolean {
+  return typeof meta === "object" && meta !== null && (meta as { is_test?: unknown }).is_test === true;
+}
+
+const testFlag = (ctx: BiContext): { isTest?: true } => (ctx.isTest === true ? { isTest: true } : {});
 
 /**
  * Shopper traffic is `live`, including a signed-in Auth0 admin checking out on
@@ -73,7 +82,7 @@ async function resolve(ctx: BiContext): Promise<{ source: BiSource; sessionId: s
 
 export async function trackTurn(ctx: BiContext, payload: BiEventPayloads["barista.turn"]): Promise<void> {
   const { source, sessionId } = await resolve(ctx);
-  await recordBiEvent({ type: "barista.turn", source, shopperSub: ctx.sub, sessionId, payload });
+  await recordBiEvent({ type: "barista.turn", source, shopperSub: ctx.sub, sessionId, payload, ...testFlag(ctx) });
 }
 
 export async function trackShown(ctx: BiContext, payload: Omit<BiEventPayloads["recommend.shown"], "surface">): Promise<void> {
@@ -84,19 +93,30 @@ export async function trackShown(ctx: BiContext, payload: Omit<BiEventPayloads["
     shopperSub: ctx.sub,
     sessionId,
     payload: { ...payload, surface: "chat" },
+    ...testFlag(ctx),
   });
 }
 
 export async function trackAdded(ctx: BiContext, payload: BiEventPayloads["recommend.added"]): Promise<void> {
   await rememberRecommendedAdd(ctx.sub, payload.productId);
   const { source, sessionId } = await resolve(ctx);
-  await recordBiEvent({ type: "recommend.added", source, shopperSub: ctx.sub, sessionId, payload });
+  await recordBiEvent({ type: "recommend.added", source, shopperSub: ctx.sub, sessionId, payload, ...testFlag(ctx) });
 }
 
 export async function trackUndone(ctx: BiContext, payload: BiEventPayloads["recommend.undone"]): Promise<void> {
   await forgetRecommendedAdd(ctx.sub, payload.productId);
   const { source, sessionId } = await resolve(ctx);
-  await recordBiEvent({ type: "recommend.undone", source, shopperSub: ctx.sub, sessionId, payload });
+  await recordBiEvent({ type: "recommend.undone", source, shopperSub: ctx.sub, sessionId, payload, ...testFlag(ctx) });
+}
+
+export async function trackProductViewed(ctx: BiContext, payload: BiEventPayloads["product.viewed"]): Promise<void> {
+  const { source, sessionId } = await resolve(ctx);
+  await recordBiEvent({ type: "product.viewed", source, shopperSub: ctx.sub, sessionId, payload, ...testFlag(ctx) });
+}
+
+export async function trackCartAdded(ctx: BiContext, payload: BiEventPayloads["cart.added"]): Promise<void> {
+  const { source, sessionId } = await resolve(ctx);
+  await recordBiEvent({ type: "cart.added", source, shopperSub: ctx.sub, sessionId, payload, ...testFlag(ctx) });
 }
 
 export type TurnOutcome = BiEventPayloads["barista.turn"]["outcome"];
@@ -181,8 +201,8 @@ export async function trackOrderPlaced(ctx: BiContext, order: PlacedOrder): Prom
     ctx.sub,
     order.items.map((item) => item.productId),
   );
-  await recordBiEvent({ type: "order.placed", source, shopperSub: ctx.sub, sessionId: ctx.sessionId, payload });
-  await upsertBiOrder(ctx.sub, source, order.createdAt, payload, attributed);
+  await recordBiEvent({ type: "order.placed", source, shopperSub: ctx.sub, sessionId: ctx.sessionId, payload, ...testFlag(ctx) });
+  await upsertBiOrder(ctx.sub, source, order.createdAt, payload, attributed, ctx.isTest === true);
 }
 
 /** `order.cancelled` event plus `bi_orders.cancelled_at`. */
@@ -197,6 +217,7 @@ export async function trackOrderCancelled(
     shopperSub: ctx.sub,
     sessionId: ctx.sessionId,
     payload: { orderId: order.id, totalCents: order.totalCents },
+    ...testFlag(ctx),
   });
   await markBiOrderCancelled(ctx.sub, order.id, order.cancelledAt);
 }
@@ -313,6 +334,7 @@ async function upsertBiOrder(
   createdAt: string,
   order: BiEventPayloads["order.placed"],
   attributed: string[],
+  isTest = false,
 ): Promise<void> {
   await biSql(async (sql) => {
     const checked = biPayloadSchemas["order.placed"].parse(order);
@@ -331,6 +353,7 @@ async function upsertBiOrder(
         coupon = EXCLUDED.coupon,
         items = EXCLUDED.items,
         attributed_sku_ids = EXCLUDED.attributed_sku_ids`;
+    if (isTest) await sql`UPDATE bi_orders SET is_test = true WHERE order_id = ${checked.orderId} AND shopper_hash = ${hash}`;
   });
 }
 

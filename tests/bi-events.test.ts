@@ -76,6 +76,8 @@ describe("event types and payload shaping", () => {
     expect([...BI_EVENT_TYPES].sort()).toEqual(
       [
         "barista.turn",
+        "cart.added",
+        "product.viewed",
         "recommend.added",
         "recommend.shown",
         "recommend.undone",

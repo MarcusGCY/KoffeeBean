@@ -50,6 +50,30 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
   }, []);
 
   useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const seen = new Set<string>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const productId = (entry.target as HTMLElement).dataset.productId;
+          if (!entry.isIntersecting || !productId || seen.has(productId)) continue;
+          seen.add(productId);
+          observer.unobserve(entry.target);
+          void fetch("/api/products/view", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ productId }),
+            keepalive: true,
+          }).catch(() => {});
+        }
+      },
+      { threshold: 0.5 },
+    );
+    document.querySelectorAll("[data-product-id]").forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -181,7 +205,7 @@ export function Store({ shopper, demoHref }: { shopper: Shopper; demoHref?: stri
               </h2>
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {catalog.filter((p) => p.category === cat).map((p) => (
-                  <article key={p.id} className="flex flex-col overflow-hidden rounded-lg border border-stone-200 bg-white">
+                  <article key={p.id} data-product-id={p.id} className="flex flex-col overflow-hidden rounded-lg border border-stone-200 bg-white">
                     {/* Native img so a missing bean src shows the browser broken-image icon. */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
