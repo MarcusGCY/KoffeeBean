@@ -85,13 +85,15 @@ export function PlacedOrderCard({
   busy: boolean;
   onUndo: () => void;
 }) {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     if (undone) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const tick = () => setNow(Date.now());
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, [undone]);
-  const left = undoSecondsLeft(order.undoUntil, now);
+  const left = undoSecondsLeft(order.undoUntil, now ?? new Date(order.createdAt).getTime());
   return (
     <section aria-label="Order placed" className="space-y-2">
       <div className="rounded-lg border border-stone-200 bg-white px-3.5 pb-3 pt-2.5">
