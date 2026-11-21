@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { after } from "next/server";
 import { biPayloadSchemas, recordBiEvent, type BiEventPayloads, type BiSource } from "./bi-events";
+import { getAppMetadata } from "./auth0-mgmt";
 import { biDbConfigured, getBiSql } from "./bi-db";
 import { hashShopperId } from "./bi-hash";
+import { isDemoShopperSub } from "./demo-shopper";
 import { redisPipeline } from "./upstash";
 
 /**
@@ -35,7 +37,25 @@ export type BiContext = {
   isTest?: boolean;
 };
 
-export { isTestShopper } from "./demo-shopper";
+/**
+ * The one test-shopper check. Only a literal `app_metadata.is_test === true`
+ * counts, or, when `sub` is passed, that sub being the configured demo shopper
+ * (`DEMO_SHOPPER_SUB`).
+ */
+export function isTestShopper(meta: unknown, sub?: string): boolean {
+  if (sub !== undefined && isDemoShopperSub(sub)) return true;
+  return typeof meta === "object" && meta !== null && (meta as { is_test?: unknown }).is_test === true;
+}
+
+/** `isTestShopper` for a caller that has not read the metadata. The demo shopper needs no read. Never throws. */
+export async function shopperIsTest(sub: string): Promise<boolean> {
+  if (isDemoShopperSub(sub)) return true;
+  try {
+    return isTestShopper(await getAppMetadata(sub));
+  } catch {
+    return false;
+  }
+}
 
 const testFlag = (ctx: BiContext): { isTest?: true } => (ctx.isTest === true ? { isTest: true } : {});
 
