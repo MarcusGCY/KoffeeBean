@@ -32,7 +32,8 @@ import {
 } from "@/lib/bi-demo-seed";
 import { demoCsrfToken } from "@/lib/demo-auth";
 import { demoShopperSub, isDemoShopperSub } from "@/lib/demo-shopper";
-import { listOrders, normalizeAgentPrefs, normalizeShopperFlags, isTestShopperUser } from "@/lib/store-meta";
+import { isTestShopper } from "@/lib/bi-track";
+import { listOrders, normalizeAgentPrefs, normalizeShopperFlags } from "@/lib/store-meta";
 
 const NOW = new Date("2026-11-21T12:00:00.000Z");
 const DEMO_SUB = "auth0|demo-shopper";
@@ -93,7 +94,7 @@ describe("normalizeAgentPrefs", () => {
   });
 });
 
-describe("normalizeShopperFlags and isTestShopperUser", () => {
+describe("normalizeShopperFlags and isTestShopper", () => {
   it("reads an old account with neither key as not a test shopper with default prefs", () => {
     expect(normalizeShopperFlags({ cart: { items: [] } })).toEqual({
       isTest: false,
@@ -107,17 +108,16 @@ describe("normalizeShopperFlags and isTestShopperUser", () => {
     expect(normalizeShopperFlags({ is_test: 1 }).isTest).toBe(false);
   });
 
-  it("isTestShopperUser follows app_metadata.is_test", async () => {
-    expect(await isTestShopperUser("auth0|someone")).toBe(false);
-    db.meta = { is_test: true };
-    expect(await isTestShopperUser("auth0|someone")).toBe(true);
+  it("isTestShopper follows app_metadata.is_test", () => {
+    expect(isTestShopper({}, "auth0|someone")).toBe(false);
+    expect(isTestShopper({ is_test: true }, "auth0|someone")).toBe(true);
   });
 
-  it("isTestShopperUser is true for the configured demo shopper without an Auth0 read", async () => {
+  it("isTestShopper is true for the configured demo shopper whatever the metadata says", () => {
     process.env.DEMO_SHOPPER_SUB = DEMO_SUB;
-    expect(await isTestShopperUser(DEMO_SUB)).toBe(true);
-    expect(db.reads).toEqual([]);
-    expect(await isTestShopperUser("auth0|someone")).toBe(false);
+    expect(isTestShopper({}, DEMO_SUB)).toBe(true);
+    expect(isTestShopper({}, "auth0|someone")).toBe(false);
+    expect(isTestShopper({})).toBe(false);
   });
 });
 

@@ -4,11 +4,11 @@ import { checkout, type Order } from "./checkout";
 import { ORDER_HISTORY_LIMIT, type CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
-import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
+import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
 import { DEFAULT_AGENT_CAP_CENTS } from "./agent-cap";
-import { isDemoShopperSub, isTestShopper } from "./demo-shopper";
+import { isDemoShopperSub } from "./demo-shopper";
 import { createTestPayment, readTestPayment, type TestPayment } from "./test-payment";
 import type { NudgeOrder } from "./reorder-nudge";
 import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags } from "./store-types";
@@ -180,15 +180,6 @@ export async function getShopperFlags(userId: string): Promise<ShopperFlags> {
   return normalizeShopperFlags(await getAppMetadata(userId));
 }
 
-/**
- * True for the configured demo shopper (`DEMO_SHOPPER_SUB`, no network call) or
- * for any shopper whose `app_metadata.is_test` is true.
- */
-export async function isTestShopperUser(userId: string): Promise<boolean> {
-  if (isDemoShopperSub(userId)) return true;
-  return (await getShopperFlags(userId)).isTest;
-}
-
 export type NudgeInputs = {
   flags: ShopperFlags;
   /** True for `is_test` shoppers and the configured demo shopper. */
@@ -242,7 +233,7 @@ function detail(order: StoredOrder, now: Date): OrderDetail {
   };
 }
 
-async function consume(meta: Record<string, unknown>, kind: "cartWrites" | "orderWrites", now: Date) {
+async function consume(meta: Record<string, unknown>, kind: "cartWrites" | "orderWrites" | "productViews", now: Date) {
   return takeSlot(normalizeLimits(meta.chat_limits), kind, now.getTime());
 }
 
@@ -355,6 +346,22 @@ export async function readCommerceFacts(userId: string, now = new Date()): Promi
     completedPurchases: purchases.completedPurchases,
     discountAlreadyApplied: cart.discountAlreadyApplied,
   };
+}
+
+/**
+ * Takes one hourly `productViews` slot from `chat_limits`, the same limiter as
+ * cart writes. On success also reports whether the shopper is test traffic,
+ * from the metadata this call already read.
+ */
+export async function takeProductViewSlot(
+  userId: string,
+  now = new Date(),
+): Promise<{ ok: true; isTest: boolean } | RateLimited> {
+  const meta = await getAppMetadata(userId);
+  const decision = await consume(meta, "productViews", now);
+  if (!decision.ok) return rateLimited("productViews", decision.retryAfterSec);
+  await patchAppMetadata(userId, { chat_limits: decision.limits });
+  return { ok: true, isTest: isTestShopper(meta, userId) };
 }
 
 /** Adds via addItem. */
@@ -516,7 +523,8 @@ export async function placeOrder(
     cart: storedCart([], null),
     chat_limits: decision.limits,
   });
-  emitBi(() => trackOrderPlaced({ sub: userId }, stored));
+  const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
+  emitBi(() => trackOrderPlaced({ sub: userId, ...testCtx }, stored));
   return summarize(stored, now);
 }
 
@@ -554,9 +562,10 @@ export async function cancelOrder(
   const next = orders.slice();
   next[index] = updated;
   await patchAppMetadata(userId, { orders: next, chat_limits: decision.limits });
+  const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() =>
     trackOrderCancelled(
-      { sub: userId },
+      { sub: userId, ...testCtx },
       { id: updated.id, totalCents: updated.totalCents, cancelledAt: now.toISOString() },
     ),
   );
