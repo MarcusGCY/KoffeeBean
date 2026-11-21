@@ -1,10 +1,12 @@
 import { Suspense } from "react";
 import { BackLink } from "@/components/ActivityList";
 import { LoginGate } from "@/components/LoginGate";
+import { MarketingConsent } from "@/components/MarketingConsent";
 import { ProfilePanel } from "@/components/ProfilePanel";
 import { SiteHeader } from "@/components/SiteHeader";
 import { auth0Configured } from "@/lib/auth0";
 import { mgmtConfigured } from "@/lib/auth0-mgmt";
+import { readMarketing } from "@/lib/marketing-consent";
 import { readProfileView } from "@/lib/profile-account";
 import { getShopper } from "@/lib/shopper";
 import type { Shopper } from "@/lib/types";
@@ -52,8 +54,9 @@ async function Profile() {
     );
   }
   let view: Awaited<ReturnType<typeof readProfileView>>;
+  let marketing: Awaited<ReturnType<typeof readMarketing>>;
   try {
-    view = await readProfileView(shopper.id);
+    [view, marketing] = await Promise.all([readProfileView(shopper.id), readMarketing(shopper.id)]);
   } catch {
     return (
       <Shell shopper={shopper}>
@@ -64,6 +67,7 @@ async function Profile() {
   return (
     <Shell shopper={shopper}>
       <ProfilePanel initial={view} />
+      <MarketingConsent initial={marketing} />
     </Shell>
   );
 }

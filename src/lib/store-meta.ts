@@ -7,7 +7,8 @@ import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { biDbConfigured } from "./bi-db";
 import { biHashConfigured } from "./bi-hash";
 import { biProfileFromMeta, type BiProfileFacts } from "./bi-profiles";
-import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced, trackProfile } from "./bi-track";
+import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced, trackProfile, trackProfileConfirmed } from "./bi-track";
+import { marketingOf } from "./marketing-text";
 import { normalizeProfile, profileIsStale, profilePatch, type BaristaProfile } from "./barista-profile";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus, undoDeadline } from "./order-status";
@@ -219,7 +220,12 @@ function biFacts(
   now: Date,
   profile?: BaristaProfile,
 ): BiProfileFacts {
-  return biProfileFromMeta(meta, orders, { isTest: isTestShopper(meta) || isDemoShopperSub(userId), now, profile });
+  return biProfileFromMeta(meta, orders, {
+    isTest: isTestShopper(meta) || isDemoShopperSub(userId),
+    now,
+    profile,
+    marketing: marketingOf(meta),
+  });
 }
 
 /** After a change to location or profile settings: refreshes this shopper's BI row, after the response. */
@@ -229,6 +235,20 @@ export function emitBiProfile(userId: string, now = new Date()): void {
     const meta = await getAppMetadata(userId);
     await trackProfile({ sub: userId }, biFacts(userId, meta, readOrders(meta), now));
   });
+}
+
+/**
+ * Writes this shopper's BI row now and says whether it landed. Used for marketing consent, where a row still
+ * saying `marketing_consent = true` after a withdrawal would matter. True when BI is not configured.
+ */
+export async function mirrorProfileToBi(userId: string, now = new Date()): Promise<boolean> {
+  if (!biDbConfigured() || !biHashConfigured()) return true;
+  try {
+    const meta = await getAppMetadata(userId);
+    return await trackProfileConfirmed({ sub: userId }, biFacts(userId, meta, readOrders(meta), now));
+  } catch {
+    return false;
+  }
 }
 
 /** The shopper's retained orders as the nudge and profile engines read them. */

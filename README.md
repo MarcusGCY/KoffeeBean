@@ -469,6 +469,28 @@ curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&
 - Test shoppers (`is_test`) are left out of both and only counted in `excludedTest`.
 - `region` is only the 2-digit postal district of a shopper who opted in to location use. A postcode is never stored in BI and never returned.
 
+### Personalization data and retention
+
+What is stored, where, and for how long. The consent versions and times below are the record of what each shopper agreed to.
+
+| Data | Where | Created by | Removed by |
+|---|---|---|---|
+| Postcode, 2-digit district, consent time, purpose | Auth0 `app_metadata.location` | Separate opt-in on `/account/location` | The shopper withdrawing (`DELETE /api/account/location`) |
+| Barista profile (roast, cadence, top beans; at most 2 KB) | Auth0 `app_metadata.barista_profile` | Learned from the shopper's own orders | Reset or personalization off on `/account/profile`; orders it was learned from are kept for the order history |
+| Marketing consent: `{ version, consentAt }` | Auth0 `app_metadata.marketing_consent` | Separate, unticked opt-in on `/account/profile` | The shopper withdrawing (`DELETE /api/account/marketing`) removes the key |
+| Consent and profile changes (newest 50) | Auth0 `app_metadata.audit` | Every change above | Rolls off after 50 entries |
+| One row per shopper: segment, cadence, AOV, orders in 90 days, roast, **2-digit region**, `is_test`, `marketing_consent`, `consent_at` | Neon `bi_customer_profiles`, keyed by `shopper_hash` | Order events and the account changes above | Overwritten in place; no history is kept |
+
+- A consent given under an older `MARKETING_CONSENT_VERSION` does not count. The shopper sees the option off and must agree again.
+- Withdrawing marketing consent writes `marketing_consent = false` and `consent_at = NULL` to BI before the API answers. The response carries `biSynced: false` if that write failed; the shopper's choice is still saved in Auth0, which is the source of truth, and the BI row is corrected by that shopper's next order or account change. `GET /api/bi/profiles` only lists a shopper while the row says `marketing_consent = true`.
+- A postcode never leaves Auth0. BI holds the 2-digit region only.
+
+**Retention is a policy, not something this code enforces.** There is no scheduled job, TTL or purge that deletes BI profile rows or ages out Auth0 values; they stay until the shopper withdraws or resets, or an operator deletes them. Until a job exists, an operator should:
+
+- Delete a closed account's row: `DELETE FROM bi_customer_profiles WHERE shopper_hash = $1`, with the hash computed by `hashShopperId` for that Auth0 user.
+- Periodically remove stale rows, for example `DELETE FROM bi_customer_profiles WHERE updated_at < now() - interval '24 months'`. The 24 months is a suggested starting point to confirm with whoever owns the privacy policy.
+- After rotating `BI_HASH_SECRET`, delete all rows: they are keyed by hashes the app can no longer reproduce, so they would not be updated or removed again.
+
 ### BI demo seed (`source=demo`)
 
 So the BI bot can show live vs demo contrast, the admin demo page (`/admin/demo`, Auth0 `admin` role only) has a **Seed BI demo story** button (`POST /api/demo/bi-seed`; admin session, same-origin and CSRF checked; no public route and no signed bot grant). It writes **analytics rows only** with `source=demo` into the BI event store (`bi_events` plus the `bi_orders` mirror). Auth0 `app_metadata` remains the source of truth for carts and orders; nothing in checkout, the cart, or order reads uses these rows, and no real order is created.
