@@ -5,6 +5,7 @@ import { ORDER_HISTORY_LIMIT, type CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
+import { normalizeProfile, profileIsStale, profilePatch, type BaristaProfile } from "./barista-profile";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus, undoDeadline } from "./order-status";
 import { expireStale, normalizeActivity, undoActivityForOrder } from "./agent-activity";
@@ -23,7 +24,8 @@ import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags 
  * for this demo).
  *
  * Keys: `cart`, `orders` (newest 20), `chat_limits`, `audit` (newest 50),
- * `is_test` (boolean), `agent_prefs` (see `normalizeAgentPrefs`).
+ * `is_test` (boolean), `agent_prefs` (see `normalizeAgentPrefs`), `barista_profile` (see
+ * `barista-profile.ts`; rewritten in the same patch whenever orders are placed or cancelled).
  */
 
 const ORDER_CAP = ORDER_HISTORY_LIMIT;
@@ -199,13 +201,32 @@ export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
   return {
     flags,
     demo: flags.isTest || isDemoShopperSub(userId),
-    orders: readOrders(meta).map((order) => ({
-      id: order.id,
-      createdAt: order.createdAt,
-      cancelledAt: order.cancelledAt,
-      items: order.items.map((item) => ({ productId: item.productId, qty: item.qty })),
-    })),
+    orders: nudgeOrders(readOrders(meta)),
   };
+}
+
+function nudgeOrders(orders: readonly StoredOrder[]): (NudgeOrder & { id: string })[] {
+  return orders.map((order) => ({
+    id: order.id,
+    createdAt: order.createdAt,
+    cancelledAt: order.cancelledAt,
+    items: order.items.map((item) => ({ productId: item.productId, qty: item.qty })),
+  }));
+}
+
+/**
+ * This shopper's Barista profile. Returned as stored while it is under 24 hours old. A missing or older
+ * profile is recomputed from retained orders and saved (one extra patch of only that key). A shopper with
+ * personalization off keeps the stored `off` profile and nothing is recomputed. Null when there is nothing to know yet.
+ */
+export async function readBaristaProfile(userId: string, now = new Date()): Promise<BaristaProfile | null> {
+  const meta = await getAppMetadata(userId);
+  const stored = normalizeProfile(meta.barista_profile);
+  if (stored?.off || (stored && !profileIsStale(stored, now))) return stored;
+  const patch = profilePatch(meta, nudgeOrders(readOrders(meta)), now);
+  if (!patch.barista_profile) return stored;
+  await patchAppMetadata(userId, patch);
+  return patch.barista_profile;
 }
 
 function summarize(order: StoredOrder, now: Date): OrderSummary {
@@ -526,11 +547,9 @@ export async function placeOrder(
       return [{ productId: item.productId, name: product.name, unitPriceCents: product.price, qty: item.quantity }];
     }),
   };
-  await patchAppMetadata(userId, {
-    orders: [stored, ...existing].slice(0, ORDER_CAP),
-    cart: storedCart([], null),
-    chat_limits: decision.limits,
-  });
+  const nextOrders = [stored, ...existing].slice(0, ORDER_CAP);
+  const changes = { orders: nextOrders, cart: storedCart([], null), chat_limits: decision.limits };
+  await patchAppMetadata(userId, { ...changes, ...profilePatch(meta, nudgeOrders(nextOrders), now, changes) });
   const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() => trackOrderPlaced({ sub: userId, ...testCtx }, stored));
   return summarize(stored, now);
@@ -589,11 +608,8 @@ export async function cancelOrder(
   const next = orders.slice();
   next[index] = updated;
   const activity = undoActivityForOrder(normalizeActivity(meta.agent_activity), updated.id, now);
-  await patchAppMetadata(userId, {
-    orders: next,
-    chat_limits: decision.limits,
-    ...(activity ? { agent_activity: activity } : {}),
-  });
+  const changes = { orders: next, chat_limits: decision.limits, ...(activity ? { agent_activity: activity } : {}) };
+  await patchAppMetadata(userId, { ...changes, ...profilePatch(meta, nudgeOrders(next), now, changes) });
   const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() =>
     trackOrderCancelled(
