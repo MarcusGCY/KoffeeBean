@@ -462,6 +462,13 @@ curl -s -H "Authorization: Bearer $BI_API_SECRET" \
 curl -s -H "x-bi-secret: $BI_API_SECRET" "$BI_BASE_URL/api/bi/events?source=all&limit=5"
 ```
 
+`GET /api/bi/profiles` reads `bi_customer_profiles` (migration `0003`, written but not applied; until it is applied the route answers `503 unavailable`). Same secret auth as above. `source` defaults to `live`; `limit` (default 50, max 200) and `cursor` page the per-shopper rows.
+
+- `aggregates` is the default view: `shoppers`, `marketingConsented`, `segments` (`prospect`, `new`, `repeat`, `lapsed`), `regions` (`{ region, shoppers }`), `preferredRoasts`, `avgAovCents`, `avgOrders90d`, `medianCadenceDays`.
+- `rows` lists a shopper (`shopper_hash`, `segment`, `cadence_days`, `aov_cents`, `orders_90d`, `preferred_roast`, `region`, `consent_at`, `updated_at`) **only where `marketing_consent = true`**. `nextCursor` is the last `shopper_hash`.
+- Test shoppers (`is_test`) are left out of both and only counted in `excludedTest`.
+- `region` is only the 2-digit postal district of a shopper who opted in to location use. A postcode is never stored in BI and never returned.
+
 ### BI demo seed (`source=demo`)
 
 So the BI bot can show live vs demo contrast, the admin demo page (`/admin/demo`, Auth0 `admin` role only) has a **Seed BI demo story** button (`POST /api/demo/bi-seed`; admin session, same-origin and CSRF checked; no public route and no signed bot grant). It writes **analytics rows only** with `source=demo` into the BI event store (`bi_events` plus the `bi_orders` mirror). Auth0 `app_metadata` remains the source of truth for carts and orders; nothing in checkout, the cart, or order reads uses these rows, and no real order is created.
