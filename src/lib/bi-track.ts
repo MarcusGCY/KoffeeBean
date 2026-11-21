@@ -35,10 +35,7 @@ export type BiContext = {
   isTest?: boolean;
 };
 
-/** Defensive read of `app_metadata.is_test`: only a literal `true` counts. */
-export function isTestShopper(meta: unknown): boolean {
-  return typeof meta === "object" && meta !== null && (meta as { is_test?: unknown }).is_test === true;
-}
+export { isTestShopper } from "./demo-shopper";
 
 const testFlag = (ctx: BiContext): { isTest?: true } => (ctx.isTest === true ? { isTest: true } : {});
 

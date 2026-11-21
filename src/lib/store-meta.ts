@@ -7,7 +7,7 @@ import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
-import { isDemoShopperSub } from "./demo-shopper";
+import { isDemoShopperSub, isTestShopper } from "./demo-shopper";
 import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags } from "./store-types";
 
 /**
@@ -166,7 +166,7 @@ export function normalizeAgentPrefs(value: unknown): AgentPrefs {
 
 /** `is_test` is true only for a stored boolean true. */
 export function normalizeShopperFlags(meta: Record<string, unknown>): ShopperFlags {
-  return { isTest: meta.is_test === true, agentPrefs: normalizeAgentPrefs(meta.agent_prefs) };
+  return { isTest: isTestShopper(meta), agentPrefs: normalizeAgentPrefs(meta.agent_prefs) };
 }
 
 export async function getShopperFlags(userId: string): Promise<ShopperFlags> {
@@ -177,7 +177,7 @@ export async function getShopperFlags(userId: string): Promise<ShopperFlags> {
  * True for the configured demo shopper (`DEMO_SHOPPER_SUB`, no network call) or
  * for any shopper whose `app_metadata.is_test` is true.
  */
-export async function isTestShopper(userId: string): Promise<boolean> {
+export async function isTestShopperUser(userId: string): Promise<boolean> {
   if (isDemoShopperSub(userId)) return true;
   return (await getShopperFlags(userId)).isTest;
 }
