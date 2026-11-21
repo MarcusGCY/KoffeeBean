@@ -233,10 +233,19 @@ export async function trackProfile(ctx: BiContext, facts: BiProfileFacts): Promi
   await writeBiProfile(ctx.sub, source, facts);
 }
 
-async function writeBiProfile(sub: string, source: BiSource, facts: BiProfileFacts): Promise<void> {
-  await biSql(async (sql) => {
+async function writeBiProfile(sub: string, source: BiSource, facts: BiProfileFacts): Promise<boolean> {
+  return biSql(async (sql) => {
     await upsertBiProfile(sql, sub, source, facts);
   });
+}
+
+/**
+ * Like `trackProfile`, but says whether the row was written. True also when BI is not configured, because
+ * there is then no row to be out of date. Used where a stale row would matter (a marketing withdrawal).
+ */
+export async function trackProfileConfirmed(ctx: BiContext, facts: BiProfileFacts): Promise<boolean> {
+  const { source } = await resolve(ctx);
+  return writeBiProfile(ctx.sub, source, facts);
 }
 
 function attributionKey(sub: string, productId: string): string {
@@ -326,20 +335,22 @@ export async function takeAttributedSkus(sub: string, productIds: string[]): Pro
   }
 }
 
-async function biSql(run: (sql: NonNullable<ReturnType<typeof getBiSql>>) => Promise<unknown>): Promise<void> {
+async function biSql(run: (sql: NonNullable<ReturnType<typeof getBiSql>>) => Promise<unknown>): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    if (!biDbConfigured()) return;
+    if (!biDbConfigured()) return true;
     const sql = getBiSql();
-    if (!sql) return;
+    if (!sql) return true;
     const query = Promise.resolve(run(sql));
     query.catch(() => undefined);
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), SQL_TIMEOUT_MS);
     });
     await Promise.race([query, timeout]);
+    return true;
   } catch (error) {
     console.error("[bi] order write failed", error instanceof Error ? error.name : "unknown");
+    return false;
   } finally {
     if (timer) clearTimeout(timer);
   }
