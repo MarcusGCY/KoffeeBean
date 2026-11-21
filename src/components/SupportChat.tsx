@@ -13,6 +13,7 @@ import {
 import { markNudgeShown, nudgeAlreadyShown, nudgeSessionId } from "@/lib/nudge-client";
 import type { Nudge } from "@/lib/nudge";
 import type { NextStep, PlacedOrder } from "@/lib/pending-action";
+import { ConsentSheet } from "./ConsentSheet";
 import { OrderSummaryCard, PlacedOrderCard } from "./AgentOrderCard";
 import { BaristaNudge, type NudgeAnswer } from "./BaristaNudge";
 import { Spark } from "./Spark";
@@ -36,7 +37,7 @@ type Entry =
   | { role: "user"; content: string }
   | { role: "assistant"; content: string; products: ProductCard[]; order: OrderCard | null; turn: number };
 
-type PendingAction = { actionId: string; summary: string };
+type PendingAction = { actionId: string; summary: string; confirmLabel?: string };
 type Usual = { productId: string; line: string } | null;
 
 const HISTORY = 6;
@@ -57,6 +58,8 @@ export function SupportChat() {
   const [nudgeAnswer, setNudgeAnswer] = useState<NudgeAnswer | null>(null);
   const [orderStep, setOrderStep] = useState<NextStep | null>(null);
   const [placed, setPlaced] = useState<{ order: PlacedOrder; undone: boolean } | null>(null);
+  const [consentFor, setConsentFor] = useState<PendingAction | null>(null);
+  const [consentError, setConsentError] = useState<string | null>(null);
   const nudgeAsked = useRef(false);
   const generation = useRef(0);
   const sessionId = useRef<string | null>(null);
@@ -219,7 +222,18 @@ export function SupportChat() {
         summary?: string;
         next?: NextStep;
         order?: PlacedOrder;
+        overCap?: { actionId?: unknown; summary?: unknown };
       } | null;
+      if (res.status === 403 && body?.error === "consent_required") {
+        setConsentError(null);
+        setConsentFor(action);
+        return;
+      }
+      if (res.ok && body?.overCap && typeof body.overCap.actionId === "string" && typeof body.overCap.summary === "string") {
+        setOrderStep(null);
+        setPendingAction({ actionId: body.overCap.actionId, summary: body.overCap.summary, confirmLabel: "Place it anyway" });
+        return;
+      }
       if (res.ok && body?.summary) {
         setPendingAction(null);
         if (body.next || body.order) {
@@ -271,6 +285,37 @@ export function SupportChat() {
     } finally {
       setPending(false);
     }
+  }
+
+  async function allowAgent(capCents: number) {
+    const action = consentFor;
+    if (!action || pending) return;
+    setPending(true);
+    setConsentError(null);
+    try {
+      const res = await fetch("/api/agent/prefs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ capCents, consent: true }),
+      });
+      if (!res.ok) {
+        setConsentError("That didn't save. Please try again.");
+        return;
+      }
+      setConsentFor(null);
+    } catch {
+      setConsentError(CHAT_DROPPED);
+      return;
+    } finally {
+      setPending(false);
+    }
+    await confirmAction(action);
+  }
+
+  function declineConsent() {
+    setConsentFor(null);
+    setConsentError(null);
+    setNotice("Barista can't place orders until you allow it. You can still check out from your cart.");
   }
 
   async function placeOrder() {
@@ -493,7 +538,7 @@ export function SupportChat() {
                     disabled={pending}
                     className="inline-flex min-h-11 items-center justify-center rounded bg-amber-700 px-3 text-sm font-medium text-white disabled:opacity-50"
                   >
-                    Confirm
+                    {pendingAction.confirmLabel ?? "Confirm"}
                   </button>
                   <button
                     type="button"
@@ -551,6 +596,7 @@ export function SupportChat() {
           </form>
         </section>
       )}
+      {consentFor && <ConsentSheet busy={pending} error={consentError} onAllow={(cap) => void allowAgent(cap)} onDecline={declineConsent} />}
       {!open && (
         <button
           type="button"

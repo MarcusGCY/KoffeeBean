@@ -49,6 +49,7 @@ export async function POST(req: Request) {
       summary: result.summary,
       ...(result.next ? { next: result.next } : {}),
       ...(result.order ? { order: result.order } : {}),
+      ...(result.overCap ? { overCap: result.overCap } : {}),
     });
   } catch (err) {
     if (err instanceof StoreUnavailableError) {

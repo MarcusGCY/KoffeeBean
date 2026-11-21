@@ -7,7 +7,9 @@ import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
+import { DEFAULT_AGENT_CAP_CENTS } from "./agent-cap";
 import { isDemoShopperSub } from "./demo-shopper";
+import { createTestPayment, readTestPayment, type TestPayment } from "./test-payment";
 import type { NudgeOrder } from "./reorder-nudge";
 import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags } from "./store-types";
 
@@ -39,6 +41,8 @@ type StoredOrder = {
   items: StoredItem[];
   /** Set only on seeded demo orders (`bi-demo-seed`). Kept when an order is rewritten. */
   demo?: true;
+  /** Test-mode payment record. No processor or card data is ever stored. */
+  payment?: TestPayment;
 };
 
 export type AuditEntry = { ts: string; tool: string; summary: string; outcome: string };
@@ -120,6 +124,7 @@ function readOrders(meta: Record<string, unknown>): StoredOrder[] {
         items.push({ productId: line.productId, name: line.name, unitPriceCents, qty });
       }
     }
+    const payment = readTestPayment(record.payment);
     orders.push({
       id: record.id,
       createdAt: record.createdAt,
@@ -131,12 +136,13 @@ function readOrders(meta: Record<string, unknown>): StoredOrder[] {
       coupon: typeof record.coupon === "string" && record.coupon ? record.coupon : null,
       items,
       ...(record.demo === true ? { demo: true as const } : {}),
+      ...(payment ? { payment } : {}),
     });
   }
   return orders.slice(0, ORDER_CAP);
 }
 
-export const DEFAULT_AGENT_CAP_CENTS = 6000;
+export { DEFAULT_AGENT_CAP_CENTS };
 
 function validTimestamp(value: unknown): string | undefined {
   return typeof value === "string" && !Number.isNaN(new Date(value).getTime()) ? value : undefined;
@@ -211,6 +217,7 @@ function summarize(order: StoredOrder, now: Date): OrderSummary {
     discountCents: order.discountCents,
     taxCents: order.taxCents,
     coupon: order.coupon,
+    ...(order.payment ? { payment: order.payment } : {}),
   };
 }
 
@@ -504,6 +511,7 @@ export async function placeOrder(
     taxCents: draft.tax,
     totalCents: draft.total,
     coupon: savedCoupon,
+    payment: createTestPayment(),
     items: draft.items.flatMap((item) => {
       const product = getProduct(item.productId);
       if (!product) return [];

@@ -53,6 +53,8 @@ function order(id: string, createdAt: Date, productId = "ethiopia-250", qty = 1)
   };
 }
 
+const CONSENTED = { consentAt: "2026-11-01T00:00:00.000Z", capCents: 6000 };
+
 function dueOrders(now = NOW) {
   return [order("BB-OLD1", new Date(now.getTime() - 24 * DAY))];
 }
@@ -240,7 +242,7 @@ describe("multi-add through the signed confirm flow", () => {
   });
 
   it("Place order then Done: confirming the signed next step places the order and returns the undo deadline", async () => {
-    db.meta = { orders: [order("BB-OLD1", new Date(Date.now() - 24 * DAY))] };
+    db.meta = { orders: [order("BB-OLD1", new Date(Date.now() - 24 * DAY))], agent_prefs: CONSENTED };
     const accepted = await nudgePost(post("/api/chat/nudge", { action: "accept", choice: "both" }));
     const pending = (await accepted.json()) as { actionId: string };
     const added = (await (await confirm(post("/api/chat/confirm", { actionId: pending.actionId }))).json()) as {
@@ -255,7 +257,7 @@ describe("multi-add through the signed confirm flow", () => {
   });
 
   it("the undo window is ten minutes: cancel works at 9:59 and is refused after 10:00", async () => {
-    db.meta = { orders: [order("BB-OLD1", new Date(Date.now() - 24 * DAY))] };
+    db.meta = { orders: [order("BB-OLD1", new Date(Date.now() - 24 * DAY))], agent_prefs: CONSENTED };
     const accepted = await nudgePost(post("/api/chat/nudge", { action: "accept", choice: "reorder" }));
     const pending = (await accepted.json()) as { actionId: string };
     const added = (await (await confirm(post("/api/chat/confirm", { actionId: pending.actionId }))).json()) as {
