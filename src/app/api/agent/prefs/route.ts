@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { MAX_CAP_CENTS, MIN_CAP_CENTS } from "@/lib/agent-cap";
+import { bestEffort, newActivityId, recordActivity } from "@/lib/agent-activity";
+import { BARISTA } from "@/lib/agent-activity-text";
 import { updateAgentPrefs } from "@/lib/agent-prefs";
 import { dbFailure, readJson, requireShopper, requireWrite } from "@/lib/store-http";
 import { getShopperFlags } from "@/lib/store-meta";
@@ -52,6 +55,23 @@ export async function POST(req: Request) {
       capCents: parsed.data.capCents,
       ...(consentAt ? { consentAt } : {}),
     });
+    if (prefs.consentAt) {
+      await bestEffort(
+        recordActivity(auth.userId, {
+          id: newActivityId("consent", randomBytes(6).toString("hex")),
+          ts: new Date().toISOString(),
+          agent: BARISTA,
+          action: "consent",
+          subject: "Barista",
+          reason: parsed.data.consent
+            ? "You allowed Barista to place orders you confirm, within a per-order cap."
+            : "You changed Barista's per-order cap.",
+          amountCents: prefs.capCents,
+          orderId: null,
+          status: "done",
+        }),
+      );
+    }
     return NextResponse.json({ prefs: view(prefs) }, { headers: NO_STORE });
   } catch (err) {
     return dbFailure(err);

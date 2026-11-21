@@ -4,6 +4,8 @@ import { biSessionId } from "./bi-track";
 import { getProduct } from "./cart";
 import { productImageUrl } from "./images";
 import { estimateReorder, suggestNextBean, type NudgeProduct } from "./reorder-nudge";
+import { bestEffort, newActivityId, recordActivity } from "./agent-activity";
+import { BARISTA } from "./agent-activity-text";
 import { markNudgeSession } from "./agent-prefs";
 import { readNudgeInputs, type NudgeInputs } from "./store-meta";
 import type { AgentPrefs } from "./store-types";
@@ -106,8 +108,29 @@ export async function nextNudge(userId: string, rawSession: unknown, now = new D
   const skip = nudgeGate(inputs.flags.agentPrefs, session, now);
   if (skip) return { nudge: null, skip };
   const result = buildNudge(inputs, await recommendAddedProductIds(userId), now);
-  if (result.nudge && session) await markNudgeSession(userId, session);
+  if (result.nudge && session) {
+    await markNudgeSession(userId, session);
+    const { reorder, newBean } = result.nudge;
+    await bestEffort(
+      recordActivity(userId, {
+        id: newActivityId("suggest", session),
+        ts: now.toISOString(),
+        agent: BARISTA,
+        action: "suggest",
+        subject: reorder.name,
+        reason: nudgeReason(result.nudge),
+        amountCents: reorder.priceCents + (newBean?.priceCents ?? 0),
+        orderId: null,
+        status: "waiting",
+      }),
+    );
+  }
   return result;
+}
+
+/** Why Barista is suggesting this, for the audit trail: the reorder reason, then the new-bean reason. */
+export function nudgeReason(nudge: Nudge): string {
+  return [nudge.reorder.reason, nudge.newBean?.reason].filter(Boolean).join(" ").slice(0, 200);
 }
 
 /** Cart lines for the chip the shopper picked, re-derived on the server. Null when paused or no nudge applies. */
@@ -115,11 +138,11 @@ export async function nudgeLines(
   userId: string,
   choice: NudgeChoice,
   now = new Date(),
-): Promise<{ lines: NudgeLine[] } | { error: "paused" | "no_nudge" }> {
+): Promise<{ lines: NudgeLine[]; reason: string } | { error: "paused" | "no_nudge" }> {
   const inputs = await readNudgeInputs(userId);
   if (inputs.flags.agentPrefs.paused) return { error: "paused" };
   const result = buildNudge(inputs, await recommendAddedProductIds(userId), now);
   if (!result.nudge) return { error: "no_nudge" };
   const lines = [...result.nudge.reorder.lines, ...(choice === "both" && result.nudge.newBean ? result.nudge.newBean.lines : [])];
-  return { lines };
+  return { lines, reason: nudgeReason(result.nudge) };
 }

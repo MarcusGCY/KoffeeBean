@@ -1,5 +1,6 @@
 import { after, NextResponse } from "next/server";
 import { z } from "zod";
+import { bestEffort, changeActivity } from "@/lib/agent-activity";
 import { fileFeedback } from "@/lib/file-feedback";
 import { commitAction } from "@/lib/pending-action";
 import { getShopper } from "@/lib/shopper";
@@ -34,6 +35,7 @@ export async function POST(req: Request) {
         },
       );
     }
+    if (result.audit) await bestEffort(changeActivity(shopper.id, result.audit.id, result.audit.change));
     if (result.report) {
       const { feedback, reportedBy } = result.report;
       after(async () => {
