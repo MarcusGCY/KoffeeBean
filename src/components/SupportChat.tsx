@@ -10,6 +10,12 @@ import {
   takeSseEvents,
   type SseEvent,
 } from "@/lib/chat-response";
+import { markNudgeShown, nudgeAlreadyShown, nudgeSessionId } from "@/lib/nudge-client";
+import type { Nudge } from "@/lib/nudge";
+import type { NextStep, PlacedOrder } from "@/lib/pending-action";
+import { OrderSummaryCard, PlacedOrderCard } from "./AgentOrderCard";
+import { BaristaNudge, type NudgeAnswer } from "./BaristaNudge";
+import { Spark } from "./Spark";
 
 type ProductCard = {
   id: string;
@@ -47,6 +53,11 @@ export function SupportChat() {
   const [retryText, setRetryText] = useState<string | null>(null);
   const [usual, setUsual] = useState<Usual>(null);
   const [added, setAdded] = useState<Record<string, boolean>>({});
+  const [nudge, setNudge] = useState<Nudge | null>(null);
+  const [nudgeAnswer, setNudgeAnswer] = useState<NudgeAnswer | null>(null);
+  const [orderStep, setOrderStep] = useState<NextStep | null>(null);
+  const [placed, setPlaced] = useState<{ order: PlacedOrder; undone: boolean } | null>(null);
+  const nudgeAsked = useRef(false);
   const generation = useRef(0);
   const sessionId = useRef<string | null>(null);
   const recommendations = useRef<Record<string, string>>({});
@@ -79,6 +90,27 @@ export function SupportChat() {
     return () => {
       cancelled = true;
     };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || nudgeAsked.current) return;
+    nudgeAsked.current = true;
+    let storage: Storage;
+    try {
+      storage = window.sessionStorage;
+    } catch {
+      return;
+    }
+    if (nudgeAlreadyShown(storage)) return;
+    const session = nudgeSessionId(storage);
+    void fetch(`/api/chat/nudge?session=${encodeURIComponent(session)}`)
+      .then(async (res) => (res.ok ? ((await res.json()) as { nudge?: Nudge | null }) : null))
+      .then((body) => {
+        if (!body?.nudge) return;
+        markNudgeShown(storage);
+        setNudge(body.nudge);
+      })
+      .catch(() => {});
   }, [open]);
 
   function history(nextEntries: Entry[]) {
@@ -168,8 +200,11 @@ export function SupportChat() {
   }
 
   async function confirm() {
-    if (!pendingAction || pending) return;
-    const action = pendingAction;
+    if (pendingAction) await confirmAction(pendingAction);
+  }
+
+  async function confirmAction(action: PendingAction) {
+    if (pending) return;
     setPending(true);
     setNotice(null);
     try {
@@ -178,15 +213,87 @@ export function SupportChat() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ actionId: action.actionId }),
       });
-      const body = (await res.json().catch(() => null)) as { error?: string; message?: string; summary?: string } | null;
+      const body = (await res.json().catch(() => null)) as {
+        error?: string;
+        message?: string;
+        summary?: string;
+        next?: NextStep;
+        order?: PlacedOrder;
+      } | null;
       if (res.ok && body?.summary) {
         setPendingAction(null);
-        setEntries((current) =>
-          [...current, { role: "assistant" as const, content: body.summary ?? "", products: [], order: null, turn: 0 }].slice(-HISTORY),
-        );
+        if (body.next || body.order) {
+          setOrderStep(body.next ?? null);
+          if (body.order) setPlaced({ order: body.order, undone: false });
+        } else {
+          setEntries((current) =>
+            [...current, { role: "assistant" as const, content: body.summary ?? "", products: [], order: null, turn: 0 }].slice(-HISTORY),
+          );
+        }
+        window.dispatchEvent(new Event("beanbox-cart"));
         return;
       }
       setNotice(noticeFor(res.status, body?.message || body?.error));
+    } catch {
+      setNotice(CHAT_DROPPED);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function answerNudge(answer: NudgeAnswer) {
+    if (pending || nudgeAnswer) return;
+    setPending(true);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/chat/nudge", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(answer === "snooze" ? { action: "snooze" } : { action: "accept", choice: answer }),
+      });
+      const body = (await res.json().catch(() => null)) as { actionId?: unknown; summary?: unknown; error?: string } | null;
+      if (!res.ok) {
+        setNotice(
+          body?.error === "paused"
+            ? "Barista is paused. Resume it under Connected agents."
+            : body?.error === "no_nudge"
+              ? "Barista has nothing to suggest right now."
+              : noticeFor(res.status, undefined),
+        );
+        return;
+      }
+      setNudgeAnswer(answer);
+      if (typeof body?.actionId === "string" && typeof body.summary === "string") {
+        setPendingAction({ actionId: body.actionId, summary: body.summary });
+      }
+    } catch {
+      setNotice(CHAT_DROPPED);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function placeOrder() {
+    if (!orderStep) return;
+    await confirmAction({ actionId: orderStep.actionId, summary: orderStep.summary });
+  }
+
+  async function undoOrder() {
+    if (!placed || pending) return;
+    setPending(true);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/orders/${encodeURIComponent(placed.order.id)}/cancel`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      if (res.ok) {
+        setPlaced({ ...placed, undone: true });
+        window.dispatchEvent(new Event("beanbox-cart"));
+      } else {
+        setNotice(res.status === 409 ? "This order can no longer be cancelled." : noticeFor(res.status, undefined));
+      }
     } catch {
       setNotice(CHAT_DROPPED);
     } finally {
@@ -271,14 +378,17 @@ export function SupportChat() {
   const chips = draft.length > 0 ? [] : suggestions.slice(0, 3);
 
   return (
-    <div className="fixed bottom-4 left-4 z-10">
+    <div className={open ? "fixed inset-0 z-10 sm:inset-auto sm:bottom-4 sm:left-4" : "fixed bottom-4 left-4 z-10"}>
       {open && (
         <section
           aria-label="Support chat"
-          className="mb-2 flex w-[min(22rem,calc(100vw-2rem))] flex-col rounded-lg border border-stone-300 bg-white text-stone-900 shadow-xl"
+          className="flex h-full w-full flex-col bg-white font-sans text-[15px] text-stone-900 sm:mb-2 sm:h-auto sm:w-[22rem] sm:rounded-lg sm:border sm:border-stone-300 sm:shadow-xl"
         >
           <div className="flex shrink-0 items-center justify-between border-b border-stone-200 pl-3 pr-1">
-            <h2 className="text-sm font-semibold">Barista</h2>
+            <h2 className="flex items-center gap-2 text-[17px] font-semibold sm:text-sm">
+              <Spark size={18} />
+              Barista
+            </h2>
             <button
               type="button"
               onClick={() => setOpen(false)}
@@ -288,8 +398,9 @@ export function SupportChat() {
               ✕
             </button>
           </div>
-          <div className="max-h-[min(28rem,calc(100dvh-12rem))] space-y-2 overflow-y-auto px-3 py-3" aria-live="polite">
-            {usual && (
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3 sm:max-h-[min(28rem,calc(100dvh-12rem))] sm:flex-none" aria-live="polite">
+            {nudge && <BaristaNudge nudge={nudge} answer={nudgeAnswer} busy={pending} onAnswer={(a) => void answerNudge(a)} />}
+            {usual && !nudge && (
               <div className="rounded border border-stone-200 p-2">
                 <p className="text-sm text-stone-800">{usual.line}</p>
                 <div className="mt-2 flex gap-2">
@@ -312,7 +423,7 @@ export function SupportChat() {
                 </div>
               </div>
             )}
-            {entries.length === 0 && !notice && !usual && (
+            {entries.length === 0 && !notice && !usual && !nudge && (
               <p className="text-sm text-stone-500">Ask about beans or an order.</p>
             )}
             {entries.map((entry, index) =>
@@ -365,9 +476,16 @@ export function SupportChat() {
                 )}
               </p>
             )}
+            {orderStep && !pendingAction && (
+              <OrderSummaryCard step={orderStep} busy={pending} onPlace={() => void placeOrder()} onDismiss={() => setOrderStep(null)} />
+            )}
+            {placed && <PlacedOrderCard order={placed.order} undone={placed.undone} busy={pending} onUndo={() => void undoOrder()} />}
             {pendingAction && (
               <div className="rounded border border-stone-200 p-2">
-                <p className="whitespace-pre-wrap break-words text-sm text-stone-700">{pendingAction.summary}</p>
+                <p className="flex items-start gap-2 whitespace-pre-wrap break-words text-sm text-stone-700">
+                  <Spark size={14} className="mt-0.5" />
+                  <span>{pendingAction.summary}</span>
+                </p>
                 <div className="mt-2 flex gap-2">
                   <button
                     type="button"

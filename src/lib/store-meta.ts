@@ -8,6 +8,7 @@ import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
 import { isDemoShopperSub, isTestShopper } from "./demo-shopper";
+import type { NudgeOrder } from "./reorder-nudge";
 import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags } from "./store-types";
 
 /**
@@ -182,6 +183,29 @@ export async function isTestShopperUser(userId: string): Promise<boolean> {
   return (await getShopperFlags(userId)).isTest;
 }
 
+export type NudgeInputs = {
+  flags: ShopperFlags;
+  /** True for `is_test` shoppers and the configured demo shopper. */
+  demo: boolean;
+  orders: (NudgeOrder & { id: string })[];
+};
+
+/** One Management API read: this shopper's flags and retained orders, as the nudge engine reads them. */
+export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
+  const meta = await getAppMetadata(userId);
+  const flags = normalizeShopperFlags(meta);
+  return {
+    flags,
+    demo: flags.isTest || isDemoShopperSub(userId),
+    orders: readOrders(meta).map((order) => ({
+      id: order.id,
+      createdAt: order.createdAt,
+      cancelledAt: order.cancelledAt,
+      items: order.items.map((item) => ({ productId: item.productId, qty: item.qty })),
+    })),
+  };
+}
+
 function summarize(order: StoredOrder, now: Date): OrderSummary {
   const createdAt = new Date(order.createdAt);
   const cancelledAt = order.cancelledAt ? new Date(order.cancelledAt) : null;
@@ -340,6 +364,31 @@ export async function addToCart(
   for (let i = 0; i < qty; i++) items = addItem(items, productId);
   if (items.some((item) => item.quantity > 99)) return { error: "qty_limit" };
   if (sameCart(items, current.items)) return snapshot(items, current.coupon);
+  const decision = await consume(meta, "cartWrites", now);
+  if (!decision.ok) return rateLimited("cartWrites", decision.retryAfterSec);
+  await patchAppMetadata(userId, {
+    cart: storedCart(items, current.coupon),
+    chat_limits: decision.limits,
+  });
+  return snapshot(items, current.coupon);
+}
+
+/** Adds several lines in one write (one cart-write slot). Nothing is saved unless every line is valid. */
+export async function addManyToCart(
+  userId: string,
+  lines: readonly { productId: string; qty: number }[],
+  now = new Date(),
+): Promise<CartSnapshot | { error: "qty_limit" } | { error: "unknown_product" } | RateLimited> {
+  if (lines.length === 0) return { error: "qty_limit" };
+  const meta = await getAppMetadata(userId);
+  const current = readCart(meta);
+  let items = current.items;
+  for (const line of lines) {
+    if (!getProduct(line.productId)) return { error: "unknown_product" };
+    if (!validQty(line.qty)) return { error: "qty_limit" };
+    for (let i = 0; i < line.qty; i++) items = addItem(items, line.productId);
+  }
+  if (items.some((item) => item.quantity > 99)) return { error: "qty_limit" };
   const decision = await consume(meta, "cartWrites", now);
   if (!decision.ok) return rateLimited("cartWrites", decision.retryAfterSec);
   await patchAppMetadata(userId, {
