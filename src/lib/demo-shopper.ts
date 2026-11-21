@@ -11,8 +11,3 @@ export function isDemoShopperSub(sub: string): boolean {
   const configured = demoShopperSub();
   return configured !== null && configured === sub;
 }
-
-/** Defensive read of `app_metadata.is_test`: only a literal `true` counts. The one is_test check. */
-export function isTestShopper(meta: unknown): boolean {
-  return typeof meta === "object" && meta !== null && (meta as { is_test?: unknown }).is_test === true;
-}
