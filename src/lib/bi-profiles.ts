@@ -8,8 +8,9 @@ import { ROASTS, type Roast } from "./types";
 /**
  * BI customer profiles (`bi_customer_profiles`, migration 0003). One row per shopper hash with coarse
  * traits for the BI bot. Only a 2-digit region ever leaves the account: the schema below rejects anything
- * else, so a postcode cannot reach SQL even by mistake. Taste traits are left out when personalization is
- * off. The test flag comes from the one `isTestShopper` helper in `demo-shopper.ts`.
+ * else, so a postcode cannot reach SQL even by mistake. Location consent alone never publishes a region:
+ * it needs the shopper's separate marketing consent too. A shopper with personalization off gets no row at
+ * all (see `deleteBiProfile`). The test flag comes from the one `isTestShopper` helper in `demo-shopper.ts`.
  */
 
 export const BI_SEGMENTS = ["prospect", "new", "repeat", "lapsed"] as const;
@@ -24,7 +25,7 @@ export type BiProfileFacts = {
   aovCents: number | null;
   orders90d: number;
   preferredRoast: Roast | null;
-  /** First two digits of the postcode, only with location consent. */
+  /** First two digits of the postcode, only with location consent and explicit marketing consent. */
   region: string | null;
   isTest: boolean;
   marketingConsent: boolean;
@@ -54,7 +55,7 @@ export type BiProfileInput = {
   orders: readonly BiOrderFacts[];
   /** The stored `barista_profile`, or null. An `off` profile means personalization is off. */
   profile: BaristaProfile | null;
-  /** The 2-digit district from an active location consent, or null. */
+  /** The 2-digit district from an active location consent, or null. Published only with marketing consent. */
   region: string | null;
   marketing: { consent: boolean; at: string | null };
   isTest: boolean;
@@ -87,7 +88,7 @@ export function buildBiProfileFacts(input: BiProfileInput): BiProfileFacts {
     aovCents: recent.length ? Math.round(recent.reduce((sum, cents) => sum + cents, 0) / recent.length) : null,
     orders90d: recent.length,
     preferredRoast: taste?.preferredRoast ?? null,
-    region: input.region,
+    region: consent ? input.region : null,
     isTest: input.isTest,
     marketingConsent: consent,
     consentAt: consent ? input.marketing.at : null,
@@ -147,4 +148,9 @@ export async function upsertBiProfile(
       consent_at = EXCLUDED.consent_at,
       source = EXCLUDED.source,
       updated_at = EXCLUDED.updated_at`;
+}
+
+/** Removes this shopper's row, if any. Used when personalization is off. `sub` is hashed here. */
+export async function deleteBiProfile(sql: BiSql, sub: string): Promise<void> {
+  await sql`DELETE FROM bi_customer_profiles WHERE shopper_hash = ${hashShopperId(sub)}`;
 }

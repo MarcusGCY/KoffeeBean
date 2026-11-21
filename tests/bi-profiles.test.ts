@@ -35,6 +35,7 @@ import {
 import { trackOrderCancelled, trackOrderPlaced, trackProfile, type PlacedOrder } from "@/lib/bi-track";
 import { emitBiProfile, placeOrder, cancelOrder } from "@/lib/store-meta";
 import { emptyProfile } from "@/lib/barista-profile";
+import { MARKETING_CONSENT_VERSION } from "@/lib/marketing-text";
 
 const SUB = "auth0|65f1c0ffee00112233445566";
 const NOW = new Date("2026-11-21T08:00:00.000Z");
@@ -202,11 +203,12 @@ describe("store-meta: placing and cancelling an order", () => {
     db.meta = {
       cart,
       location: { postcode: "238823", consentAt: ago(10), purpose: "area-personalisation" },
+      marketing_consent: { version: MARKETING_CONSENT_VERSION, consentAt: ago(5) },
     };
     await placeOrder(SUB, NOW);
     await vi.waitFor(() => expect(profileCalls()).toHaveLength(1));
     const values = valuesOf(profileCalls()[0]!);
-    expect(values).toEqual([hashShopperId(SUB), "new", null, 3888, 1, "light", "23", false, false, null, "live", expect.any(String)]);
+    expect(values).toEqual([hashShopperId(SUB), "new", null, 3888, 1, "light", "23", false, true, ago(5), "live", expect.any(String)]);
     const everything = JSON.stringify(sqlMock.mock.calls);
     expect(everything).not.toContain("238823");
     expect(everything).not.toContain(SUB);
@@ -234,14 +236,12 @@ describe("store-meta: placing and cancelling an order", () => {
     expect(valuesOf(profileCalls()[0]!)[7]).toBe(false);
   });
 
-  it("leaves taste traits out when personalization is off", async () => {
+  it("writes no row, only a delete, when personalization is off", async () => {
     db.meta = { cart, barista_profile: { ...emptyProfile(NOW), off: true } };
     await placeOrder(SUB, NOW);
     await vi.waitFor(() => expect(profileCalls()).toHaveLength(1));
-    const values = valuesOf(profileCalls()[0]!);
-    expect(values[2]).toBeNull();
-    expect(values[5]).toBeNull();
-    expect(values[1]).toBe("new");
+    expect(profileCalls()[0]![0]).toSatisfy((strings: string[]) => strings.join("?").startsWith("DELETE FROM bi_customer_profiles"));
+    expect(valuesOf(profileCalls()[0]!)).toEqual([hashShopperId(SUB)]);
   });
 
   it("drops the order from the profile when it is cancelled", async () => {
@@ -257,7 +257,10 @@ describe("store-meta: placing and cancelling an order", () => {
   });
 
   it("emitBiProfile refreshes the row for a shopper with a location and no orders", async () => {
-    db.meta = { location: { postcode: "680123", consentAt: ago(1), purpose: "area-personalisation" } };
+    db.meta = {
+      location: { postcode: "680123", consentAt: ago(1), purpose: "area-personalisation" },
+      marketing_consent: { version: MARKETING_CONSENT_VERSION, consentAt: ago(1) },
+    };
     emitBiProfile(SUB, NOW);
     await vi.waitFor(() => expect(profileCalls()).toHaveLength(1));
     expect(valuesOf(profileCalls()[0]!).slice(0, 8)).toEqual([hashShopperId(SUB), "prospect", null, null, 0, null, "68", false]);
@@ -311,7 +314,8 @@ describe("demo profile seed", () => {
     for (const row of rows) {
       expect(row.shopperHash).toMatch(/^[0-9a-f]{64}$/);
       expect(biProfileSchema.safeParse(row.facts).success).toBe(true);
-      expect(row.facts.region).toMatch(/^\d{2}$/);
+      if (row.facts.marketingConsent) expect(row.facts.region).toMatch(/^\d{2}$/);
+      else expect(row.facts.region).toBeNull();
     }
     expect(rows.filter((row) => row.facts.marketingConsent)).toHaveLength(3);
     expect(rows.filter((row) => row.facts.isTest)).toHaveLength(1);
