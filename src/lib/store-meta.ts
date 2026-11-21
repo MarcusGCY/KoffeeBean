@@ -214,6 +214,11 @@ export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
   };
 }
 
+/** The shopper's retained orders as the nudge and profile engines read them. */
+export function retainedNudgeOrders(meta: Record<string, unknown>): (NudgeOrder & { id: string })[] {
+  return nudgeOrders(readOrders(meta));
+}
+
 function nudgeOrders(orders: readonly StoredOrder[]): (NudgeOrder & { id: string })[] {
   return orders.map((order) => ({
     id: order.id,
