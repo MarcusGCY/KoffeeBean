@@ -1,4 +1,5 @@
 import type { OrderStatus } from "./order-status";
+import type { TestPayment } from "./test-payment";
 
 export type CartLine = { productId: string; qty: number };
 
@@ -21,6 +22,8 @@ export type OrderSummary = {
   discountCents: number;
   taxCents: number;
   coupon: string | null;
+  /** Present on orders placed with the test-mode payment mock. */
+  payment?: TestPayment;
 };
 
 export type OrderDetail = OrderSummary & {

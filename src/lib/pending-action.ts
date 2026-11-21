@@ -14,6 +14,7 @@ import {
   cancelOrder,
   getCart,
   getOrder,
+  getShopperFlags,
   placeOrder,
   removeFromCart,
   setCartQty,
@@ -45,7 +46,7 @@ export const ActionBody = z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("update_cart_qty"), productId: ProductId, qty: Qty }),
   z.strictObject({ op: z.literal("remove_from_cart"), productId: ProductId, qty: Qty.optional() }),
   z.strictObject({ op: z.literal("apply_coupon"), code: z.string().trim().min(1).max(40) }),
-  z.strictObject({ op: z.literal("place_order") }),
+  z.strictObject({ op: z.literal("place_order"), anyway: z.literal(true).optional() }),
   z.strictObject({ op: z.literal("cancel_order"), orderId: z.string().trim().min(1).max(40) }),
   z.strictObject({ op: z.literal("report_problem"), message: z.string().trim().min(5).max(2000) }),
 ]);
@@ -82,6 +83,9 @@ export type PlacedOrder = {
   undoUntil: string;
 };
 
+/** Nothing was placed: the order is over the shopper's cap, so a second signed step asks again. */
+export type OverCap = { actionId: string; summary: string; totalCents: number; capCents: number };
+
 export type CommitResult =
   | {
       ok: true;
@@ -89,6 +93,7 @@ export type CommitResult =
       report?: { feedback: string; reportedBy: string };
       next?: NextStep;
       order?: PlacedOrder;
+      overCap?: OverCap;
     }
   | { ok: false; status: number; error: string; message: string };
 
@@ -233,6 +238,10 @@ async function summaryFor(userId: string, action: ShopAction): Promise<string | 
   if (action.op === "place_order") {
     const cart = await getCart(userId);
     if (cart.items.length === 0) return { error: "empty_cart" };
+    if (action.anyway) {
+      const { agentPrefs } = await getShopperFlags(userId);
+      return `Place it anyway? This order is ${money(cart.totalCents)}, over your ${money(agentPrefs.capCents)} cap per order. Press Confirm to place it anyway.`;
+    }
     const discount = cart.discountCents > 0 ? " A discount is applied." : "";
     return `Place your order. Catalogue total ${money(cart.totalCents)}.${discount} Press Confirm to place it.`;
   }
@@ -279,9 +288,11 @@ function signedAction(action: ShopAction): ShopAction {
 export async function proposeAction(
   userId: string,
   action: ShopAction,
-  opts?: { sessionId?: string | null },
+  opts?: { sessionId?: string | null; overCap?: boolean },
 ): Promise<PendingAction | { error: string }> {
   if (!ActionBody.safeParse(action).success) return { error: "invalid_body" };
+  // Only the server's own over-cap step may sign "anyway"; a caller cannot ask for it.
+  if (action.op === "place_order" && action.anyway && !opts?.overCap) return { error: "invalid_body" };
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
   const sessionId = action.op === "add_to_cart" ? biSessionId(opts?.sessionId) : null;
@@ -326,6 +337,20 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
     const cart = await getCart(userId);
     if (cartFingerprint(cart) !== claims.cartHash) {
       return fail(409, "cart_changed", "Your cart changed. Ask again to place the order.");
+    }
+    const { agentPrefs } = await getShopperFlags(userId);
+    if (!agentPrefs.consentAt) {
+      return fail(403, "consent_required", "Allow Barista to order for you first.");
+    }
+    if (!claims.action.anyway && cart.totalCents > agentPrefs.capCents) {
+      if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
+      const again = await proposeAction(userId, { op: "place_order", anyway: true }, { overCap: true });
+      if (!("actionId" in again)) return fail(409, "over_cap", "This order is over your cap per order.");
+      return {
+        ok: true,
+        summary: again.summary,
+        overCap: { actionId: again.actionId, summary: again.summary, totalCents: cart.totalCents, capCents: agentPrefs.capCents },
+      };
     }
   }
   if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
