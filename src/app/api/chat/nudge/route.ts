@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { bestEffort, changeLatestWaiting } from "@/lib/agent-activity";
 import { snoozeNudges } from "@/lib/agent-prefs";
 import { nextNudge, nudgeLines } from "@/lib/nudge";
 import { proposeAction } from "@/lib/pending-action";
@@ -41,14 +42,17 @@ export async function POST(req: Request) {
 
   try {
     if (parsed.data.action === "snooze") {
-      return NextResponse.json({ ok: true, snoozeUntil: await snoozeNudges(auth.userId) });
+      const snoozeUntil = await snoozeNudges(auth.userId);
+      await bestEffort(changeLatestWaiting(auth.userId, "suggest", { status: "declined" }));
+      return NextResponse.json({ ok: true, snoozeUntil });
     }
     const picked = await nudgeLines(auth.userId, parsed.data.choice);
     if ("error" in picked) {
       return NextResponse.json({ error: picked.error }, { status: picked.error === "paused" ? 403 : 404 });
     }
-    const pending = await proposeAction(auth.userId, { op: "add_many", lines: picked.lines });
+    const pending = await proposeAction(auth.userId, { op: "add_many", lines: picked.lines }, { reason: picked.reason });
     if ("error" in pending) return NextResponse.json({ error: pending.error }, { status: 400 });
+    await bestEffort(changeLatestWaiting(auth.userId, "suggest", { status: "done" }));
     return NextResponse.json({ actionId: pending.actionId, summary: pending.summary });
   } catch (err) {
     return dbFailure(err);

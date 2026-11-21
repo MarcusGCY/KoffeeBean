@@ -37,6 +37,9 @@ export function SiteHeader({
                   {label}
                 </span>
               )}
+              <Link href="/account/activity" className="text-sm font-medium text-amber-800 hover:underline">
+                Agent activity
+              </Link>
               {demoHref && (
                 <Link href={demoHref} className="text-sm font-medium text-amber-800 hover:underline">
                   Demo

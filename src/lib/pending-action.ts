@@ -20,6 +20,8 @@ import {
   setCartQty,
 } from "./store-meta";
 import { undoDeadline } from "./order-status";
+import { bestEffort, newActivityId, recordActivity, type ActivityChange } from "./agent-activity";
+import { BARISTA } from "./agent-activity-text";
 import type { CartSnapshot } from "./store-types";
 import { consumeNonce, issueNonce, rearmNonce, rememberedLines } from "./upstash";
 
@@ -63,6 +65,10 @@ type SignedAction = {
   cartHash?: string;
   /** Chat session bound at propose time. Set only with a verified recommendation id. */
   sessionId?: string;
+  /** Audit entry this action continues. Set only on the server's own over-cap step. */
+  activityId?: string;
+  /** Why Barista is acting, for the audit trail. Carried so a follow-up step keeps it. */
+  reason?: string;
 };
 
 export type PendingAction = { pending: true; actionId: string; summary: string };
@@ -94,6 +100,8 @@ export type CommitResult =
       next?: NextStep;
       order?: PlacedOrder;
       overCap?: OverCap;
+      /** The audit entry this commit completes. The confirm route applies it after the write succeeds. */
+      audit?: { id: string; change: ActivityChange };
     }
   | { ok: false; status: number; error: string; message: string };
 
@@ -183,6 +191,8 @@ export function verifyAction(token: string, rawSecret: string, nowMs = Date.now(
     if (!action.success) return null;
     if (action.data.op === "place_order" && (typeof claims.cartHash !== "string" || !claims.cartHash)) return null;
     const sessionId = biSessionId(claims.sessionId);
+    const activityId = typeof claims.activityId === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(claims.activityId) ? claims.activityId : undefined;
+    const reason = typeof claims.reason === "string" && claims.reason.trim() ? claims.reason.trim().slice(0, 200) : undefined;
     return {
       typ: "action",
       sub: claims.sub,
@@ -192,6 +202,8 @@ export function verifyAction(token: string, rawSecret: string, nowMs = Date.now(
       action: signedAction(action.data),
       cartHash: claims.cartHash,
       ...(sessionId ? { sessionId } : {}),
+      ...(activityId ? { activityId } : {}),
+      ...(reason ? { reason } : {}),
     };
   } catch {
     return null;
@@ -288,7 +300,7 @@ function signedAction(action: ShopAction): ShopAction {
 export async function proposeAction(
   userId: string,
   action: ShopAction,
-  opts?: { sessionId?: string | null; overCap?: boolean },
+  opts?: { sessionId?: string | null; overCap?: boolean; activityId?: string; reason?: string },
 ): Promise<PendingAction | { error: string }> {
   if (!ActionBody.safeParse(action).success) return { error: "invalid_body" };
   // Only the server's own over-cap step may sign "anyway"; a caller cannot ask for it.
@@ -297,7 +309,9 @@ export async function proposeAction(
   if (typeof summary !== "string") return summary;
   const sessionId = action.op === "add_to_cart" ? biSessionId(opts?.sessionId) : null;
   const stored = await verifiedAdd(userId, action, sessionId);
-  const cartHash = action.op === "place_order" ? cartFingerprint(await getCart(userId)) : undefined;
+  const cart = action.op === "place_order" ? await getCart(userId) : null;
+  const cartHash = cart ? cartFingerprint(cart) : undefined;
+  const reason = opts?.reason?.trim().slice(0, 200) || undefined;
   const boundSession = stored.op === "add_to_cart" && stored.recommendationId && sessionId ? sessionId : undefined;
   const claims: SignedAction = {
     typ: "action",
@@ -308,9 +322,54 @@ export async function proposeAction(
     action: stored,
     ...(cartHash ? { cartHash } : {}),
     ...(boundSession ? { sessionId: boundSession } : {}),
+    ...(opts?.activityId ? { activityId: opts.activityId } : {}),
+    ...(reason ? { reason } : {}),
   };
   await issueNonce(claims.jti, ACTION_TTL_SEC);
-  return { pending: true, actionId: signActionToken(claims, secret()), summary };
+  const token = signActionToken(claims, secret());
+  await bestEffort(
+    recordActivity(userId, {
+      id: activityIdOf(claims),
+      ts: new Date().toISOString(),
+      agent: BARISTA,
+      action: stored.op,
+      subject: subjectOf(stored, cart),
+      reason: reason ?? DEFAULT_REASON,
+      amountCents: amountOf(stored, cart),
+      orderId: null,
+      status: "waiting",
+    }),
+  );
+  return { pending: true, actionId: token, summary };
+}
+
+const DEFAULT_REASON = "You asked Barista in chat.";
+
+function activityIdOf(claims: Pick<SignedAction, "jti" | "activityId">): string {
+  return claims.activityId ?? newActivityId("act", claims.jti);
+}
+
+function nameList(names: string[]): string {
+  const shown = names.slice(0, 3);
+  const more = names.length - shown.length;
+  const head = shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}` : (shown[0] ?? "");
+  return (more > 0 ? `${head} and ${more} more` : head).slice(0, 80);
+}
+
+function subjectOf(action: ShopAction, cart: CartSnapshot | null): string {
+  const name = (id: string) => getProduct(id)?.name ?? "";
+  if (action.op === "add_many") return nameList(action.lines.map((line) => name(line.productId)).filter(Boolean));
+  if (action.op === "add_to_cart" || action.op === "update_cart_qty" || action.op === "remove_from_cart") return name(action.productId);
+  if (action.op === "place_order" && cart) return nameList(cart.items.map((item) => name(item.productId)).filter(Boolean));
+  return "";
+}
+
+function amountOf(action: ShopAction, cart: CartSnapshot | null): number | null {
+  const price = (id: string) => getProduct(id)?.price ?? 0;
+  if (action.op === "add_many") return action.lines.reduce((sum, line) => sum + price(line.productId) * line.qty, 0);
+  if (action.op === "add_to_cart") return price(action.productId) * (action.qty ?? 1);
+  if (action.op === "place_order" && cart) return cart.totalCents;
+  return null;
 }
 
 function cartLine(prefix: string, cart: CartSnapshot): string {
@@ -344,7 +403,16 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
     }
     if (!claims.action.anyway && cart.totalCents > agentPrefs.capCents) {
       if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
-      const again = await proposeAction(userId, { op: "place_order", anyway: true }, { overCap: true });
+      const cap = money(agentPrefs.capCents);
+      const again = await proposeAction(
+        userId,
+        { op: "place_order", anyway: true },
+        {
+          overCap: true,
+          activityId: activityIdOf(claims),
+          reason: `${claims.reason ?? DEFAULT_REASON} Over your ${cap} cap per order, so Barista asked for a second OK.`,
+        },
+      );
       if (!("actionId" in again)) return fail(409, "over_cap", "This order is over your cap per order.");
       return {
         ok: true,
@@ -355,12 +423,22 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
   }
   if (!(await consumeNonce(claims.jti))) return fail(409, "already_used", "That confirmation was already used.");
 
-  const outcome = await perform(userId, claims.action, shopper, claims.sessionId);
+  const outcome = await perform(userId, claims.action, shopper, claims.sessionId, claims.reason);
   if (!outcome.ok) {
     await rearmNonce(claims.jti, claims.exp - Math.floor(Date.now() / 1000));
     return outcome;
   }
-  return outcome;
+  const change: ActivityChange = {
+    status: "done",
+    ...(outcome.order
+      ? {
+          orderId: outcome.order.id,
+          amountCents: outcome.order.totalCents,
+          subject: nameList(outcome.order.lines.map((line) => line.name)),
+        }
+      : {}),
+  };
+  return { ...outcome, audit: { id: activityIdOf(claims), change } };
 }
 
 function noteRecommendedAdd(userId: string, action: ShopAction, sessionId?: string): void {
@@ -379,7 +457,13 @@ function noteRecommendedAdd(userId: string, action: ShopAction, sessionId?: stri
   );
 }
 
-async function perform(userId: string, action: ShopAction, shopper: Shopper, sessionId?: string): Promise<CommitResult> {
+async function perform(
+  userId: string,
+  action: ShopAction,
+  shopper: Shopper,
+  sessionId?: string,
+  reason?: string,
+): Promise<CommitResult> {
   if (action.op === "add_to_cart") {
     const result = await addToCart(userId, action.productId, action.qty ?? 1);
     if ("error" in result) return writeError(result);
@@ -400,7 +484,7 @@ async function perform(userId: string, action: ShopAction, shopper: Shopper, ses
     const result = await addManyToCart(userId, action.lines);
     if ("error" in result) return writeError(result);
     // The cart is already written, so a failure signing the follow-up must not fail (and re-arm) this Confirm.
-    const next = await proposeAction(userId, { op: "place_order" }).catch(() => null);
+    const next = await proposeAction(userId, { op: "place_order" }, { reason }).catch(() => null);
     return {
       ok: true,
       summary: cartLine("Added to your cart.", result),
@@ -413,7 +497,7 @@ async function perform(userId: string, action: ShopAction, shopper: Shopper, ses
     return { ok: true, summary: cartLine("Coupon applied.", result) };
   }
   if (action.op === "place_order") {
-    const result = await placeOrder(userId);
+    const result = await placeOrder(userId, new Date(), { placedBy: "barista" });
     if ("error" in result) return writeError(result);
     const detail = await getOrder(userId, result.id).catch(() => null);
     return {

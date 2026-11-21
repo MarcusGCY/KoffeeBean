@@ -6,7 +6,9 @@ import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
-import { canCancel, orderStatus } from "./order-status";
+import { canCancel, orderStatus, undoDeadline } from "./order-status";
+import { expireStale, normalizeActivity, undoActivityForOrder } from "./agent-activity";
+import type { ActivityEntry } from "./agent-activity-text";
 import { DEFAULT_AGENT_CAP_CENTS } from "./agent-cap";
 import { isDemoShopperSub } from "./demo-shopper";
 import { createTestPayment, readTestPayment, type TestPayment } from "./test-payment";
@@ -43,6 +45,8 @@ type StoredOrder = {
   demo?: true;
   /** Test-mode payment record. No processor or card data is ever stored. */
   payment?: TestPayment;
+  /** Set when an agent (Barista) placed the order on the shopper's confirmed OK. */
+  placedBy?: "barista";
 };
 
 export type AuditEntry = { ts: string; tool: string; summary: string; outcome: string };
@@ -137,6 +141,7 @@ function readOrders(meta: Record<string, unknown>): StoredOrder[] {
       items,
       ...(record.demo === true ? { demo: true as const } : {}),
       ...(payment ? { payment } : {}),
+      ...(record.placedBy === "barista" ? { placedBy: "barista" as const } : {}),
     });
   }
   return orders.slice(0, ORDER_CAP);
@@ -218,6 +223,7 @@ function summarize(order: StoredOrder, now: Date): OrderSummary {
     taxCents: order.taxCents,
     coupon: order.coupon,
     ...(order.payment ? { payment: order.payment } : {}),
+    ...(order.placedBy ? { placedBy: order.placedBy } : {}),
   };
 }
 
@@ -482,6 +488,7 @@ export async function clearCoupon(userId: string, now = new Date()): Promise<Car
 export async function placeOrder(
   userId: string,
   now = new Date(),
+  opts: { placedBy?: "barista" } = {},
 ): Promise<OrderSummary | { error: "empty_cart" } | RateLimited> {
   const meta = await getAppMetadata(userId);
   const current = readCart(meta);
@@ -512,6 +519,7 @@ export async function placeOrder(
     totalCents: draft.total,
     coupon: savedCoupon,
     payment: createTestPayment(),
+    ...(opts.placedBy ? { placedBy: opts.placedBy } : {}),
     items: draft.items.flatMap((item) => {
       const product = getProduct(item.productId);
       if (!product) return [];
@@ -526,6 +534,25 @@ export async function placeOrder(
   const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() => trackOrderPlaced({ sub: userId, ...testCtx }, stored));
   return summarize(stored, now);
+}
+
+export type ActivityRow = ActivityEntry & {
+  /** When the linked order can no longer be undone, while it still can be. */
+  undoUntil: string | null;
+};
+
+/** One Management API read: this shopper's agent activity, with the undo deadline of each still-cancellable order. */
+export async function readActivityView(userId: string, now = new Date()): Promise<{ entries: ActivityRow[]; demo: boolean }> {
+  const meta = await getAppMetadata(userId);
+  const orders = readOrders(meta);
+  const entries = expireStale(normalizeActivity(meta.agent_activity), now).map((entry) => {
+    const order = entry.orderId ? orders.find((row) => row.id === entry.orderId) : undefined;
+    const createdAt = order ? new Date(order.createdAt) : null;
+    const cancelledAt = order?.cancelledAt ? new Date(order.cancelledAt) : null;
+    const cancellable = createdAt ? canCancel(orderStatus(createdAt, cancelledAt, now)) : false;
+    return { ...entry, undoUntil: createdAt && cancellable ? undoDeadline(createdAt).toISOString() : null };
+  });
+  return { entries, demo: normalizeShopperFlags(meta).isTest || isDemoShopperSub(userId) };
 }
 
 export async function listOrders(userId: string, now = new Date()): Promise<OrderSummary[]> {
@@ -561,7 +588,12 @@ export async function cancelOrder(
   const updated: StoredOrder = { ...current, cancelledAt: now.toISOString() };
   const next = orders.slice();
   next[index] = updated;
-  await patchAppMetadata(userId, { orders: next, chat_limits: decision.limits });
+  const activity = undoActivityForOrder(normalizeActivity(meta.agent_activity), updated.id, now);
+  await patchAppMetadata(userId, {
+    orders: next,
+    chat_limits: decision.limits,
+    ...(activity ? { agent_activity: activity } : {}),
+  });
   const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() =>
     trackOrderCancelled(
