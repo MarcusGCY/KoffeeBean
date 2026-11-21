@@ -1,5 +1,7 @@
 import type { BiSql } from "./bi-db";
 import { BI_SEGMENTS } from "./bi-profiles";
+import { BI_MIN_GROUP_SIZE, suppressRegions } from "./bi-privacy";
+import type { WithdrawnLookup } from "./marketing-sync";
 import { BI_EVENTS_DEFAULT_LIMIT, BI_EVENTS_MAX_LIMIT, BiQueryError, parseSource, type BiReadSource } from "./bi-read";
 import { ROASTS } from "./types";
 
@@ -9,6 +11,12 @@ import { ROASTS } from "./types";
  * with an explicit column list, so the table's other rows can never be listed. Test rows are excluded from
  * everything and only counted in `excludedTest`. There is no postcode anywhere in the table, and the
  * output keeps `region` to exactly two digits even if a stored value were malformed.
+ *
+ * Small groups: a district with fewer than `BI_MIN_GROUP_SIZE` shoppers is never listed on its own. It goes
+ * into an `other` bucket (see `suppressRegions`), and a per-shopper row in such a district gets no region.
+ *
+ * Consent: the BI flag alone is not trusted for per-shopper rows. A shopper whose withdrawal is recorded as
+ * not yet written to BI is left out, and if that record cannot be read the rows are withheld.
  */
 
 const REGION = /^\d{2}$/;
@@ -56,6 +64,12 @@ export type BiProfilesResult = {
   rows: BiProfileRow[];
   /** Test rows left out of the aggregates and rows above. */
   excludedTest: number;
+  /**
+   * How `rows` was gated. `auth0_withdrawals`: rows were checked against withdrawals not yet in BI.
+   * `bi_only`: no withdrawal record is configured, so only the BI flag applied.
+   * `unavailable`: the check failed and `rows` is empty on purpose.
+   */
+  consentCheck: "auth0_withdrawals" | "bi_only" | "unavailable";
   nextCursor?: string;
 };
 
@@ -66,7 +80,12 @@ function iso(value: unknown): string {
   return value instanceof Date ? value.toISOString() : new Date(String(value)).toISOString();
 }
 
-export async function biProfiles(sql: BiSql, query: BiProfilesQuery): Promise<BiProfilesResult> {
+export async function biProfiles(
+  sql: BiSql,
+  query: BiProfilesQuery,
+  withdrawn: WithdrawnLookup = { state: "bi_only" },
+  minGroupSize: number = BI_MIN_GROUP_SIZE,
+): Promise<BiProfilesResult> {
   const sourceClause = query.source === "all" ? "" : " AND source = $1";
   const sourceValues: unknown[] = query.source === "all" ? [] : [query.source];
   const run = (text: string, values: unknown[] = sourceValues) => sql.query(text, values) as Promise<Record<string, unknown>[]>;
@@ -102,8 +121,18 @@ export async function biProfiles(sql: BiSql, query: BiProfilesQuery): Promise<Bi
     ),
   ]);
 
+  const regionCounts = regions.flatMap((row) =>
+    typeof row.region === "string" && REGION.test(row.region) ? [{ region: row.region, shoppers: num(row.n) }] : [],
+  );
+  const { regions: shownRegions, visible } = suppressRegions(regionCounts, minGroupSize);
+
   const consented = rows.filter((row) => row.marketing_consent === true);
-  const page = consented.slice(0, query.limit);
+  const rawPage = consented.slice(0, query.limit);
+  const allowed = (row: Record<string, unknown>) => {
+    if (withdrawn.state === "unavailable") return false;
+    return withdrawn.state === "bi_only" || !withdrawn.hashes.has(String(row.shopper_hash));
+  };
+  const page = rawPage.filter(allowed);
   const out: BiProfileRow[] = page.map((row) => ({
     shopper_hash: String(row.shopper_hash),
     segment: String(row.segment),
@@ -111,7 +140,7 @@ export async function biProfiles(sql: BiSql, query: BiProfilesQuery): Promise<Bi
     aov_cents: nullableNum(row.aov_cents),
     orders_90d: num(row.orders_90d),
     preferred_roast: typeof row.preferred_roast === "string" && (ROASTS as readonly string[]).includes(row.preferred_roast) ? row.preferred_roast : null,
-    region: typeof row.region === "string" && REGION.test(row.region) ? row.region : null,
+    region: typeof row.region === "string" && REGION.test(row.region) && visible.has(row.region) ? row.region : null,
     consent_at: row.consent_at == null ? null : iso(row.consent_at),
     updated_at: iso(row.updated_at),
   }));
@@ -128,9 +157,7 @@ export async function biProfiles(sql: BiSql, query: BiProfilesQuery): Promise<Bi
       shoppers: num(total?.shoppers),
       marketingConsented: num(total?.consented),
       segments: segmentCounts,
-      regions: regions.flatMap((row) =>
-        typeof row.region === "string" && REGION.test(row.region) ? [{ region: row.region, shoppers: num(row.n) }] : [],
-      ),
+      regions: shownRegions,
       preferredRoasts: roastCounts,
       avgAovCents: total?.avg_aov_cents == null ? null : Math.round(Number(total.avg_aov_cents)),
       avgOrders90d: total?.avg_orders_90d == null ? null : Math.round(Number(total.avg_orders_90d) * 100) / 100,
@@ -138,6 +165,9 @@ export async function biProfiles(sql: BiSql, query: BiProfilesQuery): Promise<Bi
     },
     rows: out,
     excludedTest: num(excluded[0]?.n),
-    ...(consented.length > query.limit ? { nextCursor: out[out.length - 1]?.shopper_hash } : {}),
+    consentCheck: withdrawn.state === "checked" ? "auth0_withdrawals" : withdrawn.state,
+    ...(consented.length > query.limit && withdrawn.state !== "unavailable"
+      ? { nextCursor: String(rawPage[rawPage.length - 1]?.shopper_hash) }
+      : {}),
   };
 }

@@ -14,7 +14,7 @@ vi.mock("@/lib/bi-events", async (importOriginal) => ({
   recordBiEvent: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("@/lib/bi-db", () => ({ biDbConfigured: () => biState.configured, getBiSql: () => (biState.configured ? sqlMock : null) }));
-vi.mock("@/lib/upstash", () => ({ redisPipeline: async () => [null] }));
+vi.mock("@/lib/upstash", () => ({ redisConfigured: () => false, redisPipeline: async () => [null] }));
 vi.mock("@/lib/auth0-mgmt", () => ({
   mgmtConfigured: () => true,
   getAppMetadata: async () => structuredClone(db.meta),
