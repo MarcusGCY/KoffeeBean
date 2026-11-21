@@ -392,6 +392,7 @@ deployments fall back to that deployment's `VERCEL_URL`. Do not set `VERCEL_URL`
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. Leave it empty in git |
 | `DATABASE_URL` | Optional. Neon Postgres connection string for the BI event log (see below). Leave it empty in git |
 | `BI_HASH_SECRET` | Optional. 16+ character secret that keys the shopper hash for BI events. Leave it empty in git |
+| `DEMO_SHOPPER_SUB` | Optional. Auth0 `sub` of the one demo shopper (see "Demo shopper"). Unset means no demo shopper. Set the value in your host, never in git |
 | `BI_API_SECRET` | Optional. Service token for the read-only `/api/bi/*` endpoints (see "BI read API"). Leave it empty in git |
 
 ### BI event log (Neon Postgres)
@@ -471,6 +472,13 @@ Rules: shoppers are synthetic subs (`demo-seed|shopper-N`) run through `hashShop
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` is optional. Set it only if production Deployment Protection would
 block the app from calling its own `/api/fix-status`. A public production URL does not need it.
+
+### Demo shopper
+
+`DEMO_SHOPPER_SUB` names the Auth0 `sub` of the one demo shopper. It is configuration, not code: nothing in the repo names an account, and leaving it unset disables everything below.
+
+- **Flags in `app_metadata`.** `is_test` (boolean, default false) and `agent_prefs` (`consentAt?`, `capCents` default 6000, `askEveryOrder` always true for the MVP, `snoozeUntil?`, `lastNudgeSession?`, `paused?`) are normalized in `src/lib/store-meta.ts`. A shopper with neither key reads as the defaults. `isTestShopper(userId)` is true for the configured demo shopper or any account with `is_test: true`.
+- **Seed.** When `DEMO_SHOPPER_SUB` is set and the Auth0 Management API is configured, **Seed BI demo story** also writes two orders into that account's `app_metadata.orders`: Ethiopia Yirgacheffe 250g about 12 days ago and an older order (ids `BB-DEMO-*`). Every seeded order has `demo: true` and is demo data, not a real purchase. Re-seeding replaces only `demo: true` orders and leaves others as stored, and it marks the account `is_test`. It runs behind the same admin session and CSRF check as the BI seed, and `seedDemoShopperOrders` refuses any `sub` other than the configured one.
 
 ### Auth0 application URLs
 
