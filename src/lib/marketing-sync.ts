@@ -68,7 +68,8 @@ type Consent = { consent: boolean; at: string | null };
 export async function setBiConsent(sql: BiSql, hash: string, want: Consent): Promise<boolean> {
   const rows = (await sql.query(
     `UPDATE bi_customer_profiles
-        SET marketing_consent = $2, consent_at = $3::timestamptz
+        SET marketing_consent = $2, consent_at = $3::timestamptz,
+            region = CASE WHEN $2 THEN region ELSE NULL END
       WHERE shopper_hash = $1
         AND (marketing_consent <> $2 OR consent_at IS DISTINCT FROM $3::timestamptz)
       RETURNING shopper_hash`,
@@ -81,7 +82,7 @@ export async function setBiConsent(sql: BiSql, hash: string, want: Consent): Pro
 export async function revokeUnlisted(sql: BiSql, consented: readonly string[]): Promise<number> {
   const rows = (await sql.query(
     `UPDATE bi_customer_profiles
-        SET marketing_consent = false, consent_at = NULL
+        SET marketing_consent = false, consent_at = NULL, region = NULL
       WHERE marketing_consent = true AND NOT (shopper_hash = ANY($1::text[]))
       RETURNING shopper_hash`,
     [consented],

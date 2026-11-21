@@ -211,7 +211,8 @@ export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
 
 /**
  * The traits mirrored to `bi_customer_profiles`. `isTest` is the one `isTestShopper` check plus the configured
- * demo shopper. `profile` is the profile just written, or undefined to use the stored one.
+ * demo shopper. `profile` is the profile just written, or undefined to use the stored one. Null when
+ * personalization is off: that shopper has no BI row.
  */
 function biFacts(
   userId: string,
@@ -219,7 +220,8 @@ function biFacts(
   orders: readonly StoredOrder[],
   now: Date,
   profile?: BaristaProfile,
-): BiProfileFacts {
+): BiProfileFacts | null {
+  if ((profile ?? normalizeProfile(meta.barista_profile))?.off === true) return null;
   return biProfileFromMeta(meta, orders, {
     isTest: isTestShopper(meta) || isDemoShopperSub(userId),
     now,
