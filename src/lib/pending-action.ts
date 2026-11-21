@@ -305,6 +305,9 @@ export async function proposeAction(
   if (!ActionBody.safeParse(action).success) return { error: "invalid_body" };
   // Only the server's own over-cap step may sign "anyway"; a caller cannot ask for it.
   if (action.op === "place_order" && action.anyway && !opts?.overCap) return { error: "invalid_body" };
+  if (action.op === "place_order" && (await getShopperFlags(userId)).agentPrefs.paused === true) {
+    return { error: "agent_paused" };
+  }
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
   const sessionId = action.op === "add_to_cart" ? biSessionId(opts?.sessionId) : null;
@@ -398,6 +401,9 @@ export async function commitAction(userId: string, actionId: string, shopper: Sh
       return fail(409, "cart_changed", "Your cart changed. Ask again to place the order.");
     }
     const { agentPrefs } = await getShopperFlags(userId);
+    if (agentPrefs.paused === true) {
+      return fail(403, "agent_paused", "Barista is paused. Resume it under Connected agents to place orders.");
+    }
     if (!agentPrefs.consentAt) {
       return fail(403, "consent_required", "Allow Barista to order for you first.");
     }
