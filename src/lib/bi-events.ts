@@ -41,6 +41,14 @@ export const biPayloadSchemas = {
     recommendationId: id,
     productId: id,
   }),
+  "product.viewed": z.strictObject({
+    productId: id,
+  }),
+  "cart.added": z.strictObject({
+    productId: id,
+    qty: z.number().int().min(1).max(1000),
+    source: z.enum(["ui", "barista"]),
+  }),
   "order.placed": z.strictObject({
     orderId: id,
     subtotalCents: cents,
@@ -73,6 +81,8 @@ export type BiEventInput<T extends BiEventType = BiEventType> = {
   shopperSub: string;
   /** Opaque, non-identifying session or chat id. */
   sessionId?: string | null;
+  /** Synthetic or QA traffic. Only `true` is honored; anything else stores as not-test. */
+  isTest?: boolean;
   payload: BiEventPayloads[T];
 };
 
@@ -85,6 +95,7 @@ export type BiEventRow = {
   source: BiSource;
   shopperHash: string;
   sessionId: string | null;
+  isTest: boolean;
   payload: Record<string, unknown>;
 };
 
@@ -101,6 +112,7 @@ export function shapeBiEvent<T extends BiEventType>(input: BiEventInput<T>): BiE
     source: input.source,
     shopperHash: hashShopperId(input.shopperSub),
     sessionId,
+    isTest: input.isTest === true,
     payload,
   };
 }
@@ -126,9 +138,16 @@ export async function recordBiEvent<T extends BiEventType>(input: BiEventInput<T
     }
     const sql = getBiSql();
     if (!sql) return { ok: false, reason: "unconfigured" };
-    const insert = Promise.resolve(sql`
+    // is_test is written only for test traffic, so live inserts keep working before 0002 is applied.
+    const insert = Promise.resolve(
+      row.isTest
+        ? sql`
+      INSERT INTO bi_events (event_type, source, shopper_hash, session_id, payload, is_test)
+      VALUES (${row.eventType}, ${row.source}, ${row.shopperHash}, ${row.sessionId}, ${JSON.stringify(row.payload)}::jsonb, true)`
+        : sql`
       INSERT INTO bi_events (event_type, source, shopper_hash, session_id, payload)
-      VALUES (${row.eventType}, ${row.source}, ${row.shopperHash}, ${row.sessionId}, ${JSON.stringify(row.payload)}::jsonb)`);
+      VALUES (${row.eventType}, ${row.source}, ${row.shopperHash}, ${row.sessionId}, ${JSON.stringify(row.payload)}::jsonb)`,
+    );
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error("timeout")), WRITE_TIMEOUT_MS);
     });

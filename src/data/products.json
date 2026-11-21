@@ -1,17 +1,17 @@
 [
-  { "id": "ethiopia-250", "name": "Ethiopia Yirgacheffe 250g", "category": "beans", "price": 1800, "blurb": "Floral, citrus, tea-like." },
-  { "id": "colombia-250", "name": "Colombia Huila 250g", "category": "beans", "price": 1600, "blurb": "Caramel, red apple, cocoa." },
-  { "id": "espresso-1kg", "name": "House Espresso 1kg", "category": "beans", "price": 4200, "blurb": "Dark chocolate, low acidity." },
-  { "id": "colombia-popayan-decaf-250", "name": "Colombia Popayan Decaf 250g", "category": "beans", "price": 2180, "blurb": "EA sugarcane-decaffeinated coffee from Popayan Cauca, Colombia." },
-  { "id": "kenya-ichangi-200", "name": "Kenya Ichangi 200g", "category": "beans", "price": 2450, "blurb": "Naturally processed coffee from Karatina, Nyeri County, Kenya." },
-  { "id": "costa-rica-aquiares-et47-200", "name": "Costa Rica Aquiares Estate ET47 Experimental 200g", "category": "beans", "price": 2450, "blurb": "Red honey-processed coffee from Aquiares Estate, Turrialba, Costa Rica." },
-  { "id": "india-monsooned-malabar-250", "name": "India Monsooned Malabar 250g", "category": "beans", "price": 1950, "blurb": "Monsooned coffee from India's Western Ghats." },
-  { "id": "brazil-sertao-yellow-bourbon-200", "name": "Brazil Fazenda Sertão Natural – Yellow Bourbon 200g", "category": "beans", "price": 1700, "blurb": "Naturally processed Yellow Bourbon from Carmo de Minas, Brazil; medium espresso roast." },
-  { "id": "sumatra-mandheling-tp1-200", "name": "Indonesia Sumatra Mandheling TP Grade 1 200g", "category": "beans", "price": 1700, "blurb": "Wet-hulled Sumatra Mandheling coffee from Indonesia; medium-dark roast, triple-picked Grade 1." },
+  { "id": "ethiopia-250", "name": "Ethiopia Yirgacheffe 250g", "category": "beans", "price": 1800, "blurb": "Floral, citrus, tea-like.", "attributes": {"roast": "light", "origin": "Ethiopia", "notes": ["floral", "citrus", "tea"], "grams": 250} },
+  { "id": "colombia-250", "name": "Colombia Huila 250g", "category": "beans", "price": 1600, "blurb": "Caramel, red apple, cocoa.", "attributes": {"roast": "medium", "origin": "Colombia", "notes": ["caramel", "red apple", "cocoa"], "grams": 250} },
+  { "id": "espresso-1kg", "name": "House Espresso 1kg", "category": "beans", "price": 4200, "blurb": "Dark chocolate, low acidity.", "attributes": {"roast": "dark", "origin": "Blend", "notes": ["dark chocolate"], "grams": 1000} },
+  { "id": "colombia-popayan-decaf-250", "name": "Colombia Popayan Decaf 250g", "category": "beans", "price": 2180, "blurb": "EA sugarcane-decaffeinated coffee from Popayan Cauca, Colombia.", "attributes": {"roast": "medium", "origin": "Colombia", "notes": ["sugarcane", "sweet"], "grams": 250} },
+  { "id": "kenya-ichangi-200", "name": "Kenya Ichangi 200g", "category": "beans", "price": 2450, "blurb": "Naturally processed coffee from Karatina, Nyeri County, Kenya.", "attributes": {"roast": "light", "origin": "Kenya", "notes": ["berry", "winey"], "grams": 200} },
+  { "id": "costa-rica-aquiares-et47-200", "name": "Costa Rica Aquiares Estate ET47 Experimental 200g", "category": "beans", "price": 2450, "blurb": "Red honey-processed coffee from Aquiares Estate, Turrialba, Costa Rica.", "attributes": {"roast": "medium", "origin": "Costa Rica", "notes": ["honey", "stone fruit"], "grams": 200} },
+  { "id": "india-monsooned-malabar-250", "name": "India Monsooned Malabar 250g", "category": "beans", "price": 1950, "blurb": "Monsooned coffee from India's Western Ghats.", "attributes": {"roast": "medium-dark", "origin": "India", "notes": ["earthy", "spice", "nutty"], "grams": 250} },
+  { "id": "brazil-sertao-yellow-bourbon-200", "name": "Brazil Fazenda Sertão Natural – Yellow Bourbon 200g", "category": "beans", "price": 1700, "blurb": "Naturally processed Yellow Bourbon from Carmo de Minas, Brazil; medium espresso roast.", "attributes": {"roast": "medium", "origin": "Brazil", "notes": ["nutty", "chocolate", "caramel"], "grams": 200} },
+  { "id": "sumatra-mandheling-tp1-200", "name": "Indonesia Sumatra Mandheling TP Grade 1 200g", "category": "beans", "price": 1700, "blurb": "Wet-hulled Sumatra Mandheling coffee from Indonesia; medium-dark roast, triple-picked Grade 1.", "attributes": {"roast": "medium-dark", "origin": "Indonesia", "notes": ["earthy", "herbal", "dark chocolate"], "grams": 200} },
   { "id": "mug", "name": "BeanBox Ceramic Mug", "category": "merch", "price": 1400, "blurb": "350ml, dishwasher safe." },
   { "id": "tote", "name": "Canvas Tote Bag", "category": "merch", "price": 1200, "blurb": "Fits two 1kg bags." },
   { "id": "tee", "name": "Roast Day T-Shirt", "category": "merch", "price": 25000, "blurb": "100% organic cotton." },
   { "id": "american-press", "name": "American Press", "category": "merch", "price": 2000, "blurb": "Immersion and Pressure Combined" },
-  { "id": "hosco-blend-mix-250g", "name": "HOSCO Mixed Blend Coffee Bean 250 g", "category": "beans", "price": 1700, "blurb": "Malty, Granola" },
-  { "id": "italian-commercial-blends-1kg", "name": "Italian & Commercial Blends 1kg", "category": "beans", "price": 3000, "blurb": "Low acidity with classic, heavy notes of dark chocolate, nuts, and spice." }
+  { "id": "hosco-blend-mix-250g", "name": "HOSCO Mixed Blend Coffee Bean 250 g", "category": "beans", "price": 1700, "blurb": "Malty, Granola", "attributes": {"roast": "medium", "origin": "Blend", "notes": ["malty", "granola"], "grams": 250} },
+  { "id": "italian-commercial-blends-1kg", "name": "Italian & Commercial Blends 1kg", "category": "beans", "price": 3000, "blurb": "Low acidity with classic, heavy notes of dark chocolate, nuts, and spice.", "attributes": {"roast": "dark", "origin": "Blend", "notes": ["dark chocolate", "nuts", "spice"], "grams": 1000} }
 ]
