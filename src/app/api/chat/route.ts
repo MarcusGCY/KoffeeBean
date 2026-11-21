@@ -3,6 +3,7 @@ import { z } from "zod";
 import { biSessionId, biSource, emitBi, rememberShownRecommendation, startTurn, trackTurn } from "@/lib/bi-track";
 import { CHAT_TIMEOUT, CHAT_UNAVAILABLE } from "@/lib/chat-response";
 import { CHAT_TOOLS } from "@/lib/chat-tools";
+import { loadProfileMessage } from "@/lib/profile-prompt";
 import { CHAT_RATE_LIMIT_MESSAGE, chatLimiter } from "@/lib/chat-rate-limit";
 import { getShopper } from "@/lib/shopper";
 import { StoreUnavailableError } from "@/lib/store-error";
@@ -115,6 +116,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: failure.error }, { status: failure.status });
   }
 
+  const profile = await loadProfileMessage(shopper.id);
   const started = Date.now();
   const turn = startTurn(
     bi,
@@ -147,6 +149,7 @@ export async function POST(req: Request) {
           turns,
           signal: controllerAbort.signal,
           sessionId: bi.sessionId,
+          profile,
           onTool: (name) => turn.tool(name),
           sink: {
             status: (text) => send("status", { text }),
