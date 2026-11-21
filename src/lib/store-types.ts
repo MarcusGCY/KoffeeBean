@@ -26,3 +26,15 @@ export type OrderSummary = {
 export type OrderDetail = OrderSummary & {
   items: { productId: string; name: string; unitPriceCents: number; qty: number }[];
 };
+
+/** Auth0 `app_metadata.agent_prefs`, after normalization. */
+export type AgentPrefs = {
+  consentAt?: string;
+  capCents: number;
+  askEveryOrder: true;
+  snoozeUntil?: string;
+  lastNudgeSession?: string;
+  paused?: boolean;
+};
+
+export type ShopperFlags = { isTest: boolean; agentPrefs: AgentPrefs };

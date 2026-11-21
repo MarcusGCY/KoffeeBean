@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 import { biDbConfigured, getBiSql } from "@/lib/bi-db";
-import { seedBiDemoStory } from "@/lib/bi-demo-seed";
+import { mgmtConfigured } from "@/lib/auth0-mgmt";
+import { seedBiDemoStory, seedDemoShopperOrders } from "@/lib/bi-demo-seed";
 import { BiHashConfigError } from "@/lib/bi-hash";
 import { isSameOrigin, verifyDemoCsrf } from "@/lib/demo-auth";
+import { demoShopperSub } from "@/lib/demo-shopper";
 import { readAdmin } from "@/lib/demo-session";
 
 /**
  * Admin-only (Auth0 `admin` role) seed of synthetic `source=demo` analytics rows
- * in the BI event store. Never touches `live` rows, Auth0 `app_metadata`, carts,
- * or orders. No signed bot grant: the admin session and CSRF token are required.
+ * in the BI event store. Never touches `live` rows. When `DEMO_SHOPPER_SUB` is set
+ * (and the Auth0 Management API is configured) it also re-seeds that one account's
+ * `demo: true` orders in `app_metadata`; no other account is written. No signed bot
+ * grant: the admin session and CSRF token are required.
  */
 export async function POST(req: Request) {
   const admin = await readAdmin();
@@ -35,7 +39,8 @@ export async function POST(req: Request) {
 
   try {
     const result = await seedBiDemoStory(sql);
-    const detail = `Seeded ${result.events} demo events and ${result.orders} demo order mirrors (source=demo). Live rows were not touched.`;
+    const shopper = await seedShopperOrders();
+    const detail = `Seeded ${result.events} demo events and ${result.orders} demo order mirrors (source=demo). Live rows were not touched. ${shopper}`;
     if (json) return NextResponse.json({ flash: "bi-seeded", detail, ...result });
     return redirectDemo(req, "bi-seeded", detail);
   } catch (error) {
@@ -44,6 +49,19 @@ export async function POST(req: Request) {
     }
     console.error("[demo] bi seed failed", error instanceof Error ? error.name : "unknown");
     return fail(req, json, "bi-error", "Could not seed the BI demo story. Neon rejected the write.", 500);
+  }
+}
+
+async function seedShopperOrders(): Promise<string> {
+  const sub = demoShopperSub();
+  if (!sub) return "Demo shopper not configured (DEMO_SHOPPER_SUB), so no Auth0 orders were seeded.";
+  if (!mgmtConfigured()) return "Auth0 Management API is not configured, so the demo shopper's orders were not seeded.";
+  try {
+    const result = await seedDemoShopperOrders(sub);
+    return `Seeded ${result.seeded} demo orders (demo: true) for the configured demo shopper.`;
+  } catch {
+    console.error("[demo] demo shopper seed failed");
+    return "Could not seed the demo shopper's Auth0 orders.";
   }
 }
 
