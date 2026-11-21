@@ -27,3 +27,21 @@ export type LocationConsent = {
   consentAt: string;
   purpose: string;
 };
+
+function isIso(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
+}
+
+/**
+ * Defensive read of `app_metadata.location`. A row without a valid postcode, a consent time, or
+ * a purpose is treated as no consent. `district` is always derived from the postcode, never trusted from storage.
+ */
+export function normalizeLocation(value: unknown): LocationConsent | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const postcode = parsePostcode(row.postcode);
+  if (!postcode || !isIso(row.consentAt)) return null;
+  if (typeof row.purpose !== "string" || row.purpose.trim() === "") return null;
+  return { postcode, district: districtOf(postcode), consentAt: row.consentAt, purpose: row.purpose.slice(0, 64) };
+}
+
