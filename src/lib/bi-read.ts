@@ -62,7 +62,7 @@ function parseTime(name: string, value: string | null): Date | undefined {
   return date;
 }
 
-function parseSource(params: URLSearchParams): BiReadSource {
+export function parseSource(params: URLSearchParams): BiReadSource {
   const raw = params.get("source")?.trim().toLowerCase();
   if (!raw) return "live";
   if (raw === "live" || raw === "demo" || raw === "all") return raw;
