@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A2 confirmed</title><link rel="stylesheet" href="common.css"><style>
+.chat{position:absolute;top:96px;bottom:68px;left:0;right:0;padding:10px 16px 8px;display:flex;flex-direction:column;gap:10px;overflow:hidden;background:#fff}
+.who{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--stone-700);margin-bottom:4px}
+.who .demo{margin-left:auto;margin-right:0}
+.bmsg{font-size:15px;color:var(--stone-800);line-height:1.47}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pcard{border:1px solid var(--stone-200);border-radius:8px;overflow:hidden;background:#fff}
+.pcard .b{padding:8px 10px 10px}
+.pcard .n{font-size:14px;font-weight:600;line-height:1.3}
+.pcard .row{display:flex;align-items:baseline;justify-content:space-between;margin-top:2px}
+.pcard .pr{font-size:15px;font-weight:600}
+.pcard .w{font-size:13px;color:var(--stone-500)}
+.pcard .pill{margin-top:6px}
+.tag-usual{background:var(--stone-100);color:var(--stone-700)}
+.tag-new{background:var(--amber-100);color:var(--amber-900)}
+.chips{display:flex;gap:8px;flex-wrap:nowrap}
+.chip{min-height:44px;display:inline-flex;align-items:center;padding:0 14px;border-radius:999px;border:1px solid var(--stone-300);font-size:14px;font-weight:500;color:var(--stone-700);background:#fff;white-space:nowrap}
+.chip.primary{background:var(--amber-700);border-color:var(--amber-700);color:#fff}
+.chips.answered .chip{opacity:.45}
+.chips.answered .chip.primary{opacity:1}
+.umsg{align-self:flex-end;background:var(--stone-100);color:var(--stone-900);padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:15px;max-width:75%}
+.order{border:1px solid var(--stone-200);border-radius:8px;padding:10px 14px 12px;background:#fff}
+.order .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.order .hd b{font-size:15px;font-weight:600}
+.li{display:flex;justify-content:space-between;font-size:14px;color:var(--stone-700);line-height:1.6}
+.tot{display:flex;justify-content:space-between;font-size:15px;font-weight:600;border-top:1px solid var(--stone-200);margin-top:6px;padding-top:6px}
+.meta{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin:6px 0 8px;font-size:13px;color:var(--stone-600);line-height:1.5}
+.meta .link{min-height:auto;font-size:14px;padding:12px 0 12px 12px;margin:-12px 0}
+.composer{position:absolute;left:0;right:0;bottom:0;height:68px;padding:8px 12px 22px;display:flex;gap:8px;background:#fff;border-top:1px solid var(--stone-200)}
+.composer .in{flex:1;min-height:44px;border:1px solid var(--stone-300);border-radius:4px;padding:0 12px;display:flex;align-items:center;color:var(--stone-400);font-size:15px}
+.composer .btn{min-width:64px}
+.sysline{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--stone-500)}</style></head><body><div class="status"><span>3:52</span><span class="icons">
+<svg width="18" height="12" viewBox="0 0 18 12"><rect x="0" y="8" width="3" height="4" rx="1" fill="#1c1917"/><rect x="5" y="5.5" width="3" height="6.5" rx="1" fill="#1c1917"/><rect x="10" y="3" width="3" height="9" rx="1" fill="#1c1917"/><rect x="15" y="0" width="3" height="12" rx="1" fill="#1c1917"/></svg>
+<svg width="16" height="12" viewBox="0 0 16 12"><path d="M8 11.5l2.3-2.6a3.3 3.3 0 0 0-4.6 0z M3.4 6.6a6.5 6.5 0 0 1 9.2 0l1.5-1.6a8.7 8.7 0 0 0-12.2 0z M.4 3.4a10.9 10.9 0 0 1 15.2 0L16 3A11.5 11.5 0 0 0 0 3z" fill="#1c1917"/></svg>
+<svg width="27" height="13" viewBox="0 0 27 13"><rect x=".5" y=".5" width="23" height="12" rx="3.5" fill="none" stroke="#1c1917" opacity=".4"/><rect x="2" y="2" width="17" height="9" rx="2" fill="#1c1917"/><rect x="24.5" y="4.5" width="1.5" height="4" rx=".75" fill="#1c1917" opacity=".4"/></svg></span></div><div class="appbar" style="padding-left:16px;gap:8px"><svg class="spark" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3c.6 4.3 2.7 6.4 7 7-4.3.6-6.4 2.7-7 7-.6-4.3-2.7-6.4-7-7 4.3-.6 6.4-2.7 7-7z"/><path d="M18.5 13.5c.3 2 1.2 2.9 3.2 3.2-2 .3-2.9 1.2-3.2 3.2-.3-2-1.2-2.9-3.2-3.2 2-.3 2.9-1.2 3.2-3.2z"/></svg><h1>Barista</h1><span class="demo">Demo data</span><span class="iconbtn" aria-label="Close">✕</span></div><div class="chat" style="justify-content:flex-end">
+<div><div class="who">Barista</div>
+<p class="bmsg">Your Ethiopian Yirgacheffe 250g is probably running low. You ordered it 24 days ago. Want me to reorder? I think you'd also like Kenya AA, which has similar bright, fruity notes.</p></div>
+<div class="cards">
+<div class="pcard"><svg viewBox="0 0 160 72" width="100%" height="72" preserveAspectRatio="xMidYMid slice"><rect width="160" height="72" fill="#fef3c6"/>
+<g transform="translate(58 8)"><path d="M4 10 L8 2 H36 L40 10 V60 a3 3 0 0 1-3 3 H7 a3 3 0 0 1-3-3z" fill="#b75000"/><rect x="4" y="9" width="36" height="3" fill="#000" opacity=".15"/>
+<circle cx="22" cy="34" r="11" fill="#fffbeb"/><ellipse cx="22" cy="34" rx="4.2" ry="6.2" fill="#b75000"/><path d="M22 28.3 q-2 5.7 0 11.4" stroke="#fffbeb" stroke-width="1.2" fill="none"/></g></svg><div class="b"><div class="n">Ethiopian Yirgacheffe</div><div class="row"><span class="pr">S$24</span><span class="w">250g</span></div><span class="pill tag-usual">Usual, 24 days ago</span></div></div>
+<div class="pcard"><svg viewBox="0 0 160 72" width="100%" height="72" preserveAspectRatio="xMidYMid slice"><rect width="160" height="72" fill="#f5f5f4"/>
+<g transform="translate(58 8)"><path d="M4 10 L8 2 H36 L40 10 V60 a3 3 0 0 1-3 3 H7 a3 3 0 0 1-3-3z" fill="#292524"/><rect x="4" y="9" width="36" height="3" fill="#000" opacity=".15"/>
+<circle cx="22" cy="34" r="11" fill="#fee685"/><ellipse cx="22" cy="34" rx="4.2" ry="6.2" fill="#292524"/><path d="M22 28.3 q-2 5.7 0 11.4" stroke="#fee685" stroke-width="1.2" fill="none"/></g></svg><div class="b"><div class="n">Kenya AA</div><div class="row"><span class="pr">S$30</span><span class="w">250g</span></div><span class="pill tag-new"><svg class="spark" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3c.6 4.3 2.7 6.4 7 7-4.3.6-6.4 2.7-7 7-.6-4.3-2.7-6.4-7-7 4.3-.6 6.4-2.7 7-7z"/><path d="M18.5 13.5c.3 2 1.2 2.9 3.2 3.2-2 .3-2.9 1.2-3.2 3.2-.3-2-1.2-2.9-3.2-3.2 2-.3 2.9-1.2 3.2-3.2z"/></svg>&nbsp;New for you</span></div></div>
+</div><div class="chips answered"><span class="chip primary">Yes, both</span><span class="chip">Just the reorder</span><span class="chip">Not now</span></div><div class="umsg">yes, both</div><div class="order"><div class="hd"><b>Order #1234</b><span class="muted" style="font-size:13px">2 items</span></div>
+<div class="li"><span>Ethiopian Yirgacheffe 250g</span><span>S$24</span></div>
+<div class="li"><span>Kenya AA 250g</span><span>S$30</span></div>
+<div class="li"><span>Delivery</span><span>Free</span></div>
+<div class="tot"><span>Total</span><span>S$54</span></div>
+<div class="meta" style="margin-bottom:0"><span>Home · 12 Tiong Bahru Rd, #05-11<br>Visa ending 4242</span><span class="pill p-done" style="margin-top:2px">Placed</span></div></div>
+<div class="sysline"><svg class="spark" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10 3c.6 4.3 2.7 6.4 7 7-4.3.6-6.4 2.7-7 7-.6-4.3-2.7-6.4-7-7 4.3-.6 6.4-2.7 7-7z"/><path d="M18.5 13.5c.3 2 1.2 2.9 3.2 3.2-2 .3-2.9 1.2-3.2 3.2-.3-2-1.2-2.9-3.2-3.2 2-.3 2.9-1.2 3.2-3.2z"/></svg><span>Barista placed this order for you · 3:52 PM</span></div>
+<div><div class="who">Barista</div><p class="bmsg">Done. Order #1234 arrives Tue.</p>
+<div style="display:flex;align-items:center;gap:6px;margin-top:2px"><a class="link">Undo within 10 min</a><span class="muted" style="font-size:13px">· 9:58 left</span></div></div></div><div class="composer"><div class="in">Ask a question</div><span class="btn btn-primary">Send</span></div><div class="homebar"></div></body></html>

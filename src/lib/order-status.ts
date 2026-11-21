@@ -2,6 +2,13 @@ export type OrderStatus = "cancelled" | "placed" | "packed" | "shipped" | "deliv
 
 const MINUTE = 60 * 1000;
 
+/** How long after placing an order the shopper can still cancel (undo) it. */
+export const UNDO_WINDOW_MS = 10 * MINUTE;
+
+export function undoDeadline(createdAt: Date): Date {
+  return new Date(createdAt.getTime() + UNDO_WINDOW_MS);
+}
+
 /**
  * Demo fulfilment clock, derived when an order is read.
  * Cancelled wins. Otherwise: placed under 2 minutes, packed under 10,
@@ -11,7 +18,7 @@ export function orderStatus(createdAt: Date, cancelledAt: Date | null, now = new
   if (cancelledAt) return "cancelled";
   const elapsed = now.getTime() - createdAt.getTime();
   if (elapsed < 2 * MINUTE) return "placed";
-  if (elapsed < 10 * MINUTE) return "packed";
+  if (elapsed < UNDO_WINDOW_MS) return "packed";
   if (elapsed < 30 * MINUTE) return "shipped";
   return "delivered";
 }

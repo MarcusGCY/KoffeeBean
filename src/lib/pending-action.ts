@@ -8,6 +8,7 @@ import { tooManyFeedbackReports } from "./rate-limit";
 import { reporterBlock, type Shopper } from "./shopper";
 import { StoreUnavailableError } from "./store-error";
 import {
+  addManyToCart,
   addToCart,
   applyCoupon,
   cancelOrder,
@@ -17,15 +18,21 @@ import {
   removeFromCart,
   setCartQty,
 } from "./store-meta";
+import { undoDeadline } from "./order-status";
 import type { CartSnapshot } from "./store-types";
 import { consumeNonce, issueNonce, rearmNonce, rememberedLines } from "./upstash";
 
 /** Confirm tokens last five minutes and can be used once. */
 export const ACTION_TTL_SEC = 300;
 
+/** One Confirm may add at most this many distinct lines. */
+export const MAX_MANY_LINES = 5;
+
 const Qty = z.number().int().min(1).max(99);
 const ProductId = z.string().trim().min(1).max(80);
 const RecommendationId = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
+
+const ManyLine = z.strictObject({ productId: ProductId, qty: Qty });
 
 export const ActionBody = z.discriminatedUnion("op", [
   z.strictObject({
@@ -34,6 +41,7 @@ export const ActionBody = z.discriminatedUnion("op", [
     qty: Qty.optional(),
     recommendationId: RecommendationId.optional(),
   }),
+  z.strictObject({ op: z.literal("add_many"), lines: z.array(ManyLine).min(1).max(MAX_MANY_LINES) }),
   z.strictObject({ op: z.literal("update_cart_qty"), productId: ProductId, qty: Qty }),
   z.strictObject({ op: z.literal("remove_from_cart"), productId: ProductId, qty: Qty.optional() }),
   z.strictObject({ op: z.literal("apply_coupon"), code: z.string().trim().min(1).max(40) }),
@@ -58,8 +66,30 @@ type SignedAction = {
 
 export type PendingAction = { pending: true; actionId: string; summary: string };
 
+/** A follow-up step signed in the same Confirm: the cart as it now stands and a signed place_order. */
+export type NextStep = {
+  actionId: string;
+  summary: string;
+  cart: { lines: { productId: string; name: string; qty: number; unitPriceCents: number }[]; totalCents: number };
+};
+
+/** The order a confirmed place_order created, with when it can no longer be undone. */
+export type PlacedOrder = {
+  id: string;
+  createdAt: string;
+  totalCents: number;
+  lines: { name: string; qty: number; unitPriceCents: number }[];
+  undoUntil: string;
+};
+
 export type CommitResult =
-  | { ok: true; summary: string; report?: { feedback: string; reportedBy: string } }
+  | {
+      ok: true;
+      summary: string;
+      report?: { feedback: string; reportedBy: string };
+      next?: NextStep;
+      order?: PlacedOrder;
+    }
   | { ok: false; status: number; error: string; message: string };
 
 function money(cents: number): string {
@@ -184,6 +214,15 @@ async function summaryFor(userId: string, action: ShopAction): Promise<string | 
     }
     return `Remove ${qty} ${product.name} from the cart. Press Confirm to remove it.`;
   }
+  if (action.op === "add_many") {
+    const parts: string[] = [];
+    for (const line of action.lines) {
+      const product = getProduct(line.productId);
+      if (!product) return { error: "unknown_product" };
+      parts.push(`${line.qty} ${product.name} at ${money(product.price)}`);
+    }
+    return `Add ${parts.join(" and ")} to your cart. Prices are from the catalogue. Press Confirm to add them.`;
+  }
   if (action.op === "apply_coupon") {
     const coupon = findCoupon(action.code);
     if (!coupon) return { error: "invalid_coupon" };
@@ -242,6 +281,7 @@ export async function proposeAction(
   action: ShopAction,
   opts?: { sessionId?: string | null },
 ): Promise<PendingAction | { error: string }> {
+  if (!ActionBody.safeParse(action).success) return { error: "invalid_body" };
   const summary = await summaryFor(userId, action);
   if (typeof summary !== "string") return summary;
   const sessionId = action.op === "add_to_cart" ? biSessionId(opts?.sessionId) : null;
@@ -331,6 +371,17 @@ async function perform(userId: string, action: ShopAction, shopper: Shopper, ses
     if ("error" in result) return writeError(result);
     return { ok: true, summary: cartLine("Item removed.", result) };
   }
+  if (action.op === "add_many") {
+    const result = await addManyToCart(userId, action.lines);
+    if ("error" in result) return writeError(result);
+    // The cart is already written, so a failure signing the follow-up must not fail (and re-arm) this Confirm.
+    const next = await proposeAction(userId, { op: "place_order" }).catch(() => null);
+    return {
+      ok: true,
+      summary: cartLine("Added to your cart.", result),
+      ...(next && "actionId" in next ? { next: nextStep(next, result) } : {}),
+    };
+  }
   if (action.op === "apply_coupon") {
     const result = await applyCoupon(userId, action.code);
     if ("error" in result) return writeError(result);
@@ -339,7 +390,18 @@ async function perform(userId: string, action: ShopAction, shopper: Shopper, ses
   if (action.op === "place_order") {
     const result = await placeOrder(userId);
     if ("error" in result) return writeError(result);
-    return { ok: true, summary: `Order ${result.id} placed. Total ${money(result.totalCents)}.` };
+    const detail = await getOrder(userId, result.id).catch(() => null);
+    return {
+      ok: true,
+      summary: `Order ${result.id} placed. Total ${money(result.totalCents)}.`,
+      order: {
+        id: result.id,
+        createdAt: result.createdAt,
+        totalCents: result.totalCents,
+        lines: (detail?.items ?? []).map((item) => ({ name: item.name, qty: item.qty, unitPriceCents: item.unitPriceCents })),
+        undoUntil: undoDeadline(new Date(result.createdAt)).toISOString(),
+      },
+    };
   }
   if (action.op === "cancel_order") {
     const result = await cancelOrder(userId, action.orderId);
@@ -353,6 +415,20 @@ async function perform(userId: string, action: ShopAction, shopper: Shopper, ses
   };
 }
 
+function nextStep(pending: PendingAction, cart: CartSnapshot): NextStep {
+  return {
+    actionId: pending.actionId,
+    summary: pending.summary,
+    cart: {
+      lines: cart.items.flatMap((item) => {
+        const product = getProduct(item.productId);
+        return product ? [{ productId: item.productId, name: product.name, qty: item.qty, unitPriceCents: product.price }] : [];
+      }),
+      totalCents: cart.totalCents,
+    },
+  };
+}
+
 function writeError(result: { error: string; message?: string }): CommitResult {
   if (result.error === "rate_limited") {
     return fail(429, "rate_limited", result.message ?? "Too many updates. Please try again in a little while.");
@@ -361,6 +437,7 @@ function writeError(result: { error: string; message?: string }): CommitResult {
   if (result.error === "not_cancellable") return fail(409, "not_cancellable", "This order can no longer be cancelled.");
   if (result.error === "empty_cart") return fail(400, "empty_cart", "Your cart is empty.");
   if (result.error === "invalid_coupon") return fail(400, "invalid_coupon", "That coupon code is not valid.");
+  if (result.error === "unknown_product") return fail(400, "unknown_product", "That product is not in the catalogue.");
   if (result.error === "qty_limit") return fail(400, "qty_limit", "Quantity must be from 1 to 99.");
   return fail(400, result.error, "That change could not be made.");
 }

@@ -1,0 +1,35 @@
+@font-face{font-family:Geist;font-weight:100 900;src:url(geist.woff2) format("woff2")}
+:root{
+ --stone-50:#fafaf9;--stone-100:#f5f5f4;--stone-200:#e7e5e4;--stone-300:#d6d3d1;--stone-400:#a6a09b;
+ --stone-500:#79716b;--stone-600:#57534d;--stone-700:#44403b;--stone-800:#292524;--stone-900:#1c1917;
+ --amber-50:#fffbeb;--amber-100:#fef3c6;--amber-200:#fee685;--amber-700:#b75000;--amber-800:#953d00;--amber-900:#7b3306;
+ --green-50:#f0fdf4;--green-100:#dcfce7;--green-700:#008138;--green-900:#0d542b;
+ --red-50:#fef2f2;--red-200:#ffcaca;--red-700:#bf000f;--red-800:#9f0712;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:390px;height:844px;overflow:hidden}
+body{font-family:Geist,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;color:var(--stone-900);background:var(--stone-50);font-size:15px;line-height:1.45;position:relative}
+.status{height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 22px 0 30px;font-size:15px;font-weight:600;letter-spacing:-.01em;background:#fff}
+.status .icons{display:flex;gap:6px;align-items:center}
+.appbar{height:52px;display:flex;align-items:center;gap:4px;padding:0 4px;background:#fff;border-bottom:1px solid var(--stone-200)}
+.appbar h1{font-size:17px;font-weight:600;flex:1;letter-spacing:-.01em}
+.iconbtn{width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;color:var(--stone-600);font-size:17px}
+.demo{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--stone-500);border:1px dashed var(--stone-300);border-radius:999px;padding:2px 8px;margin-right:8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;border-radius:4px;padding:0 16px;font-size:15px;font-weight:500;font-family:inherit;border:0}
+.btn-primary{background:var(--amber-700);color:#fff}
+.btn-outline{background:#fff;border:1px solid var(--stone-300);color:var(--stone-700)}
+.btn-block{width:100%;height:48px}
+.link{color:var(--amber-700);font-weight:500;text-decoration:none;display:inline-flex;align-items:center;min-height:44px;font-size:15px}
+.muted{color:var(--stone-500)}
+.sec{color:var(--stone-600)}
+.spark{color:var(--amber-700);flex-shrink:0}
+.pill{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.p-done{background:var(--green-50);color:var(--green-700);border:1px solid var(--green-100)}
+.p-wait{background:var(--amber-100);color:var(--amber-900)}
+.p-decl{background:var(--stone-100);color:var(--stone-600)}
+.p-undone{background:#fff;color:var(--stone-600);border:1px solid var(--stone-300)}
+.avatar{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-weight:600;font-size:15px}
+.av-barista{background:var(--amber-50);border:1px solid var(--amber-100)}
+.av-letter{background:var(--stone-800);color:#fff}
+.av-letter2{background:var(--stone-200);color:var(--stone-700)}
+.homebar{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);width:134px;height:5px;border-radius:3px;background:var(--stone-900)}

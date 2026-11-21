@@ -44,7 +44,12 @@ export async function POST(req: Request) {
         }
       });
     }
-    return NextResponse.json({ ok: true, summary: result.summary });
+    return NextResponse.json({
+      ok: true,
+      summary: result.summary,
+      ...(result.next ? { next: result.next } : {}),
+      ...(result.order ? { order: result.order } : {}),
+    });
   } catch (err) {
     if (err instanceof StoreUnavailableError) {
       return NextResponse.json({ error: "store_unavailable" }, { status: 503 });
