@@ -4,10 +4,10 @@ import { checkout, type Order } from "./checkout";
 import { ORDER_HISTORY_LIMIT, type CommerceFacts } from "./coupon-offer";
 import { findCoupon } from "./coupons";
 import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
-import { emitBi, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
+import { emitBi, isTestShopper, trackOrderCancelled, trackOrderPlaced } from "./bi-track";
 import { normalizeLimits, rateLimited, takeSlot, type RateLimited } from "./limits";
 import { canCancel, orderStatus } from "./order-status";
-import type { CartSnapshot, OrderDetail, OrderSummary } from "./store-types";
+import type { AgentPrefs, CartSnapshot, OrderDetail, OrderSummary, ShopperFlags } from "./store-types";
 
 /**
  * Per-shopper cart, orders, and audit stored in Auth0 `app_metadata`.
@@ -16,7 +16,8 @@ import type { CartSnapshot, OrderDetail, OrderSummary } from "./store-types";
  * key are last-write-wins (a lost cart line or a lost quota stamp is acceptable
  * for this demo).
  *
- * Keys: `cart`, `orders` (newest 20), `chat_limits`, `audit` (newest 50).
+ * Keys: `cart`, `orders` (newest 20), `chat_limits`, `audit` (newest 50),
+ * `is_test` (boolean), `agent_prefs` (see `normalizeAgentPrefs`).
  */
 
 const ORDER_CAP = ORDER_HISTORY_LIMIT;
@@ -34,6 +35,8 @@ type StoredOrder = {
   totalCents: number;
   coupon: string | null;
   items: StoredItem[];
+  /** Set only on seeded demo orders (`bi-demo-seed`). Kept when an order is rewritten. */
+  demo?: true;
 };
 
 export type AuditEntry = { ts: string; tool: string; summary: string; outcome: string };
@@ -125,9 +128,48 @@ function readOrders(meta: Record<string, unknown>): StoredOrder[] {
       totalCents,
       coupon: typeof record.coupon === "string" && record.coupon ? record.coupon : null,
       items,
+      ...(record.demo === true ? { demo: true as const } : {}),
     });
   }
   return orders.slice(0, ORDER_CAP);
+}
+
+export const DEFAULT_AGENT_CAP_CENTS = 6000;
+
+function validTimestamp(value: unknown): string | undefined {
+  return typeof value === "string" && !Number.isNaN(new Date(value).getTime()) ? value : undefined;
+}
+
+/**
+ * Reads the `agent_prefs` key. Missing or malformed fields fall back to defaults,
+ * so shoppers who have no key normalize to `{ capCents: 6000, askEveryOrder: true }`.
+ * `askEveryOrder` is locked to true for the MVP whatever is stored.
+ */
+export function normalizeAgentPrefs(value: unknown): AgentPrefs {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+  const cap = finite(record.capCents);
+  const prefs: AgentPrefs = {
+    capCents: cap != null && Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_AGENT_CAP_CENTS,
+    askEveryOrder: true,
+  };
+  const consentAt = validTimestamp(record.consentAt);
+  if (consentAt) prefs.consentAt = consentAt;
+  const snoozeUntil = validTimestamp(record.snoozeUntil);
+  if (snoozeUntil) prefs.snoozeUntil = snoozeUntil;
+  if (typeof record.lastNudgeSession === "string" && record.lastNudgeSession) {
+    prefs.lastNudgeSession = record.lastNudgeSession;
+  }
+  if (typeof record.paused === "boolean") prefs.paused = record.paused;
+  return prefs;
+}
+
+/** `is_test` is true only for a stored boolean true. */
+export function normalizeShopperFlags(meta: Record<string, unknown>): ShopperFlags {
+  return { isTest: isTestShopper(meta), agentPrefs: normalizeAgentPrefs(meta.agent_prefs) };
+}
+
+export async function getShopperFlags(userId: string): Promise<ShopperFlags> {
+  return normalizeShopperFlags(await getAppMetadata(userId));
 }
 
 function summarize(order: StoredOrder, now: Date): OrderSummary {
@@ -159,7 +201,7 @@ function detail(order: StoredOrder, now: Date): OrderDetail {
   };
 }
 
-async function consume(meta: Record<string, unknown>, kind: "cartWrites" | "orderWrites", now: Date) {
+async function consume(meta: Record<string, unknown>, kind: "cartWrites" | "orderWrites" | "productViews", now: Date) {
   return takeSlot(normalizeLimits(meta.chat_limits), kind, now.getTime());
 }
 
@@ -272,6 +314,22 @@ export async function readCommerceFacts(userId: string, now = new Date()): Promi
     completedPurchases: purchases.completedPurchases,
     discountAlreadyApplied: cart.discountAlreadyApplied,
   };
+}
+
+/**
+ * Takes one hourly `productViews` slot from `chat_limits`, the same limiter as
+ * cart writes. On success also reports whether the shopper is test traffic,
+ * from the metadata this call already read.
+ */
+export async function takeProductViewSlot(
+  userId: string,
+  now = new Date(),
+): Promise<{ ok: true; isTest: boolean } | RateLimited> {
+  const meta = await getAppMetadata(userId);
+  const decision = await consume(meta, "productViews", now);
+  if (!decision.ok) return rateLimited("productViews", decision.retryAfterSec);
+  await patchAppMetadata(userId, { chat_limits: decision.limits });
+  return { ok: true, isTest: isTestShopper(meta, userId) };
 }
 
 /** Adds via addItem. */
@@ -407,7 +465,8 @@ export async function placeOrder(
     cart: storedCart([], null),
     chat_limits: decision.limits,
   });
-  emitBi(() => trackOrderPlaced({ sub: userId }, stored));
+  const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
+  emitBi(() => trackOrderPlaced({ sub: userId, ...testCtx }, stored));
   return summarize(stored, now);
 }
 
@@ -445,9 +504,10 @@ export async function cancelOrder(
   const next = orders.slice();
   next[index] = updated;
   await patchAppMetadata(userId, { orders: next, chat_limits: decision.limits });
+  const testCtx = isTestShopper(meta, userId) ? { isTest: true } : {};
   emitBi(() =>
     trackOrderCancelled(
-      { sub: userId },
+      { sub: userId, ...testCtx },
       { id: updated.id, totalCents: updated.totalCents, cancelledAt: now.toISOString() },
     ),
   );

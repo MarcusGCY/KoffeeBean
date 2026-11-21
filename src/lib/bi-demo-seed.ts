@@ -1,6 +1,10 @@
+import { getAppMetadata, patchAppMetadata } from "./auth0-mgmt";
 import type { BiSql } from "./bi-db";
 import { shapeBiEvent, type BiEventInput, type BiEventPayloads } from "./bi-events";
 import { hashShopperId } from "./bi-hash";
+import { getProduct, total } from "./cart";
+import { ORDER_HISTORY_LIMIT } from "./coupon-offer";
+import { demoShopperSub } from "./demo-shopper";
 
 /**
  * Demo seed for the BI event store. Writes synthetic analytics rows with
@@ -244,4 +248,106 @@ export async function seedBiDemoStory(
   ]);
 
   return { events: story.events.length, orders: story.orders.length };
+}
+
+/**
+ * Demo shopper orders in Auth0 `app_metadata.orders`. Unlike the BI story above,
+ * these are the shopper's own order rows (what `listOrders` reads), but only for
+ * the one account configured in `DEMO_SHOPPER_SUB`. Every seeded row has
+ * `demo: true` and an id that starts with `DEMO_SHOPPER_ORDER_PREFIX`. A re-seed
+ * replaces only rows with `demo === true`; other orders are left as stored.
+ */
+export const DEMO_SHOPPER_ORDER_PREFIX = "BB-DEMO-";
+
+export class DemoShopperError extends Error {
+  constructor(readonly reason: "not_configured" | "not_demo_shopper") {
+    super(reason);
+    this.name = "DemoShopperError";
+  }
+}
+
+export type DemoShopperOrder = {
+  id: string;
+  createdAt: string;
+  cancelledAt: null;
+  subtotalCents: number;
+  discountCents: number;
+  taxCents: number;
+  totalCents: number;
+  coupon: null;
+  items: { productId: string; name: string; unitPriceCents: number; qty: number }[];
+  demo: true;
+};
+
+const DEMO_SHOPPER_PLAN = [
+  { id: "ETHIOPIA", daysAgo: 12, lines: [{ productId: "ethiopia-250", qty: 1 }] },
+  {
+    id: "OLDER",
+    daysAgo: 45,
+    lines: [
+      { productId: "colombia-250", qty: 2 },
+      { productId: "mug", qty: 1 },
+    ],
+  },
+];
+
+/** Pure. Newest first, priced from the catalogue with the shop's own `total`. */
+export function buildDemoShopperOrders(now: Date = new Date()): DemoShopperOrder[] {
+  return DEMO_SHOPPER_PLAN.map((plan) => {
+    const priced = total(plan.lines.map((line) => ({ productId: line.productId, quantity: line.qty })));
+    return {
+      id: `${DEMO_SHOPPER_ORDER_PREFIX}${plan.id}`,
+      createdAt: new Date(now.getTime() - plan.daysAgo * DAY).toISOString(),
+      cancelledAt: null,
+      subtotalCents: priced.subtotal,
+      discountCents: priced.discount,
+      taxCents: priced.tax,
+      totalCents: priced.total,
+      coupon: null,
+      items: plan.lines.map((line) => {
+        const product = getProduct(line.productId);
+        if (!product) throw new Error(`Unknown demo product ${line.productId}`);
+        return { productId: product.id, name: product.name, unitPriceCents: product.price, qty: line.qty };
+      }),
+      demo: true as const,
+    };
+  });
+}
+
+function isDemoRow(row: unknown): boolean {
+  return Boolean(row) && typeof row === "object" && (row as Record<string, unknown>).demo === true;
+}
+
+function createdAtMs(row: unknown): number {
+  const value = row && typeof row === "object" ? (row as Record<string, unknown>).createdAt : undefined;
+  const ms = typeof value === "string" ? Date.parse(value) : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+/**
+ * Writes the demo orders to the configured demo shopper and marks the account
+ * `is_test`. Throws `DemoShopperError` when `DEMO_SHOPPER_SUB` is unset or
+ * `sub` is any other account, before any Auth0 call. Callers must already have
+ * checked admin or service auth.
+ */
+export async function seedDemoShopperOrders(
+  sub: string,
+  now: Date = new Date(),
+): Promise<{ seeded: number; replaced: number }> {
+  const configured = demoShopperSub();
+  if (!configured) throw new DemoShopperError("not_configured");
+  if (sub !== configured) throw new DemoShopperError("not_demo_shopper");
+
+  const meta = await getAppMetadata(configured);
+  const stored = Array.isArray(meta.orders) ? meta.orders : [];
+  const kept = stored.filter((row) => !isDemoRow(row));
+  const merged = [...buildDemoShopperOrders(now), ...kept]
+    .sort((a, b) => createdAtMs(b) - createdAtMs(a))
+    .slice(0, ORDER_HISTORY_LIMIT);
+
+  await patchAppMetadata(configured, { orders: merged, is_test: true });
+  return {
+    seeded: merged.filter(isDemoRow).length,
+    replaced: stored.length - kept.length,
+  };
 }
