@@ -1,9 +1,10 @@
 import { SEND_BACK_ACTION_PREFIX, launchPhase, launchRail } from "./approval-view";
 import { EDIT_ACTION_PREFIX, SEND_ACTION } from "./listing-view";
-import { CONSOLE_TITLE, REJECT_ACTION_PREFIX, railSteps, type RailStep } from "./ops-console";
+import { CONSOLE_TITLE, REJECT_ACTION_PREFIX, clockLabel, railSteps, type RailStep } from "./ops-console";
+import { findDetectionRow } from "./opening";
 import { detectionToLive, publishedView } from "./published-view";
 import type { Scenario } from "./scenario";
-import type { DemoAuditRow, DemoState } from "./state";
+import { DEFAULT_ELAPSED_MODE, type DemoAuditRow, type DemoState, type ElapsedMode } from "./state";
 import { findStockCheck } from "./stock-check-view";
 
 export const AUDIT_FOOTER = "Nothing reaches shoppers without two human approvals. Every agent step is logged.";
@@ -15,7 +16,7 @@ export const APPROVAL_REF_PREFIX = "APR-";
 
 const NO_VALUE = "—";
 
-type AuditState = Pick<DemoState, "stage" | "approvals" | "audit" | "listed">;
+type AuditState = Pick<DemoState, "stage" | "approvals" | "audit" | "listed"> & { elapsedMode?: ElapsedMode };
 
 export type AuditKind = "agent" | "human" | "system";
 export type HumanKind = "approval" | "edit" | "send" | "send_back" | "reject" | "other";
@@ -48,6 +49,8 @@ export type AuditView = {
   steps: RailStep[];
   title: string;
   detectedLabel: string;
+  /** The presenter's choice, which the elapsed pill and the detected label both follow. */
+  elapsedMode: ElapsedMode;
   unavailable: boolean;
   entries: AuditEntry[];
   agent: AuditCount;
@@ -60,6 +63,17 @@ export type AuditView = {
   emptyLabel: string;
   unavailableLabel: string;
 };
+
+/**
+ * "Detected 09:02 today" from the fixture by default. With the real elapsed time chosen it is the
+ * time of the real "Spotted gap" row, so the label and the elapsed pill agree. A missing row keeps the fixture label.
+ */
+export function detectedLabelFor(scenario: Scenario, state: AuditState | null): string {
+  if ((state?.elapsedMode ?? DEFAULT_ELAPSED_MODE) !== "real" || !state) return scenario.gap.detectedLabel;
+  const row = findDetectionRow(scenario, state);
+  const at = row ? clockLabel(row.at) : null;
+  return at && /\d/.test(at) ? `Detected ${at} today` : scenario.gap.detectedLabel;
+}
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -199,7 +213,8 @@ export function auditView(scenario: Scenario, state: AuditState | null): AuditVi
     person: { name: person.name, initials: person.initials, role: person.role },
     steps: auditRail(scenario, state ?? empty),
     title: `Audit trail · ${shortName(scenario.listing.title)}`,
-    detectedLabel: scenario.gap.detectedLabel,
+    detectedLabel: detectedLabelFor(scenario, state),
+    elapsedMode: state?.elapsedMode ?? DEFAULT_ELAPSED_MODE,
     unavailable: state === null,
     entries,
     agent: { count: agentCount, label: plural(agentCount, "agent step") },

@@ -3,7 +3,19 @@ import { publishAuditRow } from "./listing-view";
 import { clockLabel } from "./ops-console";
 import { publishedView, type PublishedView } from "./published-view";
 import type { Scenario } from "./scenario";
-import { PUBLISHED_STAGE, appendAudit, commitApproval, getDemoState, type ApprovalSlot, type CommitExtras, type DemoAuditRow } from "./state";
+import {
+  PUBLISHED_STAGE,
+  SLOT_GUARDS,
+  appendAudit,
+  commitApproval,
+  getDemoSnapshot,
+  getDemoState,
+  releaseGuard,
+  takeGuard,
+  type ApprovalSlot,
+  type CommitExtras,
+  type DemoAuditRow,
+} from "./state";
 
 export type ApprovalRefusal =
   | "unknown_approver"
@@ -52,8 +64,15 @@ function humanRow(actor: Scenario["approvers"][number], at: Date, action: string
   return { at: at.toISOString(), actorKind: "human", actor: `${actor.name} · ${actor.role}`, action, source: "Ops console", ref };
 }
 
+/** Why an approval lost its slot guard: a send back or a rejection got there first, or someone else is already approving. */
+function lostSlot(slot: ApprovalSlot, heldBy: string | null): ApprovalRefusal {
+  if (slot === "launch" && heldBy === "send_back") return "sent_back";
+  if (slot === "sourcing" && heldBy === "reject") return "proposal_rejected";
+  return "already_approved";
+}
+
 async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalInput, now: Date): Promise<ApprovalResult> {
-  const state = await getDemoState();
+  const { state, epoch, elapsedMode } = await getDemoSnapshot();
   const who = authorise(scenario, slot, input.approverId, state.approvals.sourcing?.approverId);
   if (!who.ok) return who;
   if (input.confirmed !== true) return refuse("confirmation_required");
@@ -79,7 +98,8 @@ async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalIn
   // stage all go in one request, so the product is never listed without its approval.
   const published: DemoAuditRow | null = slot === "launch" ? { ...publishAuditRow(scenario), at: now.toISOString() } : null;
   const extras: CommitExtras = published ? { rows: [published], listed: true, stage: PUBLISHED_STAGE } : {};
-  if (!(await commitApproval(slot, approval, row, extras))) return refuse("already_approved");
+  const committed = await commitApproval(slot, approval, row, epoch, extras);
+  if (!committed.ok) return refuse(lostSlot(slot, committed.heldBy));
 
   return {
     ok: true,
@@ -87,7 +107,7 @@ async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalIn
     phase: slot === "sourcing" ? "stock_check" : "launched",
     approval: { by: actor.name, ...approval, atLabel: clockLabel(approval.at) },
     published: published
-      ? publishedView(scenario, { approvals: { ...state.approvals, [slot]: approval }, audit: [...state.audit, row, published], listed: true })
+      ? publishedView(scenario, { approvals: { ...state.approvals, [slot]: approval }, audit: [...state.audit, row, published], listed: true, elapsedMode })
       : null,
   };
 }
@@ -107,7 +127,7 @@ export function approveLaunch(scenario: Scenario, input: ApprovalInput, now: Dat
  * approval. Sending back twice is a no-op, and an approved launch cannot be sent back.
  */
 export async function sendBackLaunch(scenario: Scenario, input: { approverId: string }, now: Date = new Date()): Promise<SendBackResult> {
-  const state = await getDemoState();
+  const { state, epoch } = await getDemoSnapshot();
   const who = authorise(scenario, "launch", input.approverId, state.approvals.sourcing?.approverId);
   if (!who.ok) return who;
   if (state.approvals.launch) return refuse("already_approved");
@@ -119,6 +139,23 @@ export async function sendBackLaunch(scenario: Scenario, input: { approverId: st
   if (existing) return { ok: true, changed: false, phase: "sent_back", sentBack: { by: existing.by, atLabel: existing.atLabel } };
 
   const row = humanRow(who.actor, now, `${SEND_BACK_ACTION_PREFIX}: ${scenario.listing.title}`, scenario.listing.id);
-  await appendAudit(row);
-  return { ok: true, changed: true, phase: "sent_back", sentBack: { by: who.actor.name, atLabel: clockLabel(row.at) } };
+  const sentBack = { by: who.actor.name, atLabel: clockLabel(row.at) };
+  // Sending back takes the launch slot's guard, so it and "Approve and publish" cannot both win.
+  const guard = SLOT_GUARDS.launch;
+  const claimed = await takeGuard(guard, "send_back", epoch);
+  if (!claimed.won) {
+    if (claimed.heldBy === "send_back") return { ok: true, changed: false, phase: "sent_back", sentBack };
+    return refuse("already_approved");
+  }
+  try {
+    const latest = await getDemoState();
+    if (latest.approvals.launch) return refuse("already_approved");
+    const again = findSendBack(scenario, latest);
+    if (again) return { ok: true, changed: false, phase: "sent_back", sentBack: { by: again.by, atLabel: again.atLabel } };
+    await appendAudit(row, epoch);
+  } catch (error) {
+    await releaseGuard(guard, epoch);
+    throw error;
+  }
+  return { ok: true, changed: true, phase: "sent_back", sentBack };
 }

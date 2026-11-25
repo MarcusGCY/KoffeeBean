@@ -6,6 +6,7 @@ import { POST as approvalRoute } from "@/app/api/demo/pelita/approval/route";
 import { POST as listingRoute } from "@/app/api/demo/pelita/listing/route";
 import { POST as resetRoute } from "@/app/api/demo/pelita/reset/route";
 import { POST as stockCheckRoute } from "@/app/api/demo/pelita/stock-check/route";
+import { evalFenced } from "./helpers/fake-redis-eval";
 import { PelitaAuditTimeline } from "@/components/pelita-ops/PelitaAuditTimeline";
 import { approveLaunch, approveSourcing } from "@/lib/demo/approval";
 import { launchPhase } from "@/lib/demo/approval-view";
@@ -15,7 +16,7 @@ import { ensureOpeningRows, findDetectionRow, openingFixtureRows } from "@/lib/d
 import { PRESENTER_COOKIE, signPresenterToken } from "@/lib/demo/presenter";
 import { detectionToLive, durationLabel, publishedView } from "@/lib/demo/published-view";
 import { loadScenario } from "@/lib/demo/scenario";
-import { STATE_KEYS, getDemoState, resetDemo, type DemoAuditRow } from "@/lib/demo/state";
+import { STATE_KEYS, getDemoSnapshot, getDemoState, resetDemo, setElapsedMode, type DemoAuditRow, type ElapsedMode } from "@/lib/demo/state";
 import { continueFromStockCheck, defaultStockCheckDeps, runStockCheck } from "@/lib/demo/stock-check";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
@@ -52,11 +53,16 @@ let store: Map<string, string | string[]>;
 let expiring: Set<string>;
 let urls: string[];
 let sent: Command[];
+let evals: Command[];
 let failNext: ((commands: Command[], url: string) => boolean) | null;
 
 /** A Redis with real NX semantics. Each request waits a tick first, so simultaneous requests really interleave. */
 function execute(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") {
+      evals.push(command);
+      return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => execute([inner])[0] as { result?: unknown; error?: string });
+    }
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -128,6 +134,10 @@ const listingCall = (body: Record<string, unknown>) => listingRoute(post("https:
 
 const rowsOf = (list: unknown) => ((list as string[] | undefined) ?? []).map((row) => JSON.parse(row) as DemoAuditRow);
 const auditRows = () => rowsOf(store.get(`${PREFIX}audit`));
+const openingRowsNow = async (opened: Date | null = null) => {
+  const { state, epoch } = await getDemoSnapshot();
+  return ensureOpeningRows(scenario, state, epoch, opened ?? undefined);
+};
 const demoKeys = () => [...store.keys()].filter((k) => k.startsWith(PREFIX));
 
 async function toScreen05(): Promise<void> {
@@ -145,6 +155,7 @@ beforeEach(() => {
   expiring = new Set();
   urls = [];
   sent = [];
+  evals = [];
   failNext = null;
   useFakeRedis();
 });
@@ -200,25 +211,27 @@ describe("approval slot compare-and-set", () => {
     expect(auditRows().filter((r) => r.ref === scenario.launchApproval.approvalId)).toHaveLength(1);
   });
 
-  it("claims the slot on its own key inside the prefix, writes the approval in one MULTI/EXEC, and reset clears the claim", async () => {
+  it("claims the slot on its own key inside the prefix, writes the approval in one fenced script, and reset clears the claim", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
-    expect(store.get(`${PREFIX}claim:sourcing`)).toBe("1");
+    expect(store.get(`${PREFIX}claim:sourcing`)).toBe("approve");
     expect(expiring.has(`${PREFIX}claim:sourcing`)).toBe(true);
-    expect(sent.find((c) => c[0] === "SET" && c[1] === `${PREFIX}claim:sourcing`)).toEqual(["SET", `${PREFIX}claim:sourcing`, "1", "NX", "EX", 60]);
-    expect(urls.filter((u) => u.endsWith("/multi-exec"))).toHaveLength(1);
+    expect(sent.find((c) => c[0] === "SET" && c[1] === `${PREFIX}claim:sourcing`)).toEqual(["SET", `${PREFIX}claim:sourcing`, "approve", "NX", "EX", 60]);
+    const writes = evals.filter((c) => c.includes("RPUSH"));
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toEqual(expect.arrayContaining(["SET", `${PREFIX}approvals`, "RPUSH", `${PREFIX}audit`]));
 
     for (const [name, target] of sent) {
       expect(["GET", "SET", "DEL", "RPUSH", "LRANGE"]).toContain(name);
       expect(STATE_KEYS).toContain(target);
     }
     await resetDemo();
-    expect(demoKeys().sort()).toEqual([`${PREFIX}listed`, `${PREFIX}stage`]);
+    expect(demoKeys().sort()).toEqual([`${PREFIX}epoch`, `${PREFIX}listed`, `${PREFIX}stage`]);
     for (const [k, v] of Object.entries(FOREIGN)) expect(store.get(k)).toBe(v);
     expect((await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1)).ok).toBe(true);
   });
 
   it("releases the claim when the write fails, so the same approver can try again", async () => {
-    failNext = (_commands, url) => url.endsWith("/multi-exec");
+    failNext = (commands) => commands.some((c) => c[0] === "EVAL" && c.includes("RPUSH"));
     await expect(approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1)).rejects.toThrow();
     expect(store.has(`${PREFIX}claim:sourcing`)).toBe(false);
     expect(store.has(`${PREFIX}approvals`)).toBe(false);
@@ -348,16 +361,17 @@ describe("opening agent rows", () => {
     openGate();
     await Promise.all([1, 2, 3, 4, 5, 6].map(() => renderOps()));
     expect(auditRows()).toHaveLength(2);
-    const direct = await Promise.all([1, 2, 3].map(async () => ensureOpeningRows(scenario, { audit: [] }, T_OPEN)));
+    const direct = await Promise.all([1, 2, 3].map(() => ensureOpeningRows(scenario, { audit: [] }, "0", T_OPEN)));
     expect(direct.filter(Boolean).length).toBeLessThanOrEqual(1);
     expect(auditRows()).toHaveLength(2);
   });
 
   it("only the winner of a simultaneous first load writes, and its two rows land in one transaction", async () => {
-    const results = await Promise.all([1, 2, 3, 4].map(() => ensureOpeningRows(scenario, { audit: [] }, T_OPEN)));
+    const { epoch } = await getDemoSnapshot();
+    const results = await Promise.all([1, 2, 3, 4].map(() => ensureOpeningRows(scenario, { audit: [] }, epoch, T_OPEN)));
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(auditRows().map((r) => r.at)).toEqual([T_OPEN.toISOString(), T_OPEN.toISOString()]);
-    expect(urls.filter((u) => u.endsWith("/multi-exec"))).toHaveLength(1);
+    expect(evals.filter((c) => c.includes("RPUSH"))).toHaveLength(1);
   });
 
   it("writes them again after a reset, and only after a reset", async () => {
@@ -381,7 +395,7 @@ describe("opening agent rows", () => {
 
   it("releases its guard when the write fails, so the next load writes them, and a failing store never breaks the page", async () => {
     openGate();
-    failNext = (_commands, url) => url.endsWith("/multi-exec");
+    failNext = (commands) => commands.some((c) => c[0] === "EVAL" && c.includes("RPUSH"));
     const html = await renderOps();
     expect(html).toContain("data-ops-console");
     expect(auditRows()).toEqual([]);
@@ -406,15 +420,16 @@ describe("opening agent rows", () => {
 });
 
 describe("detection-to-live time (screens 06 and 07)", () => {
-  async function runFull(opened: Date | null, published: Date) {
-    if (opened) await ensureOpeningRows(scenario, await getDemoState(), opened);
+  async function runFull(opened: Date | null, published: Date, mode: ElapsedMode = "real") {
+    await setElapsedMode(mode);
+    if (opened) await openingRowsNow(opened);
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
     await runStockCheck(scenario, { ...defaultStockCheckDeps, wait: instant });
     await continueFromStockCheck(scenario);
     await runListingDraft(scenario, { ...defaultListingDeps, wait: instant });
     await sendForApproval(scenario, { approverId: first.id }, T_SEND);
     const result = await approveLaunch(scenario, { approverId: second.id, confirmed: true }, published);
-    return { result, state: await getDemoState() };
+    return { result, state: { ...(await getDemoState()), elapsedMode: mode } };
   }
 
   it("formats whole minutes and seconds the way the fixture does", () => {
@@ -458,7 +473,7 @@ describe("detection-to-live time (screens 06 and 07)", () => {
   });
 
   it("shows no elapsed time before the publish, and none after a reset", async () => {
-    await ensureOpeningRows(scenario, { audit: [] }, T_OPEN);
+    await openingRowsNow(T_OPEN);
     expect(auditView(scenario, await getDemoState()).elapsed).toBeNull();
     await runFull(null, T2);
     await resetDemo();
@@ -505,14 +520,14 @@ describe("reset leaves nothing stale", () => {
   it("resets in one transaction and returns to a clean first screen, ready for the opening rows again", async () => {
     await toScreen05();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
-    await ensureOpeningRows(scenario, { audit: [] }, T_OPEN);
+    await openingRowsNow(T_OPEN);
     urls = [];
     expect(await resetDemo()).toEqual({ stage: 0, approvals: {}, audit: [], listed: false });
     expect(urls).toEqual([expect.stringMatching(/\/multi-exec$/)]);
     expect(launchPhase(scenario, await getDemoState())).toBe("sourcing_pending");
-    expect(demoKeys().sort()).toEqual([`${PREFIX}listed`, `${PREFIX}stage`]);
+    expect(demoKeys().sort()).toEqual([`${PREFIX}epoch`, `${PREFIX}listed`, `${PREFIX}stage`]);
     for (const [k, v] of Object.entries(FOREIGN)) expect(store.get(k)).toBe(v);
-    expect(await ensureOpeningRows(scenario, await getDemoState(), T_OPEN)).toBe(true);
+    expect(await openingRowsNow(T_OPEN)).toBe(true);
   });
 
   it("makes the Reset button reload the ops console from the server instead of patching client state", () => {

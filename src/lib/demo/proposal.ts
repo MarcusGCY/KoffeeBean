@@ -1,6 +1,6 @@
 import { REJECT_ACTION_PREFIX, clockLabel, findRejection, proposalStatus, type Rejection } from "./ops-console";
 import type { Scenario } from "./scenario";
-import { appendAudit, getDemoState, type DemoAuditRow } from "./state";
+import { SLOT_GUARDS, appendAudit, getDemoSnapshot, getDemoState, releaseGuard, takeGuard, type DemoAuditRow } from "./state";
 
 export type RejectResult =
   | { ok: true; changed: boolean; status: "rejected"; rejection: Rejection }
@@ -12,7 +12,7 @@ export type RejectResult =
  * proposal that already has its sourcing approval cannot be rejected.
  */
 export async function rejectProposal(scenario: Scenario, now: Date = new Date()): Promise<RejectResult> {
-  const state = await getDemoState();
+  const { state, epoch } = await getDemoSnapshot();
   const status = proposalStatus(scenario, state);
   if (status === "approved") return { ok: false, status };
   const existing = findRejection(scenario, state);
@@ -28,6 +28,23 @@ export async function rejectProposal(scenario: Scenario, now: Date = new Date())
     source: "Ops console",
     ref: scenario.gap.id,
   };
-  await appendAudit(row);
-  return { ok: true, changed: true, status: "rejected", rejection: { by: row.actor, at: row.at, atLabel: clockLabel(row.at) } };
+  const rejection = { by: row.actor, at: row.at, atLabel: clockLabel(row.at) };
+
+  // Rejecting takes the sourcing slot's guard, so it and "Approve sourcing" cannot both win.
+  const guard = SLOT_GUARDS.sourcing;
+  const claimed = await takeGuard(guard, "reject", epoch);
+  if (!claimed.won) {
+    return claimed.heldBy === "reject" ? { ok: true, changed: false, status: "rejected", rejection } : { ok: false, status: "approved" };
+  }
+  try {
+    const latest = await getDemoState();
+    if (latest.approvals.sourcing) return { ok: false, status: "approved" };
+    const again = findRejection(scenario, latest);
+    if (again) return { ok: true, changed: false, status: "rejected", rejection: again };
+    await appendAudit(row, epoch);
+  } catch (error) {
+    await releaseGuard(guard, epoch);
+    throw error;
+  }
+  return { ok: true, changed: true, status: "rejected", rejection };
 }

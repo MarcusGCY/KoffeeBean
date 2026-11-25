@@ -7,7 +7,7 @@ import type { PublishedView } from "./published-view";
 type Action = "approve_sourcing" | "approve_launch" | "send_back";
 
 export class ApprovalRefused extends Error {
-  constructor(readonly reason: ApprovalRefusal | "store_unavailable" | "failed") {
+  constructor(readonly reason: ApprovalRefusal | "store_unavailable" | "reset_during_request" | "failed") {
     super(reason);
   }
 }
@@ -60,6 +60,8 @@ export function refusalMessage(error: unknown): string {
       return "The listing draft must be sent for approval first.";
     case "sent_back":
       return "The listing was sent back. Reset the demo to start again.";
+    case "reset_during_request":
+      return "The demo was reset while this was in flight, so nothing was recorded. Reload and start again.";
     case "store_unavailable":
       return "The demo store is unavailable. Try again.";
     default:

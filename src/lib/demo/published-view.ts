@@ -1,13 +1,14 @@
 import { clockLabel } from "./ops-console";
 import { findDetectionRow } from "./opening";
 import type { Scenario } from "./scenario";
-import type { DemoAuditRow, DemoState } from "./state";
+import { DEFAULT_ELAPSED_MODE, type DemoAuditRow, type DemoState, type ElapsedMode } from "./state";
 
 /** Where a shopper finds the published listing. */
 export const STOREFRONT_PATH = "/demo/pelita";
 export const STOREFRONT_LINK_LABEL = "View it on the storefront →";
 
-type PublishedState = Pick<DemoState, "approvals" | "audit" | "listed">;
+/** `elapsedMode` is the presenter's choice. It is the fixture figure unless it is set to "real". */
+type PublishedState = Pick<DemoState, "approvals" | "audit" | "listed"> & { elapsedMode?: ElapsedMode };
 
 /** "7 min 11 s", or "45 s" under a minute. */
 export function durationLabel(totalSeconds: number): string {
@@ -23,11 +24,18 @@ export function findPublishRow(scenario: Scenario, state: Pick<DemoState, "audit
 }
 
 /**
- * Detection to live. It is measured from the real "Spotted gap" row to the real publish
- * row. When either is missing, or the clock runs backwards, it is the fixture's own
- * figure (`fromRows` is false).
+ * Detection to live. By default it is the fixture's own figure (`fromRows` is false). When the
+ * presenter has switched to the real time it is measured from the real "Spotted gap" row to the
+ * real publish row, and still falls back to the fixture's figure when either row is missing or
+ * the clock runs backwards.
  */
-export function detectionToLive(scenario: Scenario, state: Pick<DemoState, "audit">): { seconds: number; label: string; fromRows: boolean } {
+export function detectionToLive(
+  scenario: Scenario,
+  state: Pick<DemoState, "audit"> & { elapsedMode?: ElapsedMode },
+): { seconds: number; label: string; fromRows: boolean } {
+  if ((state.elapsedMode ?? DEFAULT_ELAPSED_MODE) !== "real") {
+    return { seconds: scenario.timing.totalSeconds, label: scenario.timing.totalLabel, fromRows: false };
+  }
   const start = Date.parse(findDetectionRow(scenario, state)?.at ?? "");
   const end = Date.parse(findPublishRow(scenario, state)?.at ?? "");
   if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {

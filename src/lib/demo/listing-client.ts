@@ -5,7 +5,7 @@ import { DESCRIPTION_MAX, type ListingDraftView } from "./listing-view";
 /** Browser calls to the presenter-gated listing API. Same-origin, so the presenter cookie travels with them. */
 
 export class ListingRefused extends Error {
-  constructor(readonly reason: ListingRefusal | "store_unavailable" | "failed") {
+  constructor(readonly reason: ListingRefusal | "store_unavailable" | "reset_during_request" | "failed") {
     super(reason);
   }
 }
@@ -50,6 +50,8 @@ export function listingMessage(error: unknown): string {
       return "The listing was sent back. Reset the demo to start again.";
     case "already_launched":
       return "The listing is already published.";
+    case "reset_during_request":
+      return "The demo was reset while this was in flight, so nothing was recorded. Reload and start again.";
     case "store_unavailable":
       return "The demo store is unavailable. Try again.";
     default:

@@ -21,6 +21,7 @@ import { rejectProposal } from "@/lib/demo/proposal";
 import { loadScenario, parseScenario } from "@/lib/demo/scenario";
 import { STATE_KEYS, appendAudit, getDemoState, recordApproval, resetDemo, setStage } from "@/lib/demo/state";
 import { proxy } from "@/proxy";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -59,6 +60,7 @@ let sent: Command[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -276,7 +278,7 @@ describe("ops console touches no database, identity or env", () => {
     }
     expect(readFileSync(path.join(ROOT, "src/components/pelita-ops/PelitaOpsConsole.tsx"), "utf8")).not.toMatch(/fetch\(/);
     const client = readFileSync(path.join(ROOT, "src/lib/demo/ops-client.ts"), "utf8");
-    expect([...client.matchAll(/"(\/[^"]+)"/g)].map((m) => m[1])).toEqual(["/api/demo/pelita/proposal", "/api/demo/pelita/reset"]);
+    expect([...client.matchAll(/"(\/[^"]+)"/g)].map((m) => m[1])).toEqual(["/api/demo/pelita/proposal", "/api/demo/pelita/reset", "/api/demo/pelita/elapsed"]);
   });
 });
 

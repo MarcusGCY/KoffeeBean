@@ -6,7 +6,7 @@ import { listingDraftView } from "@/lib/demo/listing-view";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { ensureOpeningRows } from "@/lib/demo/opening";
 import { loadScenario } from "@/lib/demo/scenario";
-import { getDemoState, type DemoState } from "@/lib/demo/state";
+import { getDemoSnapshot, type DemoState } from "@/lib/demo/state";
 import { stockCheckView } from "@/lib/demo/stock-check-view";
 
 export const instant = false;
@@ -23,16 +23,17 @@ export default async function PelitaOpsPage() {
   await requirePresenterPage();
   const scenario = loadScenario();
   // A store that is not configured or is down still shows screen 01 as a new proposal.
-  const read = await getDemoState().catch(() => null);
+  const snapshot = await getDemoSnapshot().catch(() => null);
   // The opening agent rows are written once, on the first load after a reset. A failed write never blocks the screen.
-  if (read) await ensureOpeningRows(scenario, read).catch(() => false);
-  const state = read ?? EMPTY_STATE;
+  if (snapshot) await ensureOpeningRows(scenario, snapshot.state, snapshot.epoch).catch(() => false);
+  const state = snapshot ? { ...snapshot.state, elapsedMode: snapshot.elapsedMode } : EMPTY_STATE;
   return (
     <PelitaOpsConsole
       view={opsConsoleView(scenario, state)}
       approval={approvalView(scenario, state)}
       stockCheck={stockCheckView(scenario, state)}
       listing={listingDraftView(scenario, state)}
+      elapsedMode={snapshot?.elapsedMode}
     />
   );
 }

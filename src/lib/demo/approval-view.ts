@@ -2,7 +2,7 @@ import { findListingDraft, findListingEdit } from "./listing-view";
 import { clockLabel, findRejection, railSteps, type RailStep } from "./ops-console";
 import { publishedView, type PublishedView } from "./published-view";
 import type { Scenario } from "./scenario";
-import { LAUNCH_APPROVAL_STAGE, STOCK_CHECK_STAGE, type DemoState } from "./state";
+import { LAUNCH_APPROVAL_STAGE, STOCK_CHECK_STAGE, type DemoState, type ElapsedMode } from "./state";
 import { findStockCheck } from "./stock-check-view";
 
 /**
@@ -24,7 +24,7 @@ export type LaunchPhase =
 /** The audit action that marks a listing sent back. Its `ref` is the listing id. */
 export const SEND_BACK_ACTION_PREFIX = "Sent back listing and promo";
 
-type ApprovalState = Pick<DemoState, "approvals" | "audit"> & { stage?: number; listed?: boolean };
+type ApprovalState = Pick<DemoState, "approvals" | "audit"> & { stage?: number; listed?: boolean; elapsedMode?: ElapsedMode };
 
 export type ApproverView = {
   id: string;

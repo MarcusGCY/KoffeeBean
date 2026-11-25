@@ -33,6 +33,7 @@ import { loadScenario, parseScenario } from "@/lib/demo/scenario";
 import { PAST_STOCK_CHECK_STAGE, PUBLISHED_STAGE, STATE_KEYS, STATE_KEY_NAMES, getDemoState, resetDemo } from "@/lib/demo/state";
 import { continueFromStockCheck, defaultStockCheckDeps, runStockCheck } from "@/lib/demo/stock-check";
 import { searchCatalogue, storefrontView } from "@/lib/demo/storefront";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -79,6 +80,7 @@ let sent: Command[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -498,7 +500,7 @@ describe("Approval 2 publishes", () => {
     await toScreen05();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     await resetDemo();
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening", "elapsed", "epoch"]);
     expect(sent.length).toBeGreaterThan(0);
     for (const [name, target] of sent) {
       expect(["GET", "SET", "DEL", "RPUSH", "LRANGE"]).toContain(name);

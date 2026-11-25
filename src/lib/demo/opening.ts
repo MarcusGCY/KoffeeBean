@@ -25,9 +25,9 @@ export function findDetectionRow(scenario: Scenario, state: Pick<DemoState, "aud
  * nothing, so reloads and simultaneous loads cannot duplicate them. Returns whether this
  * call wrote them.
  */
-export async function ensureOpeningRows(scenario: Scenario, state: Pick<DemoState, "audit">, now: Date = new Date()): Promise<boolean> {
+export async function ensureOpeningRows(scenario: Scenario, state: Pick<DemoState, "audit">, epoch: string, now: Date = new Date()): Promise<boolean> {
   if (state.audit.length > 0) return false;
   const at = now.toISOString();
   const rows = openingFixtureRows(scenario).map((row): DemoAuditRow => ({ ...row, at }));
-  return commitOpeningRows(rows);
+  return commitOpeningRows(rows, epoch);
 }

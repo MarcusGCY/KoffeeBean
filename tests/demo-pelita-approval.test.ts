@@ -26,6 +26,7 @@ import { loadScenario, parseScenario } from "@/lib/demo/scenario";
 import { STATE_KEYS, STATE_KEY_NAMES, getDemoState, resetDemo } from "@/lib/demo/state";
 import { continueFromStockCheck, defaultStockCheckDeps, runStockCheck } from "@/lib/demo/stock-check";
 import { CHECK_ACTION } from "@/lib/demo/stock-check-view";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -71,6 +72,7 @@ let sent: Command[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -325,7 +327,7 @@ describe("two-person approval state transitions", () => {
       expect(String(target).startsWith("kb:demo:pelita:")).toBe(true);
       expect(STATE_KEYS).toContain(target);
     }
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening", "elapsed", "epoch"]);
   });
 });
 

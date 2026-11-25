@@ -8,12 +8,14 @@ import { approveRequest, refusalMessage, sendBackRequest } from "@/lib/demo/appr
 import { editListingRequest, listingMessage, runListingDraftRequest, sendForApprovalRequest } from "@/lib/demo/listing-client";
 import type { ListingDraftView } from "@/lib/demo/listing-view";
 import { formatCount, type OpsConsoleView, type ProposalStatus, type RailStep, type Rejection } from "@/lib/demo/ops-console";
+import type { ElapsedMode } from "@/lib/demo/state";
 import { rejectProposalRequest, resetDemoRequest } from "@/lib/demo/ops-client";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import type { PublishedView } from "@/lib/demo/published-view";
 import { continueStockCheckRequest, runStockCheckRequest, stockCheckMessage } from "@/lib/demo/stock-check-client";
 import type { StockCheckView } from "@/lib/demo/stock-check-view";
 import { PelitaMark, SparkleIcon, TickIcon } from "../pelita/PelitaIcons";
+import { PelitaElapsedToggle } from "./PelitaElapsedToggle";
 import { PelitaApprovalModal } from "./PelitaApprovalModal";
 import { PelitaListingDraft, type ListingDraftStatus } from "./PelitaListingDraft";
 import { PelitaLaunchApproval } from "./PelitaLaunchApproval";
@@ -116,11 +118,13 @@ export function PelitaOpsConsole({
   approval,
   stockCheck,
   listing,
+  elapsedMode = "fixture",
 }: {
   view: OpsConsoleView;
   approval?: ApprovalView;
   stockCheck?: StockCheckView;
   listing?: ListingDraftView;
+  elapsedMode?: ElapsedMode;
 }) {
   const [status, setStatus] = useState<ProposalStatus>(view.status);
   const [rejection, setRejection] = useState<Rejection | null>(view.rejection);
@@ -341,11 +345,12 @@ export function PelitaOpsConsole({
             Switch to {other.name}
           </button>
         )}
+        <PelitaElapsedToggle mode={elapsedMode} />
         <button
           type="button"
           onClick={reset}
           disabled={busy}
-          className="text-base font-semibold text-ink-3 underline underline-offset-4 disabled:opacity-60"
+          className="whitespace-nowrap text-base font-semibold text-ink-3 underline underline-offset-4 disabled:opacity-60"
         >
           Reset demo
         </button>
@@ -359,7 +364,7 @@ export function PelitaOpsConsole({
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-human text-[17px] font-extrabold text-white" aria-hidden="true">
             {person.initials}
           </span>
-          <div className="leading-tight">
+          <div className="whitespace-nowrap leading-tight">
             {person.name}
             <div className="text-base font-semibold text-ink-3">{person.role}</div>
           </div>

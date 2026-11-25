@@ -21,3 +21,8 @@ export async function resetDemoRequest(): Promise<void> {
   const res = await post("/api/demo/pelita/reset");
   if (!res.ok) throw new Error(`reset failed (${res.status})`);
 }
+
+export async function setElapsedModeRequest(mode: "fixture" | "real"): Promise<void> {
+  const res = await post("/api/demo/pelita/elapsed", { mode });
+  if (!res.ok) throw new Error(`elapsed mode failed (${res.status})`);
+}

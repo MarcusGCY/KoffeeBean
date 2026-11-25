@@ -5,7 +5,7 @@ import type { StockCheckView } from "./stock-check-view";
 /** Browser calls to the presenter-gated stock-check API. Same-origin, so the presenter cookie travels with them. */
 
 export class StockCheckRefused extends Error {
-  constructor(readonly reason: StockCheckRefusal | "store_unavailable" | "failed") {
+  constructor(readonly reason: StockCheckRefusal | "store_unavailable" | "reset_during_request" | "failed") {
     super(reason);
   }
 }
@@ -45,6 +45,8 @@ export function stockCheckMessage(error: unknown): string {
       return "The listing was sent back. Reset the demo to start again.";
     case "already_launched":
       return "The listing is already approved.";
+    case "reset_during_request":
+      return "The demo was reset while this was in flight, so nothing was recorded. Reload and start again.";
     case "store_unavailable":
       return "The demo store is unavailable. Try again.";
     default:

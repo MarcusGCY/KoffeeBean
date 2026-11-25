@@ -12,6 +12,7 @@ import {
   setStage,
   type StateKeyName,
 } from "@/lib/demo/state";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 type Command = (string | number)[];
 
@@ -27,6 +28,7 @@ let sent: Command[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -121,9 +123,12 @@ describe("resetDemo", () => {
       ["DEL", "kb:demo:pelita:claim:sourcing"],
       ["DEL", "kb:demo:pelita:claim:launch"],
       ["DEL", "kb:demo:pelita:opening"],
+      ["DEL", "kb:demo:pelita:elapsed"],
       ["SET", "kb:demo:pelita:stage", "0"],
       ["SET", "kb:demo:pelita:listed", "0"],
+      ["SET", "kb:demo:pelita:epoch", expect.stringMatching(/^[0-9a-f-]{36}$/)],
     ]);
+    expect(sent.some((command) => command[0] === "DEL" && command[1] === "kb:demo:pelita:epoch")).toBe(false);
     const verbs = sent.map((command) => String(command[0]));
     expect(verbs.some((verb) => /SCAN|KEYS|FLUSH/.test(verb))).toBe(false);
     expect(sent.flat().some((part) => String(part).includes("*"))).toBe(false);

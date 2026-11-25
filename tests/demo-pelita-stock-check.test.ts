@@ -34,6 +34,7 @@ import {
   type StockCheckDeps,
 } from "@/lib/demo/stock-check";
 import { CHECK_ACTION, findStockCheck, purchaseOrderAction, stockCheckView, type StockCheckView } from "@/lib/demo/stock-check-view";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -81,6 +82,7 @@ let fetched: string[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -764,7 +766,7 @@ describe("reset clears the stock check", () => {
   beforeEach(useFakeRedis);
 
   it("adds no state key beyond the fixed list, and every write stays inside it", async () => {
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening", "elapsed", "epoch"]);
     await sourcingApproved();
     await runStockCheck(scenario, instantDeps());
     await continueFromStockCheck(scenario);

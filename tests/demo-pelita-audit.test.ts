@@ -23,6 +23,7 @@ import { rejectProposal } from "@/lib/demo/proposal";
 import { loadScenario } from "@/lib/demo/scenario";
 import { STATE_KEYS, STATE_KEY_NAMES, getDemoState, type DemoAuditRow, type DemoState } from "@/lib/demo/state";
 import { continueFromStockCheck, defaultStockCheckDeps, runStockCheck } from "@/lib/demo/stock-check";
+import { evalFenced } from "./helpers/fake-redis-eval";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -59,6 +60,7 @@ let sent: Command[];
 
 function fakeRedis(commands: Command[]): unknown[] {
   return commands.map((command) => {
+    if (command[0] === "EVAL") return evalFenced(command, (key) => store.get(key) as string | undefined, (inner) => fakeRedis([inner])[0] as { result?: unknown; error?: string });
     sent.push(command);
     const [name, k, ...rest] = command as [string, string, ...(string | number)[]];
     switch (name) {
@@ -443,7 +445,7 @@ describe("reset clears the audit timeline, and the timeline adds no state key", 
   beforeEach(useFakeRedis);
 
   it("keeps the fixed key list: the four state keys plus the write guards", () => {
-    expect([...STATE_KEY_NAMES]).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
+    expect([...STATE_KEY_NAMES]).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening", "elapsed", "epoch"]);
     expect(STATE_KEYS).toEqual(STATE_KEY_NAMES.map((name) => `kb:demo:pelita:${name}`));
   });
 
@@ -455,7 +457,7 @@ describe("reset clears the audit timeline, and the timeline adds no state key", 
     renderToStaticMarkup(await Page());
     expect(sent.every(([name]) => name === "GET" || name === "LRANGE")).toBe(true);
     const pelitaKeys = [...store.keys()].filter((k) => k.startsWith("kb:demo:pelita:") && !(k in FOREIGN));
-    expect(pelitaKeys.sort()).toEqual(STATE_KEYS.filter((k) => k !== "kb:demo:pelita:opening").sort());
+    expect(pelitaKeys.sort()).toEqual(STATE_KEYS.filter((k) => !["opening", "elapsed", "epoch"].some((name) => k === `kb:demo:pelita:${name}`)).sort());
   });
 
   it("empties the timeline after reset, drops the elapsed time and the counts, and leaves foreign keys alone", async () => {
@@ -483,7 +485,7 @@ describe("reset clears the audit timeline, and the timeline adds no state key", 
     expect(html).not.toContain("data-audit-row");
     for (const [k, v] of Object.entries(FOREIGN)) expect(store.get(k)).toBe(v);
     const pelitaKeys = [...store.keys()].filter((k) => k.startsWith("kb:demo:pelita:") && !(k in FOREIGN));
-    expect(pelitaKeys.sort()).toEqual(["kb:demo:pelita:listed", "kb:demo:pelita:stage"]);
+    expect(pelitaKeys.sort()).toEqual(["kb:demo:pelita:epoch", "kb:demo:pelita:listed", "kb:demo:pelita:stage"]);
   });
 
   it("still serves the audit rows through the existing gated state route, and a second reset is harmless", async () => {
@@ -558,7 +560,7 @@ describe("/demo/pelita/audit gate", () => {
     expect(read("src/app/demo/pelita/audit/page.tsx")).toMatch(/await requirePresenterPage\(\)/);
     const requirePos = read("src/app/demo/pelita/audit/page.tsx").indexOf("await requirePresenterPage()");
     expect(requirePos).toBeGreaterThan(-1);
-    expect(requirePos).toBeLessThan(read("src/app/demo/pelita/audit/page.tsx").indexOf("getDemoState()"));
+    expect(requirePos).toBeLessThan(read("src/app/demo/pelita/audit/page.tsx").indexOf("getDemoSnapshot()"));
     expect(read("src/components/pelita-ops/PelitaAuditTimeline.tsx")).not.toMatch(/fetch\(|"use client"/);
     const routes = readFileSync(path.join(ROOT, "src/app/api/demo/pelita/state/route.ts"), "utf8");
     expect(routes).toMatch(/guardDemoApi\(req\)/);

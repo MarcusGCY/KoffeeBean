@@ -13,7 +13,7 @@ import {
   type ListingDraftView,
 } from "./listing-view";
 import type { Scenario } from "./scenario";
-import { LAUNCH_APPROVAL_STAGE, appendAuditRows, appendAuditRowsAndSetStage, getDemoState, type DemoAuditRow } from "./state";
+import { LAUNCH_APPROVAL_STAGE, appendAuditRows, appendAuditRowsAndSetStage, getDemoSnapshot, getDemoState, type DemoAuditRow } from "./state";
 import { defaultStockCheckDeps, type StockCheckDeps } from "./stock-check";
 
 export type ClaimsCheck = {
@@ -116,7 +116,7 @@ function humanRow(actor: string, at: Date, action: string, ref: string): DemoAud
  * draft that already exists is returned as it is and never written twice.
  */
 export async function runListingDraft(scenario: Scenario, deps: ListingDeps = configured): Promise<ListingResult> {
-  const before = await getDemoState();
+  const { state: before, epoch } = await getDemoSnapshot();
   const phase = launchPhase(scenario, before);
   const stop = blocked(phase);
   if (stop) return refuse(stop);
@@ -137,7 +137,7 @@ export async function runListingDraft(scenario: Scenario, deps: ListingDeps = co
     await appendAuditRows([
       { ...claimsAuditRow(scenario), at },
       { ...draftAuditRow(scenario), at },
-    ]);
+    ], epoch);
   }
   return done(scenario, true, "listing_draft", await getDemoState());
 }
@@ -154,7 +154,7 @@ export async function editListing(
 ): Promise<ListingResult> {
   const actor = humanActor(scenario, input.approverId);
   if (!actor) return refuse("unknown_approver");
-  const state = await getDemoState();
+  const { state, epoch } = await getDemoSnapshot();
   const phase = launchPhase(scenario, state);
   const stop = blocked(phase);
   if (stop) return refuse(stop);
@@ -168,7 +168,7 @@ export async function editListing(
     return done(scenario, false, "listing_draft", state);
   }
 
-  await appendAuditRows([humanRow(actor, now, `${EDIT_ACTION_PREFIX}: ${text}`, scenario.listing.id)]);
+  await appendAuditRows([humanRow(actor, now, `${EDIT_ACTION_PREFIX}: ${text}`, scenario.listing.id)], epoch);
   return done(scenario, true, "listing_draft", await getDemoState());
 }
 
@@ -179,7 +179,7 @@ export async function editListing(
 export async function sendForApproval(scenario: Scenario, input: { approverId: string }, now: Date = new Date()): Promise<ListingResult> {
   const actor = humanActor(scenario, input.approverId);
   if (!actor) return refuse("unknown_approver");
-  const state = await getDemoState();
+  const { state, epoch } = await getDemoSnapshot();
   const phase = launchPhase(scenario, state);
   const stop = blocked(phase);
   if (stop) return refuse(stop);
@@ -188,6 +188,6 @@ export async function sendForApproval(scenario: Scenario, input: { approverId: s
   }
   if (!findListingDraft(scenario, state)) return refuse("draft_required");
 
-  await appendAuditRowsAndSetStage([humanRow(actor, now, SEND_ACTION, scenario.listing.id)], LAUNCH_APPROVAL_STAGE);
+  await appendAuditRowsAndSetStage([humanRow(actor, now, SEND_ACTION, scenario.listing.id)], LAUNCH_APPROVAL_STAGE, epoch);
   return done(scenario, true, "launch_pending", await getDemoState());
 }

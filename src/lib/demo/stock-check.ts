@@ -1,6 +1,6 @@
 import { launchPhase } from "./approval-view";
 import type { Scenario } from "./scenario";
-import { PAST_STOCK_CHECK_STAGE, STOCK_CHECK_STAGE, appendAuditRows, getDemoState, setStage, type DemoAuditRow } from "./state";
+import { PAST_STOCK_CHECK_STAGE, STOCK_CHECK_STAGE, appendAuditRows, getDemoSnapshot, getDemoState, setStage, type DemoAuditRow } from "./state";
 import {
   CHECK_ACTION,
   CHECK_SOURCE,
@@ -143,7 +143,7 @@ function blocked(phase: ReturnType<typeof launchPhase>): StockCheckRefusal | nul
  * returned as it is and never run twice.
  */
 export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = configured): Promise<StockCheckResult> {
-  const before = await getDemoState();
+  const { state: before, epoch } = await getDemoSnapshot();
   const phase = launchPhase(scenario, before);
   const stop = blocked(phase);
   if (stop) return refuse(stop);
@@ -152,7 +152,7 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
     return { ok: true, changed: false, phase: phase === "listing_draft" || phase === "launch_pending" ? phase : "stock_check", check: stockCheckView(scenario, before, deps.now()) };
   }
 
-  if (before.stage !== STOCK_CHECK_STAGE) await setStage(STOCK_CHECK_STAGE);
+  if (before.stage !== STOCK_CHECK_STAGE) await setStage(STOCK_CHECK_STAGE, epoch);
 
   let supplier: SupplierCheck;
   let erp: ErpCheck;
@@ -186,7 +186,7 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
         ref: erp.purchaseOrder.id,
       },
     ];
-    await appendAuditRows(rows);
+    await appendAuditRows(rows, epoch);
   }
 
   const after = await getDemoState();
@@ -200,7 +200,7 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
  * Once past screen 03 a repeat call changes nothing, so it can never move the stage back.
  */
 export async function continueFromStockCheck(scenario: Scenario, now: () => Date = () => new Date()): Promise<StockCheckResult> {
-  const state = await getDemoState();
+  const { state, epoch } = await getDemoSnapshot();
   const phase = launchPhase(scenario, state);
   const stop = blocked(phase);
   if (stop) return refuse(stop);
@@ -211,6 +211,6 @@ export async function continueFromStockCheck(scenario: Scenario, now: () => Date
   if (phase === "listing_draft" || phase === "launch_pending") {
     return { ok: true, changed: false, phase, check: view };
   }
-  await setStage(PAST_STOCK_CHECK_STAGE);
+  await setStage(PAST_STOCK_CHECK_STAGE, epoch);
   return { ok: true, changed: true, phase: "listing_draft", check: view };
 }

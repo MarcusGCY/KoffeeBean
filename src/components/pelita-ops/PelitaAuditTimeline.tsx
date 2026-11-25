@@ -2,10 +2,11 @@ import Link from "next/link";
 import { OPS_LINK_LABEL, OPS_PATH, STOREFRONT_LABEL } from "@/lib/demo/audit-links";
 import type { AuditChange, AuditEntry, AuditView } from "@/lib/demo/audit-view";
 import { STOREFRONT_PATH } from "@/lib/demo/published-view";
+import { PelitaElapsedToggle } from "./PelitaElapsedToggle";
 import { HumanIcon, PelitaMark, SparkleIcon, SuccessIcon, UserIcon } from "../pelita/PelitaIcons";
 import { Rail } from "./PelitaOpsConsole";
 
-const SMALL_LINK = "text-base font-semibold text-ink-3 underline underline-offset-4";
+const SMALL_LINK = "whitespace-nowrap text-base font-semibold text-ink-3 underline underline-offset-4";
 
 /**
  * Violet is the agent, navy is a human approval and nothing else, green is the system.
@@ -70,8 +71,8 @@ function Row({ entry }: { entry: AuditEntry }) {
   );
 }
 
-function Pill({ className, children }: { className: string; children: React.ReactNode }) {
-  return <span className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-1 text-base font-bold ${className}`}>{children}</span>;
+function Pill({ className, children, ...rest }: { className: string; children: React.ReactNode } & React.HTMLAttributes<HTMLSpanElement>) {
+  return <span {...rest} className={`inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3.5 py-1 text-base font-bold ${className}`}>{children}</span>;
 }
 
 /** Screen 07: the audit timeline, read-only, from the persisted audit rows. */
@@ -88,8 +89,9 @@ export function PelitaAuditTimeline({ view }: { view: AuditView }) {
           </div>
         </div>
         <div aria-hidden="true" className="h-9 w-0.5 bg-line-2" />
-        <div className="text-lg font-bold text-ink-2">{view.consoleTitle}</div>
+        <div className="whitespace-nowrap text-lg font-bold text-ink-2">{view.consoleTitle}</div>
         <div className="flex-1" />
+        <PelitaElapsedToggle mode={view.elapsedMode} />
         <Link href={OPS_PATH} className={SMALL_LINK}>
           {OPS_LINK_LABEL}
         </Link>
@@ -103,10 +105,10 @@ export function PelitaAuditTimeline({ view }: { view: AuditView }) {
           {view.demoTag}
         </span>
         <div className="flex items-center gap-3 font-bold">
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-human text-[17px] font-extrabold text-white" aria-hidden="true">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink text-[17px] font-extrabold text-white" aria-hidden="true">
             {person.initials}
           </span>
-          <div className="leading-tight">
+          <div className="whitespace-nowrap leading-tight">
             {person.name}
             <div className="text-base font-semibold text-ink-3">{person.role}</div>
           </div>
@@ -141,7 +143,7 @@ export function PelitaAuditTimeline({ view }: { view: AuditView }) {
                 <SparkleIcon size={20} />
                 <span data-agent-count>{view.agent.label}</span>
               </Pill>
-              <Pill className="bg-human-50 text-human">
+              <Pill className="bg-human-50 text-human" data-approvals-pill>
                 <HumanIcon size={20} />
                 <span data-approval-count>{view.approvals.label}</span>
                 {view.approvals.refs.length > 0 && <span data-approval-refs>· {view.approvals.refs.join(", ")}</span>}
@@ -198,7 +200,7 @@ export function PelitaAuditTimeline({ view }: { view: AuditView }) {
           )}
 
           <p className="mt-2.5 flex flex-none items-center gap-2.5 text-lg font-bold text-ink-2">
-            <span className="text-human">
+            <span className="text-ink-2">
               <HumanIcon size={26} />
             </span>
             {view.footer}
