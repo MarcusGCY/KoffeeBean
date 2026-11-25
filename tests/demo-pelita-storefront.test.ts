@@ -207,23 +207,38 @@ describe("storefront renders the catalogue from the fixture", () => {
 describe("demand-gap figures come from the fixture in one place", () => {
   const scenario = loadScenario();
 
-  it("reads the headline and the series without reconciling them", () => {
+  it("reads the headline, the series and the chart settings from the fixture, and they agree", () => {
     const gap = demandGapView(scenario);
     expect(gap.searches).toBe(2180);
-    expect(gap.searchesPerDay).toEqual([88, 95, 102, 110, 118, 121, 135, 142, 150, 158, 171, 180, 196, 214]);
-    expect(gap.seriesTotal).toBe(1980);
-    expect(gap.searches).not.toBe(gap.seriesTotal);
+    expect(gap.searchesPerDay).toEqual([96, 104, 112, 121, 130, 136, 149, 157, 166, 175, 189, 199, 216, 230]);
+    expect(gap.seriesTotal).toBe(2180);
+    expect(gap.seriesTotal).toBe(gap.searches);
+    expect(gap.chartMax).toBe(250);
+    expect(gap.seriesStartDate).toBe("2026-11-12");
+    expect(gap.seriesEndDate).toBe("2026-11-25");
+    expect(gap.seriesStartLabel).toBe("12 Nov");
+    expect(gap.seriesEndLabel).toBe("Today");
   });
 
-  it("follows fixture edits", () => {
+  it("follows fixture edits that keep the series and headline consistent", () => {
     const edited = editedScenario((draft) => {
-      draft.gap.searches = 2500;
       draft.gap.searchesPerDay[0] = 100;
+      draft.gap.searches = 2184;
+      draft.gap.chartMax = 300;
     });
     const gap = demandGapView(edited);
-    expect(gap.searches).toBe(2500);
+    expect(gap.searches).toBe(2184);
     expect(gap.searchesPerDay[0]).toBe(100);
-    expect(gap.seriesTotal).toBe(1992);
+    expect(gap.seriesTotal).toBe(2184);
+    expect(gap.chartMax).toBe(300);
+  });
+
+  it("refuses a fixture whose series no longer sums to the headline", () => {
+    expect(() =>
+      editedScenario((draft) => {
+        draft.gap.searches = 2500;
+      }),
+    ).toThrow(/sum to gap\.searches/);
   });
 
   it("is not hardcoded in any storefront or demo component", () => {
@@ -235,10 +250,10 @@ describe("demand-gap figures come from the fixture in one place", () => {
     ];
     for (const file of files) {
       const text = read(file);
-      expect(text, file).not.toMatch(/2,?180|1,?980|88,\s*95,\s*102/);
+      expect(text, file).not.toMatch(/2,?180|1,?980|96,\s*104,\s*112|88,\s*95,\s*102/);
     }
     const html = renderStorefront();
-    expect(html).not.toMatch(/2,180|1,980/);
+    expect(html).not.toMatch(/2,180|1,980|\b230\b/);
   });
 });
 
