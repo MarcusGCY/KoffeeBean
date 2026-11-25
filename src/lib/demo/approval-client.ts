@@ -1,5 +1,6 @@
 import type { ApprovalRefusal } from "./approval";
 import type { LaunchPhase, RecordedApproval } from "./approval-view";
+import type { PublishedView } from "./published-view";
 
 /** Browser calls to the presenter-gated approval API. Same-origin, so the presenter cookie travels with them. */
 
@@ -25,9 +26,12 @@ async function send(action: Action, approverId: string, confirmed?: boolean): Pr
   return data;
 }
 
-export async function approveRequest(slot: "sourcing" | "launch", approverId: string): Promise<{ phase: LaunchPhase; approval: RecordedApproval }> {
+export async function approveRequest(
+  slot: "sourcing" | "launch",
+  approverId: string,
+): Promise<{ phase: LaunchPhase; approval: RecordedApproval; published: PublishedView | null }> {
   const data = await send(slot === "sourcing" ? "approve_sourcing" : "approve_launch", approverId, true);
-  return { phase: data.phase as LaunchPhase, approval: data.approval as RecordedApproval };
+  return { phase: data.phase as LaunchPhase, approval: data.approval as RecordedApproval, published: (data.published as PublishedView | null) ?? null };
 }
 
 export async function sendBackRequest(approverId: string): Promise<{ by: string; atLabel: string }> {
@@ -52,6 +56,8 @@ export function refusalMessage(error: unknown): string {
       return "Sourcing must be approved first.";
     case "stock_check_required":
       return "The stock check must be finished first.";
+    case "listing_required":
+      return "The listing draft must be sent for approval first.";
     case "sent_back":
       return "The listing was sent back. Reset the demo to start again.";
     case "store_unavailable":

@@ -1,7 +1,9 @@
 import { SEND_BACK_ACTION_PREFIX, findSendBack, launchPhase, sgdLabel, type LaunchPhase, type RecordedApproval } from "./approval-view";
+import { publishAuditRow } from "./listing-view";
 import { clockLabel } from "./ops-console";
+import { publishedView, type PublishedView } from "./published-view";
 import type { Scenario } from "./scenario";
-import { appendAudit, commitApproval, getDemoState, type ApprovalSlot, type DemoAuditRow } from "./state";
+import { PUBLISHED_STAGE, appendAudit, commitApproval, getDemoState, type ApprovalSlot, type CommitExtras, type DemoAuditRow } from "./state";
 
 export type ApprovalRefusal =
   | "unknown_approver"
@@ -12,12 +14,13 @@ export type ApprovalRefusal =
   | "proposal_rejected"
   | "sourcing_required"
   | "stock_check_required"
+  | "listing_required"
   | "sent_back";
 
 export type ApprovalInput = { approverId: string; confirmed: boolean };
 
 export type ApprovalResult =
-  | { ok: true; changed: boolean; phase: LaunchPhase; approval: RecordedApproval }
+  | { ok: true; changed: boolean; phase: LaunchPhase; approval: RecordedApproval; published: PublishedView | null }
   | { ok: false; reason: ApprovalRefusal };
 
 export type SendBackResult =
@@ -62,6 +65,7 @@ async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalIn
     if (!state.approvals.sourcing) return refuse("sourcing_required");
     if (phase === "sent_back") return refuse("sent_back");
     if (phase === "stock_check") return refuse("stock_check_required");
+    if (phase === "listing_draft") return refuse("listing_required");
   }
 
   const { actor } = who;
@@ -69,13 +73,22 @@ async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalIn
   const action =
     slot === "sourcing" ? `Approved sourcing, spend limit ${sgdLabel(scenario.sourcing.spendLimit)}` : "Approved listing and promo";
   const approval = { approvalId, approverId: actor.id, at: now.toISOString() };
-  if (!(await commitApproval(slot, approval, humanRow(actor, now, action, approvalId)))) return refuse("already_approved");
+  const row = humanRow(actor, now, action, approvalId);
+
+  // Approval 2 publishes: the approval, the storefront audit row, the listed flag and the
+  // stage all go in one request, so the product is never listed without its approval.
+  const published: DemoAuditRow | null = slot === "launch" ? { ...publishAuditRow(scenario), at: now.toISOString() } : null;
+  const extras: CommitExtras = published ? { rows: [published], listed: true, stage: PUBLISHED_STAGE } : {};
+  if (!(await commitApproval(slot, approval, row, extras))) return refuse("already_approved");
 
   return {
     ok: true,
     changed: true,
-    phase: slot === "sourcing" ? "launch_pending" : "launched",
+    phase: slot === "sourcing" ? "stock_check" : "launched",
     approval: { by: actor.name, ...approval, atLabel: clockLabel(approval.at) },
+    published: published
+      ? publishedView(scenario, { approvals: { ...state.approvals, [slot]: approval }, audit: [...state.audit, row, published], listed: true })
+      : null,
   };
 }
 
@@ -99,7 +112,9 @@ export async function sendBackLaunch(scenario: Scenario, input: { approverId: st
   if (!who.ok) return who;
   if (state.approvals.launch) return refuse("already_approved");
   if (!state.approvals.sourcing) return refuse("sourcing_required");
-  if (launchPhase(scenario, state) === "stock_check") return refuse("stock_check_required");
+  const phase = launchPhase(scenario, state);
+  if (phase === "stock_check") return refuse("stock_check_required");
+  if (phase === "listing_draft") return refuse("listing_required");
   const existing = findSendBack(scenario, state);
   if (existing) return { ok: true, changed: false, phase: "sent_back", sentBack: { by: existing.by, atLabel: existing.atLabel } };
 

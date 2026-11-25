@@ -7,12 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import raw from "@/data/demo-scenario.json";
 import { POST as approvalRoute } from "@/app/api/demo/pelita/approval/route";
 import { POST as resetRoute } from "@/app/api/demo/pelita/reset/route";
+import { POST as listingRoute } from "@/app/api/demo/pelita/listing/route";
 import { POST as stockCheckRoute } from "@/app/api/demo/pelita/stock-check/route";
 import { PelitaOpsConsole } from "@/components/pelita-ops/PelitaOpsConsole";
 import { PelitaStockCheck } from "@/components/pelita-ops/PelitaStockCheck";
 import { proxy } from "@/proxy";
 import { approveLaunch, approveSourcing, sendBackLaunch } from "@/lib/demo/approval";
 import { approvalView, launchPhase, launchRail, sgdLabel, type ApprovalView } from "@/lib/demo/approval-view";
+import { listingDraftView } from "@/lib/demo/listing-view";
+import { defaultListingDeps, runListingDraft, sendForApproval, setListingDeps } from "@/lib/demo/listing";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { PRESENTER_COOKIE, signPresenterToken } from "@/lib/demo/presenter";
 import { rejectProposal } from "@/lib/demo/proposal";
@@ -52,6 +55,7 @@ const ENV_KEYS = ["KB_DEMO_TRACK", "VERCEL_ENV", "APPROVAL_SECRET", "UPSTASH_RED
 const ROOT = path.resolve(__dirname, "..");
 const STOCK_URL = "https://x.test/api/demo/pelita/stock-check";
 const APPROVAL_URL = "https://x.test/api/demo/pelita/approval";
+const LISTING_URL = "https://x.test/api/demo/pelita/listing";
 const REDIS_URL = "https://redis.example";
 const FOREIGN = {
   "kb:chat:h:user-1": "7",
@@ -64,6 +68,11 @@ const NEW_FILES = [
   "src/lib/demo/stock-check-client.ts",
   "src/components/pelita-ops/PelitaStockCheck.tsx",
   "src/app/api/demo/pelita/stock-check/route.ts",
+  "src/lib/demo/listing.ts",
+  "src/lib/demo/listing-view.ts",
+  "src/lib/demo/published-view.ts",
+  "src/components/pelita-ops/PelitaListingDraft.tsx",
+  "src/app/api/demo/pelita/listing/route.ts",
 ];
 
 let store: Map<string, string | string[]>;
@@ -148,6 +157,11 @@ function instantDeps(overrides: Partial<StockCheckDeps> = {}): StockCheckDeps & 
 
 const sourcingApproved = () => approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
 const phaseOf = async () => launchPhase(scenario, await getDemoState());
+/** After screen 03, approval 2 opens only once the agent has drafted the listing and a person has sent it for approval. */
+async function draftAndSend(): Promise<void> {
+  await runListingDraft(scenario, { ...defaultListingDeps, wait: async () => undefined });
+  await sendForApproval(scenario, { approverId: first.id }, T2);
+}
 const writes = () => sent.filter(([name]) => name !== "GET" && name !== "LRANGE");
 
 beforeEach(() => {
@@ -391,7 +405,7 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
   it("runs after approval 1: the phase is stock_check and approval 2 is refused until the presenter moves on", async () => {
     expect(await phaseOf()).toBe("sourcing_pending");
     await sourcingApproved();
-    expect(await phaseOf()).toBe("launch_pending");
+    expect(await phaseOf()).toBe("stock_check");
 
     await runStockCheck(scenario, instantDeps());
     expect(await phaseOf()).toBe("stock_check");
@@ -399,7 +413,10 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
     expect(await sendBackLaunch(scenario, { approverId: second.id }, T2)).toEqual({ ok: false, reason: "stock_check_required" });
     expect((await getDemoState()).approvals.launch).toBeUndefined();
 
-    expect(await continueFromStockCheck(scenario)).toMatchObject({ ok: true, changed: true, phase: "launch_pending" });
+    expect(await continueFromStockCheck(scenario)).toMatchObject({ ok: true, changed: true, phase: "listing_draft" });
+    expect(await phaseOf()).toBe("listing_draft");
+    expect(await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2)).toEqual({ ok: false, reason: "listing_required" });
+    await draftAndSend();
     expect(await phaseOf()).toBe("launch_pending");
     expect(await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2)).toMatchObject({ ok: true, phase: "launched" });
   });
@@ -435,13 +452,14 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
 
     await continueFromStockCheck(scenario);
     expect(await continueFromStockCheck(scenario)).toMatchObject({ ok: true, changed: false });
-    expect(await runStockCheck(scenario, instantDeps())).toMatchObject({ ok: true, changed: false, phase: "launch_pending" });
+    expect(await runStockCheck(scenario, instantDeps())).toMatchObject({ ok: true, changed: false, phase: "listing_draft" });
   });
 
   it("refuses after the listing was sent back or approved", async () => {
     await sourcingApproved();
     await runStockCheck(scenario, instantDeps());
     await continueFromStockCheck(scenario);
+    await draftAndSend();
     await sendBackLaunch(scenario, { approverId: second.id }, T2);
     expect(await runStockCheck(scenario, instantDeps())).toEqual({ ok: false, reason: "sent_back" });
     expect(await continueFromStockCheck(scenario)).toEqual({ ok: false, reason: "sent_back" });
@@ -450,6 +468,7 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
     await sourcingApproved();
     await runStockCheck(scenario, instantDeps());
     await continueFromStockCheck(scenario);
+    await draftAndSend();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     expect(await runStockCheck(scenario, instantDeps())).toEqual({ ok: false, reason: "already_launched" });
   });
@@ -539,7 +558,14 @@ describe("the gate: page, proxy and API", () => {
     expect(blocked.status).toBe(409);
     expect(await blocked.json()).toEqual({ error: "stock_check_required" });
 
-    expect(await (await call("continue")).json()).toMatchObject({ ok: true, phase: "launch_pending" });
+    expect(await (await call("continue")).json()).toMatchObject({ ok: true, phase: "listing_draft" });
+    const undrafted = await approve("approve_launch", second.id);
+    expect(undrafted.status).toBe(409);
+    expect(await undrafted.json()).toEqual({ error: "listing_required" });
+    setListingDeps({ wait: async () => undefined });
+    expect((await listingRoute(post(LISTING_URL, { action: "draft" }))).status).toBe(200);
+    expect((await listingRoute(post(LISTING_URL, { action: "send", approverId: first.id }))).status).toBe(200);
+    setListingDeps(null);
     expect((await approve("approve_launch", second.id)).status).toBe(200);
 
     await resetRoute(post("https://x.test/api/demo/pelita/reset", undefined));
@@ -690,7 +716,7 @@ describe("screen 03 renders", () => {
     expect(readFileSync(path.join(ROOT, "src/components/pelita-ops/PelitaStockCheck.tsx"), "utf8")).not.toMatch(/-human|HumanIcon|#1E3A8A/i);
   });
 
-  it("the console shows screen 03 after approval 1 with step 3 outlined, and screen 05 once the presenter moves on", () => {
+  it("the console shows screen 03 after approval 1 with step 3 outlined, screen 04 once the presenter moves on, and screen 05 once the draft is sent", () => {
     const base = { approvals: { sourcing: { approvalId: scenario.sourcing.approvalId, approverId: first.id, at: T1.toISOString() } }, audit: [] };
     const state = { ...base, stage: 3 };
     const html = renderToStaticMarkup(
@@ -705,12 +731,32 @@ describe("screen 03 renders", () => {
     expect(current?.[1]).toContain("Stock check");
     expect(current?.[0]).toContain("border-agent");
 
-    const past = { ...base, stage: 4 };
+    const agentRows = scenario.audit.filter((row) => row.actorKind === "agent");
+    const past = { ...base, stage: 4, audit: agentRows };
+    const draft = renderToStaticMarkup(
+      createElement(PelitaOpsConsole, {
+        view: opsConsoleView(scenario, past),
+        approval: approvalView(scenario, past),
+        stockCheck: stockCheckView(scenario, past),
+        listing: listingDraftView(scenario, past),
+      }),
+    );
+    expect(draft).toContain("data-listing-draft");
+    expect(draft).not.toContain("Approve listing and promo?");
+    expect(draft).not.toContain("data-stock-check");
+
+    const sentOn = { ...past, stage: 5 };
     const later = renderToStaticMarkup(
-      createElement(PelitaOpsConsole, { view: opsConsoleView(scenario, past), approval: approvalView(scenario, past), stockCheck: stockCheckView(scenario, past) }),
+      createElement(PelitaOpsConsole, {
+        view: opsConsoleView(scenario, sentOn),
+        approval: approvalView(scenario, sentOn),
+        stockCheck: stockCheckView(scenario, sentOn),
+        listing: listingDraftView(scenario, sentOn),
+      }),
     );
     expect(later).toContain("Approve listing and promo?");
     expect(later).not.toContain("data-stock-check");
+    expect(later).not.toContain("data-listing-draft");
   });
 });
 

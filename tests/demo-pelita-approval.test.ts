@@ -18,11 +18,14 @@ import {
   type ApprovalView,
   type LaunchPhase,
 } from "@/lib/demo/approval-view";
+import { defaultListingDeps, runListingDraft, sendForApproval } from "@/lib/demo/listing";
 import { opsConsoleView, type OpsConsoleView } from "@/lib/demo/ops-console";
 import { PRESENTER_COOKIE, signPresenterToken } from "@/lib/demo/presenter";
 import { rejectProposal } from "@/lib/demo/proposal";
 import { loadScenario, parseScenario } from "@/lib/demo/scenario";
 import { STATE_KEYS, STATE_KEY_NAMES, getDemoState, resetDemo } from "@/lib/demo/state";
+import { continueFromStockCheck, defaultStockCheckDeps, runStockCheck } from "@/lib/demo/stock-check";
+import { CHECK_ACTION } from "@/lib/demo/stock-check-view";
 
 const cookieJar: { value: string | undefined } = { value: undefined };
 
@@ -55,6 +58,12 @@ const NEW_FILES = [
   "src/components/pelita-ops/PelitaApprovalModal.tsx",
   "src/components/pelita-ops/PelitaLaunchApproval.tsx",
   "src/app/api/demo/pelita/approval/route.ts",
+  "src/lib/demo/listing.ts",
+  "src/lib/demo/listing-view.ts",
+  "src/lib/demo/listing-client.ts",
+  "src/lib/demo/published-view.ts",
+  "src/components/pelita-ops/PelitaListingDraft.tsx",
+  "src/app/api/demo/pelita/listing/route.ts",
 ];
 
 let store: Map<string, string | string[]>;
@@ -118,6 +127,23 @@ const [first, second] = [...scenario.approvers].sort((a, b) => a.slot - b.slot);
 const T1 = new Date("2026-11-25T01:03:35.000Z");
 const T2 = new Date("2026-11-25T01:09:05.000Z");
 const phaseOf = async () => launchPhase(scenario, await getDemoState());
+const T_SEND = new Date("2026-11-25T01:06:50.000Z");
+const instant = async () => undefined;
+
+/**
+ * Approval 2 opens only once the agent has checked stock, drafted the listing and a person has
+ * sent that draft for approval, so the tests that approve or send back first walk that path
+ * through the real code with instant delays.
+ */
+async function reachApproval2(): Promise<void> {
+  await runStockCheck(scenario, { ...defaultStockCheckDeps, wait: instant });
+  await continueFromStockCheck(scenario);
+  await runListingDraft(scenario, { ...defaultListingDeps, wait: instant });
+  await sendForApproval(scenario, { approverId: first.id }, T_SEND);
+}
+
+/** The agent's own fixture rows: the stock check, the purchase order, the claims check and the listing draft. */
+const agentRows = scenario.audit.filter((row) => row.actorKind === "agent");
 
 beforeEach(() => {
   for (const name of ENV_KEYS) delete process.env[name];
@@ -140,12 +166,13 @@ describe("two-person approval state transitions", () => {
     expect((await getDemoState()).approvals).toEqual({});
   });
 
-  it("approval 1: records the sourcing approval and one human audit row, then waits for approval 2", async () => {
+  it("approval 1: records the sourcing approval and one human audit row, then hands over to the stock check", async () => {
     const result = await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
     expect(result).toMatchObject({
       ok: true,
       changed: true,
-      phase: "launch_pending",
+      phase: "stock_check",
+      published: null,
       approval: { by: first.name, approverId: first.id, approvalId: scenario.sourcing.approvalId, atLabel: "09:03" },
     });
     const state = await getDemoState();
@@ -161,11 +188,12 @@ describe("two-person approval state transitions", () => {
         ref: scenario.sourcing.approvalId,
       },
     ]);
-    expect(await phaseOf()).toBe("launch_pending");
+    expect(await phaseOf()).toBe("stock_check");
   });
 
   it("approval 2: a different person approves the listing and promo, with a second audit row", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    await reachApproval2();
     const result = await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     expect(result).toMatchObject({
       ok: true,
@@ -176,8 +204,15 @@ describe("two-person approval state transitions", () => {
     const state = await getDemoState();
     expect(state.approvals.launch).toEqual({ approvalId: scenario.launchApproval.approvalId, approverId: second.id, at: T2.toISOString() });
     expect(state.approvals.sourcing?.approverId).not.toBe(state.approvals.launch?.approverId);
-    expect(state.audit.map((row) => row.ref)).toEqual([scenario.sourcing.approvalId, scenario.launchApproval.approvalId]);
-    expect(state.audit[1]).toMatchObject({ actorKind: "human", actor: `${second.name} · ${second.role}`, action: "Approved listing and promo" });
+    expect(state.audit.map((row) => row.ref).filter((ref) => ref?.startsWith("APR-"))).toEqual([
+      scenario.sourcing.approvalId,
+      scenario.launchApproval.approvalId,
+    ]);
+    expect(state.audit.find((row) => row.ref === scenario.launchApproval.approvalId)).toMatchObject({
+      actorKind: "human",
+      actor: `${second.name} · ${second.role}`,
+      action: "Approved listing and promo",
+    });
     expect(await phaseOf()).toBe("launched");
   });
 
@@ -190,11 +225,12 @@ describe("two-person approval state transitions", () => {
     expect(await sendBackLaunch(scenario, { approverId: first.id }, T2)).toEqual({ ok: false, reason: "same_person" });
 
     expect(await getDemoState()).toEqual(before);
-    expect(await phaseOf()).toBe("launch_pending");
+    expect(await phaseOf()).toBe("stock_check");
   });
 
   it("refuses a second approval from the launch approver after the launch is approved", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    await reachApproval2();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     const before = structuredClone(await getDemoState());
     expect(await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2)).toEqual({ ok: false, reason: "already_approved" });
@@ -212,6 +248,7 @@ describe("two-person approval state transitions", () => {
     expect(await getDemoState()).toEqual({ stage: 0, approvals: {}, audit: [], listed: false });
 
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    await reachApproval2();
     expect(await approveLaunch(scenario, { approverId: second.id, confirmed: false }, T2)).toEqual({ ok: false, reason: "confirmation_required" });
     expect((await getDemoState()).approvals.launch).toBeUndefined();
   });
@@ -232,11 +269,13 @@ describe("two-person approval state transitions", () => {
 
   it("send back (screen 05): one audit row, blocks approval 2, and repeats as a no-op", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    await reachApproval2();
+    const rowsBefore = (await getDemoState()).audit.length;
     const result = await sendBackLaunch(scenario, { approverId: second.id }, T2);
     expect(result).toEqual({ ok: true, changed: true, phase: "sent_back", sentBack: { by: second.name, atLabel: "09:09" } });
     const state = await getDemoState();
-    expect(state.audit).toHaveLength(2);
-    expect(state.audit[1]).toMatchObject({
+    expect(state.audit).toHaveLength(rowsBefore + 1);
+    expect(state.audit[rowsBefore]).toMatchObject({
       actorKind: "human",
       actor: `${second.name} · ${second.role}`,
       action: `Sent back listing and promo: ${scenario.listing.title}`,
@@ -245,11 +284,12 @@ describe("two-person approval state transitions", () => {
     expect(launchPhase(scenario, state)).toBe("sent_back");
     expect(await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2)).toEqual({ ok: false, reason: "sent_back" });
     expect(await sendBackLaunch(scenario, { approverId: second.id }, T2)).toMatchObject({ ok: true, changed: false });
-    expect((await getDemoState()).audit).toHaveLength(2);
+    expect((await getDemoState()).audit).toHaveLength(rowsBefore + 1);
   });
 
   it("reset clears approvals, audit and send back, leaves foreign keys alone, and the flow can run again", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    await reachApproval2();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     expect(await phaseOf()).toBe("launched");
 
@@ -260,6 +300,7 @@ describe("two-person approval state transitions", () => {
     for (const [name, value] of Object.entries(FOREIGN)) expect(store.get(name)).toBe(value);
 
     expect(await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1)).toMatchObject({ ok: true, changed: true });
+    await reachApproval2();
     await sendBackLaunch(scenario, { approverId: second.id }, T2);
     await resetDemo();
     expect(await phaseOf()).toBe("sourcing_pending");
@@ -270,6 +311,7 @@ describe("two-person approval state transitions", () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
     const writes = sent.filter((command) => command[0] === "SET" || command[0] === "RPUSH");
     expect(writes.map((command) => command[0])).toEqual(["SET", "RPUSH"]);
+    await reachApproval2();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     await sendBackLaunch(scenario, { approverId: second.id }, T2);
     await resetDemo();
@@ -290,9 +332,26 @@ describe("approval phases and rail", () => {
     const row = (ref: string, action: string) => ({ at: T1.toISOString(), actorKind: "human" as const, actor: "A", action, source: "Ops console", ref });
     expect(launchPhase(scenario, base)).toBe("sourcing_pending");
     expect(launchPhase(scenario, { ...base, audit: [row(scenario.gap.id, "Rejected proposal: x")] })).toBe("rejected");
-    expect(launchPhase(scenario, { approvals: { sourcing }, audit: [] })).toBe("launch_pending");
+    expect(launchPhase(scenario, { approvals: { sourcing }, audit: [] })).toBe("stock_check");
     expect(launchPhase(scenario, { approvals: { sourcing }, audit: [row(scenario.listing.id, "Sent back listing and promo: x")] })).toBe("sent_back");
     expect(launchPhase(scenario, { approvals: { sourcing, launch: sourcing }, audit: [] })).toBe("launched");
+  });
+
+  it("opens screen 05 only for a real listing draft that was sent for approval", () => {
+    const sourcing = { approvalId: "x", approverId: first.id, at: T1.toISOString() };
+    const stockRows = agentRows.filter((r) => r.ref === scenario.purchaseOrder.id || r.action === CHECK_ACTION);
+    const draftRows = agentRows.filter((r) => r.ref === scenario.claimsCheck.id || r.ref === scenario.listing.id);
+    const at = (stage: number, audit: typeof agentRows) => launchPhase(scenario, { stage, approvals: { sourcing }, audit });
+    expect(stockRows).toHaveLength(2);
+    expect(draftRows).toHaveLength(2);
+    expect(at(3, stockRows)).toBe("stock_check");
+    expect(at(4, [])).toBe("stock_check");
+    expect(at(4, stockRows)).toBe("listing_draft");
+    expect(at(4, [...stockRows, draftRows[0]])).toBe("listing_draft");
+    expect(at(5, stockRows)).toBe("listing_draft");
+    expect(at(4, [...stockRows, ...draftRows])).toBe("listing_draft");
+    expect(at(5, [...stockRows, ...draftRows])).toBe("launch_pending");
+    expect(at(5, draftRows)).toBe("stock_check");
   });
 
   it("outlines step 2 under the modal, step 5 for the launch approval and Live once approved", () => {
@@ -300,6 +359,7 @@ describe("approval phases and rail", () => {
     expect(current("sourcing_pending")).toMatchObject({ n: 1, kind: "agent" });
     expect(current("sourcing_pending", true)).toMatchObject({ n: 2, label: "Approve sourcing", kind: "human" });
     expect(current("launch_pending")).toMatchObject({ n: 5, label: "Approve launch", kind: "human" });
+    expect(current("listing_draft")).toMatchObject({ n: 4, label: "Draft listing", kind: "agent" });
     expect(current("sent_back")).toMatchObject({ n: 5 });
     expect(current("launched")).toMatchObject({ n: 6, label: "Live" });
     expect(launchRail("launch_pending").filter((s) => s.state === "done")).toHaveLength(4);
@@ -351,7 +411,11 @@ describe("approval view (screens 02 and 05)", () => {
         draft.promo.marginPct = 10;
         draft.approvers[1].name = "Someone Else";
       }),
-      { approvals: { sourcing: { approvalId: "x", approverId: first.id, at: T1.toISOString() } }, audit: [] },
+      {
+        stage: 5,
+        approvals: { sourcing: { approvalId: "x", approverId: first.id, at: T1.toISOString() } },
+        audit: agentRows,
+      },
     );
     expect(edited.sourcing.summary[3].value).toBe("S$12,000");
     expect(edited.launch.diff.find((r) => r.label === "Launch promo")?.value).toContain("2 for S$54.90");
@@ -483,8 +547,12 @@ describe("approval screens render", () => {
     expect(withFlow).toContain(`Switch to ${second.name}`);
   });
 
-  it("console renders screen 05 once sourcing is approved, with approver 2 signed in", () => {
-    const state = { approvals: { sourcing: { approvalId: scenario.sourcing.approvalId, approverId: first.id, at: T1.toISOString() } }, audit: [] };
+  it("console renders screen 05 once a drafted listing is sent for approval, with approver 2 signed in", () => {
+    const state = {
+      stage: 5,
+      approvals: { sourcing: { approvalId: scenario.sourcing.approvalId, approverId: first.id, at: T1.toISOString() } },
+      audit: agentRows,
+    };
     const html = renderToStaticMarkup(
       createElement(PelitaOpsConsole, { view: opsConsoleView(scenario, state), approval: approvalView(scenario, state) }),
     );
@@ -507,6 +575,10 @@ describe("/demo/pelita/ops page", () => {
     expect(props.approval.phase).toBe("sourcing_pending");
 
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
+    element = await Page();
+    props = (element as ReactElement<{ view: OpsConsoleView; approval: ApprovalView }>).props;
+    expect(props.approval.phase).toBe("stock_check");
+    await reachApproval2();
     element = await Page();
     props = (element as ReactElement<{ view: OpsConsoleView; approval: ApprovalView }>).props;
     expect(props.approval.phase).toBe("launch_pending");
@@ -561,22 +633,38 @@ describe("approval API", () => {
     const one = await call("approve_sourcing", first.id, true);
     expect(one.status).toBe(200);
     expect(one.headers.get("cache-control")).toBe("private, no-store");
-    expect(await one.json()).toMatchObject({ isDemo: true, ok: true, changed: true, phase: "launch_pending", approval: { by: first.name } });
+    expect(await one.json()).toMatchObject({ isDemo: true, ok: true, changed: true, phase: "stock_check", approval: { by: first.name } });
     expect((await call("approve_sourcing", first.id, true)).status).toBe(409);
 
     const same = await call("approve_launch", first.id, true);
     expect(same.status).toBe(403);
     expect(await same.json()).toEqual({ error: "same_person" });
 
+    const early = await call("approve_launch", second.id, true);
+    expect(early.status).toBe(409);
+    expect(await early.json()).toEqual({ error: "stock_check_required" });
+    await runStockCheck(scenario, { ...defaultStockCheckDeps, wait: instant });
+    await continueFromStockCheck(scenario);
+    const undrafted = await call("approve_launch", second.id, true);
+    expect(undrafted.status).toBe(409);
+    expect(await undrafted.json()).toEqual({ error: "listing_required" });
+    await runListingDraft(scenario, { ...defaultListingDeps, wait: instant });
+    await sendForApproval(scenario, { approverId: first.id }, T_SEND);
+
     const two = await call("approve_launch", second.id, true);
     expect(two.status).toBe(200);
-    expect(await two.json()).toMatchObject({ phase: "launched", approval: { by: second.name, approvalId: scenario.launchApproval.approvalId } });
-    expect((await getDemoState()).audit).toHaveLength(2);
+    expect(await two.json()).toMatchObject({
+      phase: "launched",
+      approval: { by: second.name, approvalId: scenario.launchApproval.approvalId },
+      published: { approver: second.name, approvalId: scenario.launchApproval.approvalId },
+    });
+    expect((await getDemoState()).listed).toBe(true);
 
     expect((await resetRoute(post("https://x.test/api/demo/pelita/reset", undefined))).status).toBe(200);
     expect(await phaseOf()).toBe("sourcing_pending");
     expect((await call("send_back", second.id)).status).toBe(409);
     await call("approve_sourcing", first.id, true);
+    await reachApproval2();
     const back = await call("send_back", second.id);
     expect(await back.json()).toMatchObject({ ok: true, phase: "sent_back", sentBack: { by: second.name } });
   });

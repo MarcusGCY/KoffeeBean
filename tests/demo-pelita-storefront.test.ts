@@ -258,6 +258,11 @@ describe("demand-gap figures come from the fixture in one place", () => {
       "src/lib/demo/approval-client.ts",
       ...sourceFiles("src/components/pelita-ops"),
       "src/app/api/demo/pelita/approval/route.ts",
+      "src/lib/demo/listing.ts",
+      "src/lib/demo/listing-view.ts",
+      "src/lib/demo/listing-client.ts",
+      "src/lib/demo/published-view.ts",
+      "src/app/api/demo/pelita/listing/route.ts",
     ];
     for (const file of files) {
       const text = read(file);

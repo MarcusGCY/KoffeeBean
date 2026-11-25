@@ -3,13 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import { launchRail, type ApprovalView, type LaunchPhase, type RecordedApproval } from "@/lib/demo/approval-view";
 import { approveRequest, refusalMessage, sendBackRequest } from "@/lib/demo/approval-client";
+import { editListingRequest, listingMessage, runListingDraftRequest, sendForApprovalRequest } from "@/lib/demo/listing-client";
+import type { ListingDraftView } from "@/lib/demo/listing-view";
 import { formatCount, type OpsConsoleView, type ProposalStatus, type RailStep, type Rejection } from "@/lib/demo/ops-console";
 import { rejectProposalRequest, resetDemoRequest } from "@/lib/demo/ops-client";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
+import type { PublishedView } from "@/lib/demo/published-view";
 import { continueStockCheckRequest, runStockCheckRequest, stockCheckMessage } from "@/lib/demo/stock-check-client";
 import type { StockCheckView } from "@/lib/demo/stock-check-view";
 import { PelitaMark, SparkleIcon, TickIcon } from "../pelita/PelitaIcons";
 import { PelitaApprovalModal } from "./PelitaApprovalModal";
+import { PelitaListingDraft, type ListingDraftStatus } from "./PelitaListingDraft";
 import { PelitaLaunchApproval } from "./PelitaLaunchApproval";
 import { PelitaStockCheck, type StockCheckStatus } from "./PelitaStockCheck";
 
@@ -94,16 +98,20 @@ function Sparkline({ view }: { view: OpsConsoleView }) {
  * approval over it: screen 02 (a modal) and screen 05. Violet is the agent, navy is
  * a human decision. Without `approval` the Approve button stays off. With
  * `stockCheck`, approving sourcing hands over to the agent's supplier and ERP check
- * (screen 03) before the launch approval.
+ * (screen 03). With `listing`, the agent then drafts the listing, promo and claims
+ * (screen 04), a human can edit it and send it for approval, and only that opens the
+ * launch approval, whose "Approve and publish" really publishes (screen 06 is the storefront).
  */
 export function PelitaOpsConsole({
   view,
   approval,
   stockCheck,
+  listing,
 }: {
   view: OpsConsoleView;
   approval?: ApprovalView;
   stockCheck?: StockCheckView;
+  listing?: ListingDraftView;
 }) {
   const [status, setStatus] = useState<ProposalStatus>(view.status);
   const [rejection, setRejection] = useState<Rejection | null>(view.rejection);
@@ -118,6 +126,11 @@ export function PelitaOpsConsole({
   const [stock, setStock] = useState<StockCheckView | null>(stockCheck ?? null);
   const [checkStatus, setCheckStatus] = useState<StockCheckStatus>(stockCheck?.complete ? "done" : "running");
   const checkStarted = useRef(false);
+  const [draft, setDraft] = useState<ListingDraftView | null>(listing ?? null);
+  const [draftStatus, setDraftStatus] = useState<ListingDraftStatus>(listing?.complete ? "done" : "running");
+  const [launchData, setLaunchData] = useState(approval?.launch ?? null);
+  const [published, setPublished] = useState<PublishedView | null>(approval?.published ?? null);
+  const draftStarted = useRef(false);
   const { gap, proposal } = view;
 
   const actor = approval?.approvers.find((a) => a.id === actingId) ?? approval?.approvers[0];
@@ -148,6 +161,26 @@ export function PelitaOpsConsole({
     void runCheck();
   }, [phase, stock]);
 
+  async function runDraft() {
+    setDraftStatus("running");
+    setError(null);
+    try {
+      const result = await runListingDraftRequest();
+      setDraft(result.draft);
+      setLaunchData(result.launch);
+      setDraftStatus("done");
+    } catch (failure) {
+      setDraftStatus("failed");
+      setError(listingMessage(failure));
+    }
+  }
+
+  useEffect(() => {
+    if (phase !== "listing_draft" || !draft || draft.complete || draftStarted.current) return;
+    draftStarted.current = true;
+    void runDraft();
+  }, [phase, draft]);
+
   async function continueFromCheck() {
     setBusy(true);
     setError(null);
@@ -155,9 +188,42 @@ export function PelitaOpsConsole({
       const result = await continueStockCheckRequest();
       setStock(result.check);
       setPhase(result.phase);
-      switchToSecondApprover();
     } catch (failure) {
       setError(stockCheckMessage(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function editDraft(description: string): Promise<boolean> {
+    if (!actor) return false;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await editListingRequest(actor.id, description);
+      setDraft(result.draft);
+      setLaunchData(result.launch);
+      return true;
+    } catch (failure) {
+      setError(listingMessage(failure));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendDraft() {
+    if (!actor) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await sendForApprovalRequest(actor.id);
+      setDraft(result.draft);
+      setLaunchData(result.launch);
+      setPhase(result.phase);
+      switchToSecondApprover();
+    } catch (failure) {
+      setError(listingMessage(failure));
     } finally {
       setBusy(false);
     }
@@ -175,6 +241,7 @@ export function PelitaOpsConsole({
         if (!stock) switchToSecondApprover();
       } else {
         setLaunch(result.approval);
+        setPublished(result.published);
       }
       if (slot === "sourcing" && stock) {
         checkStarted.current = true;
@@ -233,8 +300,13 @@ export function PelitaOpsConsole({
         setSentBack(null);
         setModalOpen(false);
         checkStarted.current = false;
+        draftStarted.current = false;
         setCheckStatus("running");
+        setDraftStatus("running");
+        setPublished(null);
+        setLaunchData(null);
         setStock((current) => (current ? { ...current, complete: false, doneLabel: null, canContinue: false } : current));
+        setDraft((current) => (current ? { ...current, complete: false, doneLabel: null, canEdit: false, canSend: false } : current));
       }
     } catch {
       setError("Could not reset the demo. Try again.");
@@ -246,6 +318,7 @@ export function PelitaOpsConsole({
   const pending = status === "new";
   const steps: RailStep[] = phase ? launchRail(phase, modalOpen, stock?.complete ?? true) : view.steps;
   const stockScreen = phase === "stock_check" && stock !== null;
+  const draftScreen = phase === "listing_draft" && draft !== null;
   const launchScreen = phase === "launch_pending" || phase === "sent_back" || phase === "launched";
 
   return (
@@ -311,15 +384,26 @@ export function PelitaOpsConsole({
             onRetry={() => void runCheck()}
             onContinue={continueFromCheck}
           />
+        ) : approval && draftScreen && draft ? (
+          <PelitaListingDraft
+            data={draft}
+            status={draftStatus}
+            error={error}
+            busy={busy}
+            onRetry={() => void runDraft()}
+            onEdit={editDraft}
+            onSend={sendDraft}
+          />
         ) : approval && launchScreen && actor ? (
           <PelitaLaunchApproval
             key={phase}
-            data={approval.launch}
+            data={launchData ?? approval.launch}
             phase={phase}
             actor={actor}
             sourcing={sourcing}
             launch={launch}
             sentBack={sentBack}
+            published={published}
             busy={busy}
             error={error}
             onApprove={() => approve("launch")}
@@ -435,7 +519,7 @@ export function PelitaOpsConsole({
           </section>
         )}
 
-        {error && !modalOpen && !launchScreen && !stockScreen && (
+        {error && !modalOpen && !launchScreen && !stockScreen && !draftScreen && (
           <p role="alert" className="mt-3 text-right text-base font-bold text-danger">
             {error}
           </p>

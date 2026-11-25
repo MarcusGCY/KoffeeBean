@@ -15,6 +15,7 @@ const REFUSAL_STATUS: Record<ApprovalRefusal, number> = {
   proposal_rejected: 409,
   sourcing_required: 409,
   stock_check_required: 409,
+  listing_required: 409,
   sent_back: 409,
 };
 

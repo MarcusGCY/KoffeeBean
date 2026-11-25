@@ -77,6 +77,16 @@ export function TickIcon({ size = 16 }: { size?: number }) {
   );
 }
 
+/** Green circle with a white tick: a system step, a passed check, or a listing that is live. */
+export function SuccessIcon({ size = 28 }: { size?: number }) {
+  return (
+    <svg className="flex-none text-success" width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="12" fill="currentColor" />
+      <path d="M7 12.5 L10.5 16 L17 8.5" stroke="#fff" strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** Pelita mark and wordmark for the white ops header (docs/demo-pelita/logo.svg). */
 export function PelitaMark() {
   return (

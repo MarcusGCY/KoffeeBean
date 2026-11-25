@@ -23,8 +23,12 @@ export const MAX_STAGE = 7;
 
 /** `stage` while the agent is on screen 03: after approval 1, before the listing draft. */
 export const STOCK_CHECK_STAGE = 3;
-/** `stage` once the presenter has moved past screen 03 on to the listing draft. */
+/** `stage` once the presenter has moved past screen 03 on to the listing draft (screen 04). */
 export const PAST_STOCK_CHECK_STAGE = 4;
+/** `stage` once the drafted listing has been sent for approval (screen 05). */
+export const LAUNCH_APPROVAL_STAGE = 5;
+/** `stage` once approval 2 has published the listing (screen 06). */
+export const PUBLISHED_STAGE = 6;
 
 export type ApprovalSlot = "sourcing" | "launch";
 
@@ -138,20 +142,37 @@ export async function recordApproval(slot: ApprovalSlot, approval: DemoApproval)
   await run([["SET", key("approvals"), JSON.stringify(next)]]);
 }
 
+/** What approval 2 changes besides the approval itself: the publish audit rows, the listed flag and the stage. */
+export type CommitExtras = { rows?: DemoAuditRow[]; listed?: boolean; stage?: number };
+
 /**
- * Records one approval and its audit row in a single request. Returns false and
- * writes nothing when the slot already holds an approval. The check is made just
- * before the write: the shared approvals key has no compare-and-set on the fixed
- * command list, so two truly simultaneous requests could still both pass.
+ * Records one approval and its audit row in a single request, together with any
+ * `extras` (approval 2 publishes in the same request, so a reader never sees an
+ * approval without its listing). Returns false and writes nothing when the slot
+ * already holds an approval. The check is made just before the write: the shared
+ * approvals key has no compare-and-set on the fixed command list, so two truly
+ * simultaneous requests could still both pass.
  */
-export async function commitApproval(slot: ApprovalSlot, approval: DemoApproval, row: DemoAuditRow): Promise<boolean> {
+export async function commitApproval(
+  slot: ApprovalSlot,
+  approval: DemoApproval,
+  row: DemoAuditRow,
+  extras: CommitExtras = {},
+): Promise<boolean> {
   const [current] = await run([["GET", key("approvals")]]);
   const approvals = parseApprovals(current);
   if (approvals[slot]) return false;
-  await run([
+  const commands: Command[] = [
     ["SET", key("approvals"), JSON.stringify({ ...approvals, [slot]: approval })],
     ["RPUSH", key("audit"), JSON.stringify(row)],
-  ]);
+    ...(extras.rows ?? []).map((extra): Command => ["RPUSH", key("audit"), JSON.stringify(extra)]),
+  ];
+  if (extras.listed !== undefined) commands.push(["SET", key("listed"), extras.listed ? "1" : "0"]);
+  if (extras.stage !== undefined) {
+    if (!Number.isInteger(extras.stage) || extras.stage < MIN_STAGE || extras.stage > MAX_STAGE) throw new Error("Demo stage out of range");
+    commands.push(["SET", key("stage"), String(extras.stage)]);
+  }
+  await run(commands);
   return true;
 }
 
@@ -163,6 +184,12 @@ export async function appendAudit(row: DemoAuditRow): Promise<void> {
 export async function appendAuditRows(rows: DemoAuditRow[]): Promise<void> {
   if (rows.length === 0) return;
   await run(rows.map((row): Command => ["RPUSH", key("audit"), JSON.stringify(row)]));
+}
+
+/** Appends audit rows and moves the stage in one request, so a reader never sees the rows without the stage. */
+export async function appendAuditRowsAndSetStage(rows: DemoAuditRow[], stage: number): Promise<void> {
+  if (!Number.isInteger(stage) || stage < MIN_STAGE || stage > MAX_STAGE) throw new Error("Demo stage out of range");
+  await run([...rows.map((row): Command => ["RPUSH", key("audit"), JSON.stringify(row)]), ["SET", key("stage"), String(stage)]]);
 }
 
 /**

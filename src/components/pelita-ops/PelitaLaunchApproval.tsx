@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import type { ApprovalView, ApproverView, LaunchPhase, RecordedApproval } from "@/lib/demo/approval-view";
-import { HumanIcon, TickIcon } from "../pelita/PelitaIcons";
+import { STOREFRONT_LINK_LABEL, STOREFRONT_PATH, type PublishedView } from "@/lib/demo/published-view";
+import { HumanIcon, SuccessIcon, TickIcon } from "../pelita/PelitaIcons";
 import { ConfirmCheckbox } from "./PelitaApprovalModal";
 
 function SourcingLine({ sourcing, className = "" }: { sourcing: RecordedApproval; className?: string }) {
@@ -25,6 +27,7 @@ export function PelitaLaunchApproval({
   sourcing,
   launch,
   sentBack,
+  published,
   busy,
   error,
   onApprove,
@@ -36,6 +39,7 @@ export function PelitaLaunchApproval({
   sourcing: RecordedApproval | null;
   launch: RecordedApproval | null;
   sentBack: { by: string; atLabel: string } | null;
+  published?: PublishedView | null;
   busy: boolean;
   error: string | null;
   onApprove: () => void;
@@ -44,6 +48,36 @@ export function PelitaLaunchApproval({
   const [checked, setChecked] = useState(false);
   const samePerson = sourcing !== null && sourcing.approverId === actor.id;
   const allowed = phase === "launch_pending" && actor.slot === data.approver.slot && !samePerson;
+
+  if (phase === "launched" && published) {
+    return (
+      <section aria-labelledby="launch-outcome" data-launch-published className="mx-auto mt-2 max-w-[1180px]">
+        {sourcing && <SourcingLine sourcing={sourcing} className="mb-4" />}
+        <div className="rounded-xl border-2 border-[#9ad3b8] bg-surface px-[52px] py-9">
+          <div className="flex items-center gap-3 text-base font-extrabold tracking-[0.2px] text-success-text">
+            <SuccessIcon size={32} />
+            {data.kicker}
+          </div>
+          <h2 id="launch-outcome" className="mt-2 text-h1 font-extrabold tracking-[-0.6px]">
+            {published.title}
+          </h2>
+          <p className="mt-1 text-lg text-ink-2">{published.line1}</p>
+          <p className="text-lg text-ink-2">{published.line2}</p>
+          <p className="mt-3 inline-flex rounded-full bg-success-50 px-3.5 py-1 text-base font-bold text-success-text">
+            {published.liveIn} · {published.liveInDetail}
+          </p>
+          <div className="mt-6">
+            <Link
+              href={STOREFRONT_PATH}
+              className="inline-flex h-14 items-center rounded-md bg-primary px-7 text-lg font-bold text-white"
+            >
+              {STOREFRONT_LINK_LABEL}
+            </Link>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   if (phase === "sent_back" || phase === "launched") {
     const sent = phase === "sent_back";
@@ -60,7 +94,7 @@ export function PelitaLaunchApproval({
           <p className="mt-2 text-lg text-ink-2">
             {sent
               ? "The agent will revise the listing and promo. Logged to the audit trail."
-              : `${launch?.approvalId ?? ""}${launch?.atLabel ? ` · ${launch.atLabel}` : ""}. Publishing to shoppers comes in the next step.`}
+              : `${launch?.approvalId ?? ""}${launch?.atLabel ? ` · ${launch.atLabel}` : ""}.`}
           </p>
         </div>
       </section>
@@ -100,7 +134,18 @@ export function PelitaLaunchApproval({
                   +
                 </span>
                 <dt className="w-[170px] flex-none font-semibold text-ink-3">{row.label}</dt>
-                <dd className="text-lg font-bold">{row.value}</dd>
+                <dd className="text-lg font-bold">
+                  {row.old !== undefined && (
+                    <>
+                      <span data-old-value className="block text-base font-semibold text-ink-3 line-through">
+                        {row.old}
+                      </span>
+                      <span aria-hidden="true">→ </span>
+                      <span className="sr-only">changed to </span>
+                    </>
+                  )}
+                  {row.value}
+                </dd>
               </div>
             ))}
           </dl>

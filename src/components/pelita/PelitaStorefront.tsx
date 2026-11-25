@@ -3,10 +3,10 @@
 import { useMemo, useState } from "react";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
-import { CartIcon, PelitaMarkOnRose, SearchIcon, UserIcon } from "./PelitaIcons";
+import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
 import { PelitaProductCard } from "./PelitaProductCard";
 
-type Browse = { kind: "deals" } | { kind: "all" } | { kind: "category"; name: string };
+type Browse = { kind: "deals" } | { kind: "all" } | { kind: "category"; name: string } | { kind: "launched" };
 
 function Art({ name, className }: { name: keyof typeof PELITA_ART; className: string }) {
   return <div className={`${className} [&>svg]:h-full [&>svg]:w-full`} dangerouslySetInnerHTML={{ __html: PELITA_ART[name] }} />;
@@ -29,9 +29,21 @@ function Dotted({ items }: { items: string[] }) {
   );
 }
 
-/** Screen 00: the storefront before the demo story starts. The cart lives in this component's state only. */
+function resultsLabel(count: number): string {
+  return `${count} ${count === 1 ? "result" : "results"}`;
+}
+
+/**
+ * Screen 00: the storefront before the demo story starts. Once the launched product is
+ * listed (`view.published`), it opens on screen 06 instead: the product's category with
+ * the new card first, the "live" toast and the search proof. The cart lives in this
+ * component's state only.
+ */
 export function PelitaStorefront({ view }: { view: StorefrontView }) {
-  const [browse, setBrowse] = useState<Browse>({ kind: "deals" });
+  const published = view.published;
+  const [browse, setBrowse] = useState<Browse>(published ? { kind: "launched" } : { kind: "deals" });
+  const [chip, setChip] = useState(0);
+  const [toastOpen, setToastOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
 
@@ -46,11 +58,19 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
   };
 
   const searching = query.trim() !== "";
+  const launchedView = published !== null && !searching && browse.kind === "launched";
   let heading = "Deals of the week";
   let products = view.deals.products;
   if (searching) {
     heading = "Search results";
     products = searchCatalogue(view.catalogue, query);
+  } else if (published && browse.kind === "launched") {
+    const picked = published.chips[chip];
+    heading = published.category;
+    products =
+      picked?.kind === "group"
+        ? view.catalogue.filter((p) => p.subcategory === picked.label)
+        : published.productIds.flatMap((id) => view.catalogue.filter((p) => p.id === id));
   } else if (browse.kind === "all") {
     heading = "All products";
     products = view.catalogue;
@@ -59,6 +79,7 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
     products = view.catalogue.filter((p) => p.category === browse.name);
   }
   const showCountdown = !searching && browse.kind === "deals";
+  const showPromoRow = !launchedView;
 
   const navPill = "rounded-full px-3 py-2 text-base font-bold text-ink";
 
@@ -124,7 +145,9 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
           Offers
         </button>
         {view.categories.map((name) => {
-          const active = !searching && browse.kind === "category" && browse.name === name;
+          const isPublishedCategory = published !== null && name === published.category;
+          const active =
+            !searching && ((browse.kind === "category" && browse.name === name) || (browse.kind === "launched" && isPublishedCategory));
           return (
             <button
               key={name}
@@ -132,7 +155,8 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
               aria-current={active ? "page" : undefined}
               onClick={() => {
                 setQuery("");
-                setBrowse({ kind: "category", name });
+                setChip(0);
+                setBrowse(isPublishedCategory ? { kind: "launched" } : { kind: "category", name });
               }}
               className={`${navPill} ${active ? "bg-primary-50 text-primary-dark" : ""}`}
             >
@@ -143,6 +167,7 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
       </nav>
 
       <main className="flex flex-1 flex-col px-14 pb-10 pt-5">
+        {showPromoRow && (
         <div className="grid grid-cols-[1fr_400px] gap-5">
           <section
             aria-label="Promotion"
@@ -183,10 +208,19 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
             </div>
           </section>
         </div>
+        )}
 
-        <section className="mt-[22px]" aria-labelledby="pelita-products-heading">
+        <section className={showPromoRow ? "mt-[22px]" : "mt-0.5"} aria-labelledby="pelita-products-heading">
+          {launchedView && published && (
+            <p className="text-base font-semibold text-ink-3" data-breadcrumb>
+              {published.breadcrumb.join(" › ")}
+            </p>
+          )}
           <div className="flex items-center gap-4">
-            <h2 id="pelita-products-heading" className="text-h2 font-extrabold tracking-[-0.3px]">
+            <h2
+              id="pelita-products-heading"
+              className={launchedView ? "text-h1 font-extrabold tracking-[-1px]" : "text-h2 font-extrabold tracking-[-0.3px]"}
+            >
               {heading}
             </h2>
             {showCountdown && view.deals.countdown.parts.length > 0 && (
@@ -209,19 +243,96 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
               </button>
             )}
           </div>
+          {launchedView && published && (
+            <div role="group" aria-label="Filter by group" className="mt-2.5 flex items-center gap-2.5">
+              {published.chips.map((item, i) => {
+                const label = `${item.label}${item.count === null ? "" : ` · ${item.count}`}`;
+                const base = "rounded-full px-[18px] py-1.5 text-base font-bold";
+                if (item.kind === "static") {
+                  return (
+                    <span key={item.label} className={`${base} border-2 border-line bg-surface text-ink`}>
+                      {label}
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    key={item.label}
+                    type="button"
+                    aria-pressed={chip === i}
+                    onClick={() => setChip(i)}
+                    className={`${base} ${chip === i ? "bg-ink text-white" : "border-2 border-line bg-surface text-ink"}`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           {products.length === 0 ? (
             <p className="mt-6 rounded-xl border border-line-2 bg-surface p-6 text-lg text-ink-2" role="status">
               No results for “{query.trim()}”.
             </p>
           ) : (
-            <div className="mt-3.5 grid grid-cols-5 gap-[22px]">
+            <div className={`${launchedView ? "mt-[18px]" : "mt-3.5"} grid grid-cols-5 gap-[22px]`}>
               {products.map((product) => (
                 <PelitaProductCard key={product.id} product={product} onAdd={addToCart} />
               ))}
             </div>
           )}
+          {launchedView && published && (
+            <div
+              data-search-proof
+              className="mt-[18px] flex items-center gap-5 rounded-xl border border-line-2 bg-surface px-6 py-4"
+            >
+              <button
+                type="button"
+                onClick={() => setQuery(published.proof.query)}
+                className="flex h-[52px] w-[480px] flex-none items-center gap-3.5 rounded-full border-2 border-line bg-surface px-6 text-left text-lg font-semibold text-ink"
+              >
+                <SearchIcon />
+                {published.proof.query}
+              </button>
+              <p className="text-[22px] font-bold">
+                Before: <span className="text-danger">{resultsLabel(published.proof.before)}</span>
+                <span aria-hidden="true"> &nbsp;→&nbsp; </span>
+                <span className="sr-only"> then </span>
+                Now:{" "}
+                <span className="text-success-text">
+                  {resultsLabel(published.proof.after)}
+                  {published.proof.afterLabel ? `, ${published.proof.afterLabel.toLowerCase()}` : ""}
+                </span>
+              </p>
+            </div>
+          )}
         </section>
       </main>
+
+      {published?.toast && toastOpen && (
+        <aside
+          role="status"
+          data-live-toast
+          className="fixed right-14 top-[206px] z-10 flex w-[540px] gap-4 rounded-xl border-2 border-[#7cc4a4] bg-surface px-6 py-5 shadow-[0_18px_50px_rgba(15,23,42,0.2)]"
+        >
+          <SuccessIcon size={40} />
+          <div className="flex-1">
+            <p className="text-[22px] font-extrabold leading-tight">{published.toast.title}</p>
+            <p className="text-ink-2">{published.toast.line1}</p>
+            <p className="text-ink-2">{published.toast.line2}</p>
+            <p className="mt-1 text-base font-bold text-success-text">
+              {published.toast.liveIn} · {published.toast.liveInDetail}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastOpen(false)}
+            aria-label="Dismiss"
+            className="h-8 self-start rounded-sm px-2 text-lg font-bold text-ink-3"
+          >
+            ×
+          </button>
+        </aside>
+      )}
     </div>
   );
 }

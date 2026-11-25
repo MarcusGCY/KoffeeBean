@@ -17,8 +17,11 @@ export function PelitaProductCard({ product, onAdd }: { product: ProductCardData
 
   return (
     <article
-      className="relative flex flex-col rounded-xl border border-line-2 bg-surface p-3.5"
+      className={`relative flex flex-col rounded-xl bg-surface p-3.5 ${
+        product.highlight ? "border-[3px] border-primary shadow-[0_10px_30px_rgba(181,25,91,0.18)]" : "border border-line-2"
+      }`}
       data-product-id={product.id}
+      data-highlight={product.highlight ? "" : undefined}
     >
       <div className="relative flex h-32 items-center justify-center overflow-hidden rounded-md bg-[#f8f5f2]">
         <div

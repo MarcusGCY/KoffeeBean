@@ -1,18 +1,30 @@
+import { findListingDraft, findListingEdit } from "./listing-view";
 import { clockLabel, findRejection, railSteps, type RailStep } from "./ops-console";
+import { publishedView, type PublishedView } from "./published-view";
 import type { Scenario } from "./scenario";
-import { STOCK_CHECK_STAGE, type DemoState } from "./state";
+import { LAUNCH_APPROVAL_STAGE, STOCK_CHECK_STAGE, type DemoState } from "./state";
+import { findStockCheck } from "./stock-check-view";
 
 /**
  * Where the launch flow stands. It is derived from the persisted state, never stored.
- * "stock_check" is the agent's supplier and ERP check (screen 03) between approval 1
- * and the approval-2 screen: approval 2 is refused until the presenter moves past it.
+ * "stock_check" is the agent's supplier and ERP check (screen 03) after approval 1.
+ * "listing_draft" is the agent's listing, promo and claims draft (screen 04). Only a
+ * real draft that has been sent for approval opens "launch_pending" (screen 05), so
+ * approval 2 is refused until then. "launched" means approval 2 has published it.
  */
-export type LaunchPhase = "sourcing_pending" | "rejected" | "stock_check" | "launch_pending" | "sent_back" | "launched";
+export type LaunchPhase =
+  | "sourcing_pending"
+  | "rejected"
+  | "stock_check"
+  | "listing_draft"
+  | "launch_pending"
+  | "sent_back"
+  | "launched";
 
 /** The audit action that marks a listing sent back. Its `ref` is the listing id. */
 export const SEND_BACK_ACTION_PREFIX = "Sent back listing and promo";
 
-type ApprovalState = Pick<DemoState, "approvals" | "audit"> & { stage?: number };
+type ApprovalState = Pick<DemoState, "approvals" | "audit"> & { stage?: number; listed?: boolean };
 
 export type ApproverView = {
   id: string;
@@ -26,7 +38,8 @@ export type ApproverView = {
 
 export type RecordedApproval = { by: string; approverId: string; approvalId: string; at: string; atLabel: string };
 
-export type SummaryRow = { label: string; value: string; emphasis?: boolean };
+/** `old` is set when a human changed the value: the row then reads old → new. */
+export type SummaryRow = { label: string; value: string; emphasis?: boolean; old?: string };
 
 export type ApprovalView = {
   phase: LaunchPhase;
@@ -59,6 +72,8 @@ export type ApprovalView = {
   };
   recorded: { sourcing: RecordedApproval | null; launch: RecordedApproval | null };
   sentBack: { by: string; atLabel: string } | null;
+  /** Set once approval 2 has published the listing. */
+  published: PublishedView | null;
 };
 
 const SHORT_DATE = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -83,15 +98,18 @@ export function launchPhase(scenario: Scenario, state: ApprovalState): LaunchPha
   if (state.approvals.launch) return "launched";
   if (state.approvals.sourcing) {
     if (findSendBack(scenario, state)) return "sent_back";
-    return state.stage === STOCK_CHECK_STAGE ? "stock_check" : "launch_pending";
+    const stage = state.stage ?? 0;
+    if (!findStockCheck(scenario, state) || stage <= STOCK_CHECK_STAGE) return "stock_check";
+    if (!findListingDraft(scenario, state) || stage < LAUNCH_APPROVAL_STAGE) return "listing_draft";
+    return "launch_pending";
   }
   return findRejection(scenario, state) ? "rejected" : "sourcing_pending";
 }
 
 /**
  * The rail for each phase. The approval modal over screen 01 outlines step 2, the
- * stock check outlines step 3, the launch approval outlines step 5 and an approved
- * launch outlines "Live". Step 3 shows done only once the check has really completed
+ * stock check outlines step 3, the listing draft outlines step 4, the launch
+ * approval outlines step 5 and an approved launch outlines "Live". Step 3 shows done only once the check has really completed
  * (`stockChecked`), so a launch screen reached without it leaves step 3 open.
  */
 export function launchRail(phase: LaunchPhase, modalOpen = false, stockChecked = true): RailStep[] {
@@ -102,6 +120,8 @@ export function launchRail(phase: LaunchPhase, modalOpen = false, stockChecked =
       return railSteps(1);
     case "stock_check":
       return railSteps(3);
+    case "listing_draft":
+      return withStockCheck(railSteps(4), stockChecked);
     case "launch_pending":
     case "sent_back":
       return withStockCheck(railSteps(5), stockChecked);
@@ -132,7 +152,7 @@ function recorded(scenario: Scenario, approval: DemoState["approvals"]["sourcing
   };
 }
 
-/** "Tuas distribution centre" reads "Tuas DC" in the diff rows. */
+/** "<Name> distribution centre" reads "<Name> DC" in the diff rows. */
 function shortDc(name: string): string {
   return name.replace(/\s+distribution centre$/i, " DC");
 }
@@ -152,11 +172,13 @@ export function approvalView(scenario: Scenario, state: ApprovalState): Approval
   const productLine = `${product.name} · ${product.size.replace(/\bcapsules\b/, "caps")}`;
   const category = product.subcategory ? `${product.category} › ${product.subcategory}` : product.category;
   const aboveFloor = promo.marginPct >= promo.marginFloorPct;
+  const edit = findListingEdit(scenario, state);
+  const edited = edit !== null && edit.text !== listing.description;
 
   return {
     phase,
     approvers: [first, second],
-    defaultActorId: phase === "sourcing_pending" || phase === "rejected" || phase === "stock_check" ? first.id : second.id,
+    defaultActorId: phase === "sourcing_pending" || phase === "rejected" || phase === "stock_check" || phase === "listing_draft" ? first.id : second.id,
     sourcing: {
       kicker: "HUMAN APPROVAL 1 OF 2",
       title: "Approve sourcing?",
@@ -186,6 +208,7 @@ export function approvalView(scenario: Scenario, state: ApprovalState): Approval
         { label: "Launch promo", value: `${promo.ribbon} · ${shortDate(promo.startsOn)} – ${shortDate(promo.endsOn)}` },
         { label: "Online stock", value: `${listing.onlineStock} units from ${shortDc(erp.dc)}` },
         { label: "Claims check", value: `${capitalise(claimsCheck.status)} · ${claimsCheck.id}` },
+        ...(edited ? [{ label: "Description", value: edit.text, old: listing.description }] : []),
       ],
       stats: [
         { value: `${promo.marginPct}%`, label: `margin at promo, ${aboveFloor ? "above" : "below"} ${promo.marginFloorPct}% floor` },
@@ -198,5 +221,6 @@ export function approvalView(scenario: Scenario, state: ApprovalState): Approval
     },
     recorded: { sourcing: recorded(scenario, state.approvals.sourcing), launch: recorded(scenario, state.approvals.launch) },
     sentBack: findSendBack(scenario, state),
+    published: publishedView(scenario, { ...state, listed: state.listed ?? false }),
   };
 }

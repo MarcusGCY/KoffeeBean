@@ -114,7 +114,7 @@ export type StockCheckRefusal =
   | "supplier_timeout";
 
 export type StockCheckResult =
-  | { ok: true; changed: boolean; phase: "stock_check" | "launch_pending"; check: StockCheckView }
+  | { ok: true; changed: boolean; phase: "stock_check" | "listing_draft" | "launch_pending"; check: StockCheckView }
   | { ok: false; reason: StockCheckRefusal };
 
 const refuse = (reason: StockCheckRefusal): { ok: false; reason: StockCheckRefusal } => ({ ok: false, reason });
@@ -149,7 +149,7 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
   if (stop) return refuse(stop);
 
   if (findStockCheck(scenario, before)) {
-    return { ok: true, changed: false, phase: phase === "stock_check" ? "stock_check" : "launch_pending", check: stockCheckView(scenario, before, deps.now()) };
+    return { ok: true, changed: false, phase: phase === "listing_draft" || phase === "launch_pending" ? phase : "stock_check", check: stockCheckView(scenario, before, deps.now()) };
   }
 
   if (before.stage !== STOCK_CHECK_STAGE) await setStage(STOCK_CHECK_STAGE);
@@ -191,9 +191,10 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
 }
 
 /**
- * "Draft the listing →": moves past screen 03. Needs a completed check that is
- * within the spend limit. The listing draft itself is a later step, so this only
- * records that screen 03 is done, which lets approval 2 open.
+ * "Draft the listing →": moves past screen 03 to the listing draft (screen 04). Needs
+ * a completed check that is within the spend limit. The agent's draft is written by
+ * the listing route, and approval 2 opens only after that draft is sent for approval.
+ * Once past screen 03 a repeat call changes nothing, so it can never move the stage back.
  */
 export async function continueFromStockCheck(scenario: Scenario, now: () => Date = () => new Date()): Promise<StockCheckResult> {
   const state = await getDemoState();
@@ -204,9 +205,9 @@ export async function continueFromStockCheck(scenario: Scenario, now: () => Date
   const view = stockCheckView(scenario, state, now());
   if (!view.complete) return refuse("stock_check_incomplete");
   if (!view.underLimit) return refuse("over_limit");
-  if (phase === "launch_pending" && state.stage === PAST_STOCK_CHECK_STAGE) {
-    return { ok: true, changed: false, phase: "launch_pending", check: view };
+  if (phase === "listing_draft" || phase === "launch_pending") {
+    return { ok: true, changed: false, phase, check: view };
   }
   await setStage(PAST_STOCK_CHECK_STAGE);
-  return { ok: true, changed: true, phase: "launch_pending", check: view };
+  return { ok: true, changed: true, phase: "listing_draft", check: view };
 }
