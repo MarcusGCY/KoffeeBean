@@ -59,6 +59,12 @@ const FOREIGN = {
   "kb:demo:other": "keep",
   "kb:demo:pelita:unlisted": "inside the prefix but not on the fixed list",
 };
+const AUDIT_FILES = [
+  "src/lib/demo/audit-view.ts",
+  "src/lib/demo/audit-links.ts",
+  "src/components/pelita-ops/PelitaAuditTimeline.tsx",
+  "src/app/demo/pelita/audit/page.tsx",
+];
 const NEW_FILES = [
   "src/lib/demo/listing.ts",
   "src/lib/demo/listing-view.ts",
@@ -835,6 +841,7 @@ describe("listing and publish code holds no fixture figures, and touches no iden
     "src/components/pelita/PelitaProductCard.tsx",
     "src/app/demo/pelita/page.tsx",
     "src/app/demo/pelita/ops/page.tsx",
+    ...AUDIT_FILES,
   ];
 
   it("has no hardcoded names, ids, amounts, promo copy or claim wording", () => {
@@ -894,13 +901,14 @@ describe("listing and publish code holds no fixture figures, and touches no iden
   });
 
   it("the logic modules import only other demo modules, and the route guards the write and the pages guard the gate", () => {
-    for (const file of ["src/lib/demo/listing.ts", "src/lib/demo/listing-view.ts", "src/lib/demo/published-view.ts"]) {
+    for (const file of ["src/lib/demo/listing.ts", "src/lib/demo/listing-view.ts", "src/lib/demo/published-view.ts", "src/lib/demo/audit-view.ts", "src/lib/demo/audit-links.ts"]) {
       for (const match of read(file).matchAll(/^import .* from "([^"]+)";$/gm)) expect(match[1], file).toMatch(/^\.\//);
     }
     expect(read("src/app/api/demo/pelita/listing/route.ts")).toMatch(/guardDemoWrite\(req\)/);
     expect(read("src/app/api/demo/pelita/approval/route.ts")).toMatch(/guardDemoWrite\(req\)/);
     expect(read("src/app/demo/pelita/page.tsx")).toMatch(/await requirePresenterPage\(\)/);
     expect(read("src/app/demo/pelita/ops/page.tsx")).toMatch(/await requirePresenterPage\(\)/);
+    expect(read("src/app/demo/pelita/audit/page.tsx")).toMatch(/await requirePresenterPage\(\)/);
   });
 
   it("uses the colour tokens: violet only for the agent screens, navy only for approvals, sun-yellow for ribbons", () => {

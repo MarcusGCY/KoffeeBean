@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { AUDIT_PATH } from "@/lib/demo/audit-links";
 import { launchRail, type ApprovalView, type LaunchPhase, type RecordedApproval } from "@/lib/demo/approval-view";
 import { approveRequest, refusalMessage, sendBackRequest } from "@/lib/demo/approval-client";
 import { editListingRequest, listingMessage, runListingDraftRequest, sendForApprovalRequest } from "@/lib/demo/listing-client";
@@ -28,7 +30,8 @@ const CURRENT_DOT: Record<RailStep["kind"], string> = {
   system: "bg-ink",
 };
 
-function Rail({ steps }: { steps: RailStep[] }) {
+/** The rail. With `auditHref`, the last step ("Audit") links to the audit timeline. */
+export function Rail({ steps, auditHref }: { steps: RailStep[]; auditHref?: string }) {
   return (
     <ol aria-label="Launch steps" className="flex gap-2 px-12 pt-[18px]">
       {steps.map((step) => {
@@ -50,7 +53,13 @@ function Rail({ steps }: { steps: RailStep[] }) {
               {done ? <TickIcon /> : step.n}
               {done && <span className="sr-only">done</span>}
             </span>
-            {step.label}
+            {auditHref && step.n === steps.length ? (
+              <Link href={auditHref} data-audit-link className="underline underline-offset-4">
+                {step.label}
+              </Link>
+            ) : (
+              step.label
+            )}
           </li>
         );
       })}
@@ -372,7 +381,7 @@ export function PelitaOpsConsole({
         </div>
       </header>
 
-      <Rail steps={steps} />
+      <Rail steps={steps} auditHref={AUDIT_PATH} />
 
       <main className="px-12 py-6">
         {approval && stockScreen && stock ? (

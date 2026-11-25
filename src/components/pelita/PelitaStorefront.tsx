@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
+import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
 import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
@@ -322,6 +324,9 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
             <p className="mt-1 text-base font-bold text-success-text">
               {published.toast.liveIn} · {published.toast.liveInDetail}
             </p>
+            <Link href={AUDIT_PATH} data-audit-link className="mt-1 inline-block text-base font-bold text-primary underline underline-offset-4">
+              {AUDIT_LINK_LABEL}
+            </Link>
           </div>
           <button
             type="button"

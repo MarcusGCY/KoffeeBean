@@ -244,6 +244,9 @@ describe("ops console page data (screen 01)", () => {
       "src/lib/demo/ops-console.ts",
       "src/components/pelita-ops/PelitaOpsConsole.tsx",
       "src/app/demo/pelita/ops/page.tsx",
+      "src/lib/demo/audit-view.ts",
+      "src/components/pelita-ops/PelitaAuditTimeline.tsx",
+      "src/app/demo/pelita/audit/page.tsx",
       ...APPROVAL_FILES,
     ]) {
       const text = readFileSync(path.join(ROOT, file), "utf8");
@@ -261,6 +264,10 @@ describe("ops console touches no database, identity or env", () => {
       "src/lib/demo/proposal.ts",
       "src/lib/demo/ops-client.ts",
       "src/app/api/demo/pelita/proposal/route.ts",
+      "src/lib/demo/audit-view.ts",
+      "src/lib/demo/audit-links.ts",
+      "src/components/pelita-ops/PelitaAuditTimeline.tsx",
+      "src/app/demo/pelita/audit/page.tsx",
       ...APPROVAL_FILES,
     ];
     for (const file of files) {

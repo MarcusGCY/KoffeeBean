@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import type { ApprovalView, ApproverView, LaunchPhase, RecordedApproval } from "@/lib/demo/approval-view";
+import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { STOREFRONT_LINK_LABEL, STOREFRONT_PATH, type PublishedView } from "@/lib/demo/published-view";
 import { HumanIcon, SuccessIcon, TickIcon } from "../pelita/PelitaIcons";
 import { ConfirmCheckbox } from "./PelitaApprovalModal";
@@ -66,12 +67,15 @@ export function PelitaLaunchApproval({
           <p className="mt-3 inline-flex rounded-full bg-success-50 px-3.5 py-1 text-base font-bold text-success-text">
             {published.liveIn} · {published.liveInDetail}
           </p>
-          <div className="mt-6">
+          <div className="mt-6 flex items-center gap-6">
             <Link
               href={STOREFRONT_PATH}
               className="inline-flex h-14 items-center rounded-md bg-primary px-7 text-lg font-bold text-white"
             >
               {STOREFRONT_LINK_LABEL}
+            </Link>
+            <Link href={AUDIT_PATH} data-audit-link className="text-lg font-bold text-primary underline underline-offset-4">
+              {AUDIT_LINK_LABEL}
             </Link>
           </div>
         </div>
