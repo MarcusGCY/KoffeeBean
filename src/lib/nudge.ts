@@ -133,7 +133,10 @@ export function nudgeReason(nudge: Nudge): string {
   return [nudge.reorder.reason, nudge.newBean?.reason].filter(Boolean).join(" ").slice(0, 200);
 }
 
-/** Cart lines for the chip the shopper picked, re-derived on the server. Null when paused or no nudge applies. */
+/**
+ * Cart lines for the chip the shopper picked, re-derived on the server. Null when paused or no nudge applies.
+ * The reason is the one stored when the suggestion was shown, so the audit trail does not drift with the clock.
+ */
 export async function nudgeLines(
   userId: string,
   choice: NudgeChoice,
@@ -144,5 +147,5 @@ export async function nudgeLines(
   const result = buildNudge(inputs, await recommendAddedProductIds(userId), now);
   if (!result.nudge) return { error: "no_nudge" };
   const lines = [...result.nudge.reorder.lines, ...(choice === "both" && result.nudge.newBean ? result.nudge.newBean.lines : [])];
-  return { lines, reason: nudgeReason(result.nudge) };
+  return { lines, reason: inputs.waitingSuggestReason ?? nudgeReason(result.nudge) };
 }
