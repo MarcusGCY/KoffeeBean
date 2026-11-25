@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { auth0Configured, getAuth0 } from "./auth0";
+import { safeAvatarUrl } from "./return-to";
 import type { Shopper } from "./types";
 
 export type { Shopper };
@@ -17,10 +18,12 @@ export async function getShopper(): Promise<Shopper | null> {
   const user = session?.user;
   if (!user?.sub) return null;
 
+  const picture = safeAvatarUrl(user.picture);
   return {
     id: user.sub,
     email: user.email,
     name: user.name,
+    ...(picture ? { picture } : {}),
   };
 }
 

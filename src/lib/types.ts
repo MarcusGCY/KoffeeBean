@@ -26,4 +26,6 @@ export type Shopper = {
   id: string;
   email?: string;
   name?: string;
+  /** HTTPS profile image from the session, when one is safe to render. */
+  picture?: string;
 };
