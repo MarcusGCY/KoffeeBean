@@ -1,7 +1,7 @@
 import { PRESENTER_COOKIE, presenterSecret, verifyPresenterToken } from "./presenter";
 import { demoTrack } from "./track";
 
-/** The gate is open only with the track flag on, a non-production deploy and a signing secret. */
+/** The gate is open only when the track flag is exactly "pelita" and a signing secret is set. */
 export function demoEnabled(): boolean {
   return demoTrack() === "pelita" && presenterSecret() !== "";
 }

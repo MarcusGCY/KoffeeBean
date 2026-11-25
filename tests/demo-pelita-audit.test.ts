@@ -517,10 +517,20 @@ describe("/demo/pelita/audit gate", () => {
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
   });
 
-  it("keeps the prod refusal: 404 on Vercel production with the flag and a valid cookie", async () => {
+  it("is a 404 on production until the flag is set, then renders for a presenter", async () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.APPROVAL_SECRET = SECRET;
+    cookieJar.value = signPresenterToken(SECRET);
+    await expect((await loadPage())()).rejects.toMatchObject(notFound);
+
     openGate();
     process.env.VERCEL_ENV = "production";
+    cookieJar.value = undefined;
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
+
+    cookieJar.value = signPresenterToken(SECRET);
+    const html = renderToStaticMarkup(await (await loadPage())());
+    expect(html).toContain("Audit trail · Magnesium Glycinate");
   });
 
   it("is a 404 without a secret, without a cookie, and with a forged or expired cookie", async () => {

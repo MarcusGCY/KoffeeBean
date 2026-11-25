@@ -76,13 +76,23 @@ describe("/demo/pelita page respects the gate", () => {
     await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
   });
 
-  it("is a 404 on Vercel production even with the flag and a valid cookie", async () => {
-    process.env.KB_DEMO_TRACK = "pelita";
+  it("is a 404 on production until KB_DEMO_TRACK=pelita, then renders for a presenter", async () => {
     process.env.VERCEL_ENV = "production";
     process.env.APPROVAL_SECRET = SECRET;
     cookieJar.value = signPresenterToken(SECRET);
     const Page = await loadPage();
     await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+
+    process.env.KB_DEMO_TRACK = "pelita";
+    cookieJar.value = undefined;
+    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    cookieJar.value = `${signPresenterToken(SECRET)}0`;
+    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+
+    cookieJar.value = signPresenterToken(SECRET);
+    const element = await Page();
+    expect(isValidElement(element)).toBe(true);
+    expect((element as ReactElement).type).toBe(PelitaStorefront);
   });
 
   it("is a 404 without a cookie or with a forged one", async () => {

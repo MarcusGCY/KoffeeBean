@@ -1,9 +1,10 @@
 import { PRESENTER_TTL_MS, presenterLink } from "../src/lib/demo/presenter";
 
 /**
- * Prints a signed presenter link for the Pelita demo track.
+ * Prints a signed presenter link for the Pelita demo track. Pass the deployment
+ * origin, including production. The link is /demo/pelita/enter?k=<expiry>.<hmac>.
  *
- *   npx tsx --env-file=.env.local scripts/demo-pelita-link.ts https://<preview-host> [hours]
+ *   npx tsx --env-file=.env.local scripts/demo-pelita-link.ts https://<host> [hours]
  *
  * Reads APPROVAL_SECRET from the environment. The secret is never printed.
  */

@@ -509,13 +509,17 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
 });
 
 describe("the gate: page, proxy and API", () => {
-  it("the stock-check API answers 404 when the gate is closed, the cookie is missing, or on production", async () => {
+  it("the stock-check API answers 404 when the gate is closed or the cookie is missing, including on production", async () => {
     const body = { action: "run" };
     expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(404);
     openGate();
     expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(404);
     process.env.VERCEL_ENV = "production";
+    delete process.env.KB_DEMO_TRACK;
     expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(404);
+    process.env.KB_DEMO_TRACK = "pelita";
+    expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(404);
+    expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(503);
   });
 
   it("refuses cross-site writes, unknown actions and unreadable bodies, and 503s without a store", async () => {
@@ -595,7 +599,12 @@ describe("the gate: page, proxy and API", () => {
     expect((await page()).status).toBe(404);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
     process.env.VERCEL_ENV = "production";
+    delete process.env.KB_DEMO_TRACK;
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
+    process.env.KB_DEMO_TRACK = "pelita";
+    expect((await page()).status).toBe(404);
+    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
     delete process.env.VERCEL_ENV;
 
     expect((await proxy(new NextRequest(STOCK_URL, { method: "POST" }))).status).toBe(200);
@@ -609,8 +618,14 @@ describe("the gate: page, proxy and API", () => {
     process.env.APPROVAL_SECRET = SECRET;
     await expect(Page()).rejects.toThrow();
     process.env.VERCEL_ENV = "production";
+    delete process.env.KB_DEMO_TRACK;
     cookieJar.value = signPresenterToken(SECRET);
     await expect(Page()).rejects.toThrow();
+    process.env.KB_DEMO_TRACK = "pelita";
+    cookieJar.value = undefined;
+    await expect(Page()).rejects.toThrow();
+    cookieJar.value = signPresenterToken(SECRET);
+    expect(isValidElement(await Page())).toBe(true);
     delete process.env.VERCEL_ENV;
 
     useFakeRedis();

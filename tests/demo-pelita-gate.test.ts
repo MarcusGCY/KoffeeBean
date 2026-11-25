@@ -1,9 +1,18 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
+import { GET as getCart } from "@/app/api/cart/route";
+import { POST as placeOrder, GET as listOrders } from "@/app/api/orders/route";
+import { POST as githubWebhook } from "@/app/api/github/webhook/route";
+import { POST as privacyPurge } from "@/app/api/privacy/purge/route";
+import { POST as privacyReconcile } from "@/app/api/privacy/reconcile-marketing/route";
+import { POST as triageClassify } from "@/app/api/triage/classify/route";
 import { proxy } from "@/proxy";
 import { GET as enter } from "@/app/demo/pelita/enter/route";
 import { GET as readState } from "@/app/api/demo/pelita/state/route";
 import { POST as reset } from "@/app/api/demo/pelita/reset/route";
+import { findCoupon } from "@/lib/coupons";
 import { demoEnabled, guardDemoApi, guardDemoWrite } from "@/lib/demo/guard";
 import { PRESENTER_COOKIE, signPresenterToken } from "@/lib/demo/presenter";
 import { demoTrack } from "@/lib/demo/track";
@@ -44,23 +53,39 @@ describe("demo track gate", () => {
     }
   });
 
-  it("is on only for KB_DEMO_TRACK=pelita", () => {
+  it("is on only for KB_DEMO_TRACK=pelita, including production", () => {
     process.env.KB_DEMO_TRACK = "pelita";
     expect(demoTrack()).toBe("pelita");
     process.env.VERCEL_ENV = "preview";
     expect(demoTrack()).toBe("pelita");
     process.env.VERCEL_ENV = "development";
     expect(demoTrack()).toBe("pelita");
+    process.env.VERCEL_ENV = "production";
+    expect(demoTrack()).toBe("pelita");
   });
 
-  it("refuses on Vercel production even when the flag is set", () => {
-    process.env.KB_DEMO_TRACK = "pelita";
+  it("stays off on Vercel production unless KB_DEMO_TRACK is exactly pelita, and then stays presenter-gated", () => {
     process.env.VERCEL_ENV = "production";
     expect(demoTrack()).toBeNull();
-    process.env.APPROVAL_SECRET = SECRET;
+    expect(demoEnabled()).toBe(false);
+    for (const value of ["", "Pelita", "PELITA", "true", "1", "pelita "]) {
+      process.env.KB_DEMO_TRACK = value;
+      expect(demoTrack()).toBeNull();
+      expect(demoEnabled()).toBe(false);
+    }
+
+    process.env.KB_DEMO_TRACK = "pelita";
+    expect(demoTrack()).toBe("pelita");
     expect(demoEnabled()).toBe(false);
     const token = signPresenterToken(SECRET);
-    expect(guardDemoApi(withCookie("https://x.test/api/demo/pelita/state", token))?.status).toBe(404);
+    const url = "https://x.test/api/demo/pelita/state";
+    expect(guardDemoApi(withCookie(url, token))?.status).toBe(404);
+
+    process.env.APPROVAL_SECRET = SECRET;
+    expect(demoEnabled()).toBe(true);
+    expect(guardDemoApi(new Request(url))?.status).toBe(404);
+    expect(guardDemoApi(withCookie(url, `${token}0`))?.status).toBe(404);
+    expect(guardDemoApi(withCookie(url, token))).toBeNull();
   });
 
   it("answers 404 without a secret, without a cookie, and with a bad cookie", async () => {
@@ -156,6 +181,140 @@ describe("proxy and the demo API", () => {
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(200);
 
     process.env.VERCEL_ENV = "production";
+    delete process.env.KB_DEMO_TRACK;
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
+    expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(404);
+    process.env.KB_DEMO_TRACK = "pelita";
+    expect((await page()).status).toBe(404);
+    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
+    expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(200);
+  });
+});
+
+const ROOT = path.resolve(__dirname, "..");
+const SHOP_PATHS = [
+  "/",
+  "/api/cart",
+  "/api/cart/items",
+  "/api/cart/coupon",
+  "/api/orders",
+  "/api/orders/BB-1001",
+  "/api/orders/BB-1001/cancel",
+  "/api/github/webhook",
+  "/api/triage/classify",
+  "/api/privacy/purge",
+  "/api/privacy/reconcile-marketing",
+  "/api/feedback",
+  "/api/chat",
+  "/api/fix-status",
+  "/api/merge",
+  "/api/review",
+  "/api/products/view",
+] as const;
+const SHOP_SECRET_KEYS = ["GITHUB_WEBHOOK_SECRET", "TRIAGE_API_SECRET", "PRIVACY_MAINTENANCE_SECRET", "XAI_API_KEY"] as const;
+
+function sourceFiles(rel: string): string[] {
+  const dir = path.join(ROOT, rel);
+  return readdirSync(dir).flatMap((name) => {
+    const full = path.join(dir, name);
+    const child = path.join(rel, name);
+    return statSync(full).isDirectory() ? sourceFiles(child) : [child];
+  });
+}
+
+async function responseText(run: () => Promise<Response>): Promise<string> {
+  try {
+    const res = await run();
+    return `${res.status}\n${await res.text()}`;
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    return `throw\n${message}`;
+  }
+}
+
+describe("the real shop stays unchanged when the demo track is off or pelita", () => {
+  beforeEach(clearEnv);
+  afterEach(clearEnv);
+
+  it("reads KB_DEMO_TRACK only in demoTrack, so shop, cart, orders, GitHub, triage and privacy cannot branch on it", () => {
+    const readers = sourceFiles("src")
+      .filter((file) => file.endsWith(".ts") || file.endsWith(".tsx"))
+      .filter((file) => readFileSync(path.join(ROOT, file), "utf8").includes("KB_DEMO_TRACK"));
+    expect(readers).toEqual(["src/lib/demo/track.ts"]);
+    const proxySource = readFileSync(path.join(ROOT, "src/proxy.ts"), "utf8");
+    expect(proxySource).toContain('pathname.startsWith("/api/demo/pelita/")');
+    expect(proxySource).not.toMatch(/\/api\/(github|triage|privacy)/);
+  });
+
+  it("passes the storefront, cart, orders and prod API routes through on production with the flag unset and set", async () => {
+    process.env.VERCEL_ENV = "production";
+    process.env.APPROVAL_SECRET = SECRET;
+    const token = signPresenterToken(SECRET);
+    const cookie = `${PRESENTER_COOKIE}=${token}`;
+    const statuses = async () => {
+      const out: Record<string, number> = {};
+      for (const shopPath of SHOP_PATHS) {
+        const method = shopPath === "/" ? "GET" : "POST";
+        const res = await proxy(new NextRequest(`https://x.test${shopPath}`, { method, headers: { cookie } }));
+        out[shopPath] = res.status;
+      }
+      for (const ownerPath of ["/api/demo/reset", "/api/demo/bi-seed", "/admin/demo"]) {
+        out[ownerPath] = (await proxy(new NextRequest(`https://x.test${ownerPath}`, { headers: { cookie } }))).status;
+      }
+      return out;
+    };
+
+    const off = await statuses();
+    process.env.KB_DEMO_TRACK = "pelita";
+    expect(await statuses()).toEqual(off);
+    for (const shopPath of SHOP_PATHS) expect(off[shopPath], shopPath).toBe(200);
+    expect(off["/api/demo/reset"]).toBe(404);
+    expect(off["/admin/demo"]).toBe(404);
+    expect(findCoupon("WELCOME10")?.percentOff).toBe(10);
+    delete process.env.KB_DEMO_TRACK;
+    expect(findCoupon("WELCOME10")?.percentOff).toBe(10);
+  });
+
+  it("answers cart, orders, GitHub, triage and privacy the same way on production with the flag unset and set", async () => {
+    const saved = Object.fromEntries(SHOP_SECRET_KEYS.map((name) => [name, process.env[name]])) as Record<string, string | undefined>;
+    for (const name of SHOP_SECRET_KEYS) delete process.env[name];
+    try {
+      process.env.VERCEL_ENV = "production";
+      const orderReq = () =>
+        new Request("https://x.test/api/orders", {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: "https://x.test" },
+          body: "{}",
+        });
+      const call = async () => ({
+        cart: await responseText(() => getCart()),
+        orders: await responseText(() => listOrders()),
+        checkout: await responseText(() => placeOrder(orderReq())),
+        github: await responseText(() => githubWebhook(new Request("https://x.test/api/github/webhook", { method: "POST", body: "{}" }))),
+        triage: await responseText(() => triageClassify(new Request("https://x.test/api/triage/classify", { method: "POST", body: "{}" }))),
+        purge: await responseText(() => privacyPurge(new Request("https://x.test/api/privacy/purge", { method: "POST", body: "{}" }))),
+        reconcile: await responseText(() => privacyReconcile(new Request("https://x.test/api/privacy/reconcile-marketing", { method: "POST" }))),
+      });
+
+      const off = await call();
+      process.env.KB_DEMO_TRACK = "pelita";
+      process.env.APPROVAL_SECRET = SECRET;
+      const on = await call();
+      expect(on).toEqual(off);
+      for (const [name, text] of Object.entries(on)) {
+        expect(text.startsWith("404"), name).toBe(false);
+        expect(text, name).not.toContain("Not found");
+      }
+      expect(on.github.startsWith("503")).toBe(true);
+      expect(on.triage.startsWith("503")).toBe(true);
+      expect(on.purge.startsWith("503")).toBe(true);
+      expect(on.reconcile.startsWith("503")).toBe(true);
+    } finally {
+      for (const name of SHOP_SECRET_KEYS) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+    }
   });
 });
