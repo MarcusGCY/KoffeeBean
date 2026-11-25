@@ -125,7 +125,7 @@ ${card({a:'cleanser',n:'Gentle foaming cleanser',s:'150 ml',p:'15.90',mem:'13.50
 ${card({a:'lipbalm',n:'Tinted lip balm, rose',s:'4.5 g',p:'7.90',st:'out'})}
 </div></div>`);
 // 01 gap
-const spark=(()=>{const d=[88,95,102,110,118,121,135,142,150,158,171,180,196,214];const W=520,H=96,mx=230;return `<svg width="100%" height="96" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline fill="none" stroke="#5B3FD1" stroke-width="4" stroke-linejoin="round" points="${d.map((v,i)=>`${10+i*(W-20)/13},${H-v/mx*H}`).join(' ')}"/><circle cx="${W-10}" cy="${H-214/mx*H}" r="7" fill="#5B3FD1"/></svg>`})();
+const spark=(()=>{const d=[96,104,112,121,130,136,149,157,166,175,189,199,216,230];const W=520,H=96,mx=250;return `<svg width="100%" height="96" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline fill="none" stroke="#5B3FD1" stroke-width="4" stroke-linejoin="round" points="${d.map((v,i)=>`${10+i*(W-20)/13},${H-v/mx*H}`).join(' ')}"/><circle cx="${W-10}" cy="${H-d[13]/mx*H}" r="7" fill="#5B3FD1"/></svg>`})();
 const gap=(st=1)=>`${ops(P1)}${rail(st)}<div class="main"><div class="card agent" style="padding:32px 40px">
 <div class="row" style="justify-content:space-between"><div class="kick a">${AG(32)} SHELF AGENT · DEMAND-GAP PROPOSAL</div><span class="pill ag">Detected 09:02 today</span></div>
 <div class="h1" style="margin-top:14px">Shoppers want magnesium glycinate. We don't sell it.</div>
@@ -133,7 +133,7 @@ const gap=(st=1)=>`${ops(P1)}${rail(st)}<div class="main"><div class="card agent
 <div class="stat"><div class="v">2,180</div><div class="l">searches for “magnesium glycinate” in 14 days</div></div>
 <div class="stat"><div class="v" style="color:#B91C1C">0</div><div class="l">matching products in stock</div></div>
 <div class="stat"><div class="v">64%</div><div class="l">of those searches ended with no purchase</div></div>
-<div class="stat" style="padding:16px 20px 10px"><div class="l" style="margin:0 0 4px;font-weight:700;color:var(--ink)">Searches per day</div>${spark}<div style="display:flex;justify-content:space-between;font-size:18px;color:var(--ink3);font-weight:600"><span>11 Nov</span><span>Today</span></div></div></div>
+<div class="stat" style="padding:16px 20px 10px"><div class="l" style="margin:0 0 4px;font-weight:700;color:var(--ink)">Searches per day</div>${spark}<div style="display:flex;justify-content:space-between;font-size:18px;color:var(--ink3);font-weight:600"><span>12 Nov</span><span>Today</span></div></div></div>
 <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:28px;margin-top:24px">
 <div style="background:var(--agent-50);border-radius:18px;padding:22px 28px;display:flex;gap:24px;align-items:center">
 <div style="width:120px;height:120px;background:#fff;border-radius:16px;display:flex;align-items:center;justify-content:center;flex:none">${A.magnesium.replace('<svg','<svg width="100" height="100"')}</div>
