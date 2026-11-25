@@ -82,6 +82,9 @@ export const scenarioSchema = z
       matchingProductsInStock: z.number().int().nonnegative(),
       noPurchasePct: z.number().min(0).max(100),
       searchesPerDay: z.array(z.number().int().positive()).length(14),
+      seriesStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      seriesEndDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      chartMax: z.number().int().positive(),
       seriesStartLabel: z.string(),
       seriesEndLabel: z.string(),
       detectedAt: iso,
@@ -211,6 +214,14 @@ export const scenarioSchema = z
     if (s.approvers[0].id === s.approvers[1].id) issue("the two approvers must be different people");
     if (s.approvers[0].approvalId !== s.sourcing.approvalId) issue("approval 1 id mismatch");
     if (s.approvers[1].approvalId !== s.launchApproval.approvalId) issue("approval 2 id mismatch");
+    const series = s.gap.searchesPerDay;
+    if (series.reduce((sum, n) => sum + n, 0) !== s.gap.searches) {
+      issue("gap.searchesPerDay must sum to gap.searches");
+    }
+    if (Math.max(...series) > s.gap.chartMax) issue("gap.chartMax must be at least the highest daily value");
+    const days = (Date.parse(s.gap.seriesEndDate) - Date.parse(s.gap.seriesStartDate)) / 86_400_000 + 1;
+    if (days !== series.length) issue("gap series dates must span exactly one day per value");
+    if (s.gap.seriesEndDate !== s.gap.detectedAt.slice(0, 10)) issue("gap series must end on the detection day");
     const elapsed = (Date.parse(s.timing.liveAt) - Date.parse(s.timing.detectedAt)) / 1000;
     if (elapsed !== s.timing.totalSeconds) issue("timing.totalSeconds must equal liveAt - detectedAt");
     if (s.audit.filter((row) => row.actorKind === "agent").length !== s.timing.agentSteps) {

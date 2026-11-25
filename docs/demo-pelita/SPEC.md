@@ -149,7 +149,7 @@ Suggested seed file: `data/demo-catalogue.json` with the columns above plus `ill
 ## 9. The new-product story: Magnesium Glycinate 400 mg, 90 capsules
 
 - **Why it's believable:** magnesium glycinate for sleep and stress is a fast-rising wellness search, and Pelita only stocks magnesium citrate.
-- **The gap:** **2,180** searches for "magnesium glycinate" in 14 days, **0** matching products, and **64%** of those searches ending with no purchase. Daily searches climb from 88 to 214.
+- **The gap:** **2,180** searches for "magnesium glycinate" in 14 days, **0** matching products, and **64%** of those searches ending with no purchase. Daily searches climb from 96 to 230 (12–25 Nov, sum exactly 2,180: `[96, 104, 112, 121, 130, 136, 149, 157, 166, 175, 189, 199, 216, 230]`).
 - **The proposal:** list it at **S$32.90** (S$0.37/capsule) from **Evergreen Nutrition**, a fictional local supplier. Projected **140 units a week**, **39%** gross margin ex GST (cost S$18.50 against S$30.18 net), confidence **High · 84%**.
 - **Approval 1 (sourcing):** **Mei Ling Goh, Category Manager, Vitamins & Supplements**. Up to 600 units (about 4 weeks), spend limit **S$11,500**, recorded as **APR-2051**.
 - **Stock check:** the supplier has 6,000 available, a 3-day lead time, S$18.50 cost and an MOQ of 480. **The twist:** the ERP shows **1,200 units already in the Tuas DC**, held for the corporate-wellness (B2B) channel. The agent moves **300 to online today** and drafts **PO-61207 for 600 units at S$11,100**, which is under the limit.
@@ -182,7 +182,7 @@ Copy as in §5. Optionally, search "magnesium glycinate" live to show no results
   - **2,180** searches for "magnesium glycinate" in 14 days *(site search logs, query plus close variants)*
   - **0** matching products in stock *(catalogue + inventory)*
   - **64%** of those searches ended with no purchase *(search session → order join)*
-  - A "Searches per day" sparkline, 11 Nov → Today
+  - A "Searches per day" sparkline, 12 Nov → Today (25 Nov), the 14 daily values above, which sum to 2,180
 - **Proposal block (violet tint):** **"List Magnesium Glycinate 400 mg, 90 capsules, at S$32.90"** · "Supplier: Evergreen Nutrition (local)".
 - **Forecast:** **140** units/week projected · **39%** gross margin (ex GST) · **High**, confidence 84%.
 - **Footer:** "Sources: Site search logs · Catalogue · Supplier price list". Buttons: Reject · Edit · **Approve…** (navy).

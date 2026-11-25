@@ -33,9 +33,13 @@ describe("demo scenario fixture", () => {
     expect(scenario.gap.searches).toBe(2180);
     expect(scenario.gap.matchingProductsInStock).toBe(0);
     expect(scenario.gap.noPurchasePct).toBe(64);
-    expect(scenario.gap.searchesPerDay).toHaveLength(14);
-    expect(scenario.gap.searchesPerDay[0]).toBe(88);
-    expect(scenario.gap.searchesPerDay[13]).toBe(214);
+    expect(scenario.gap.searchesPerDay).toEqual([96, 104, 112, 121, 130, 136, 149, 157, 166, 175, 189, 199, 216, 230]);
+    expect(scenario.gap).toMatchObject({
+      seriesStartDate: "2026-11-12",
+      seriesEndDate: "2026-11-25",
+      seriesStartLabel: "12 Nov",
+      chartMax: 250,
+    });
     expect(scenario.promo.bundlePrice).toBe(55.9);
     expect(scenario.promo.ribbon).toBe("2 for S$55.90");
     expect(scenario.sourcing.spendLimit).toBe(11500);
@@ -43,6 +47,12 @@ describe("demo scenario fixture", () => {
     expect(scenario.erp).toMatchObject({ dcStock: 1200, moveToOnline: 300 });
     expect(scenario.supplier).toMatchObject({ availableUnits: 6000, leadTimeDays: 3, costPrice: 18.5, moq: 480 });
     expect(scenario.timing).toMatchObject({ totalSeconds: 431, totalLabel: "7 min 11 s", agentSteps: 6, humanApprovals: 2 });
+  });
+
+  it("has a daily series that sums to the headline search count", () => {
+    const sum = scenario.gap.searchesPerDay.reduce((total, n) => total + n, 0);
+    expect(sum).toBe(scenario.gap.searches);
+    expect(sum).toBe(2180);
   });
 
   it("removes the cures-insomnia claim and records the check id", () => {
@@ -73,6 +83,9 @@ describe("demo scenario fixture", () => {
     const sameApprover = clone() as { approvers: { id: string }[] };
     sameApprover.approvers[1].id = sameApprover.approvers[0].id;
     expect(() => parseScenario(sameApprover)).toThrow(/different people/);
+    const offSum = clone() as { gap: { searchesPerDay: number[] } };
+    offSum.gap.searchesPerDay[0] += 1;
+    expect(() => parseScenario(offSum)).toThrow(/sum to gap.searches/);
     const overLimit = clone() as { sourcing: { spendLimit: number } };
     overLimit.sourcing.spendLimit = 5000;
     expect(() => parseScenario(overLimit)).toThrow(/underLimit/);
