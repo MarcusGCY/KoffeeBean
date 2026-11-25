@@ -50,6 +50,8 @@ export function refusalMessage(error: unknown): string {
       return "The proposal was rejected. Reset the demo to start again.";
     case "sourcing_required":
       return "Sourcing must be approved first.";
+    case "stock_check_required":
+      return "The stock check must be finished first.";
     case "sent_back":
       return "The listing was sent back. Reset the demo to start again.";
     case "store_unavailable":

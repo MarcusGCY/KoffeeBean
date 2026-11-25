@@ -1,14 +1,18 @@
 import { clockLabel, findRejection, railSteps, type RailStep } from "./ops-console";
 import type { Scenario } from "./scenario";
-import type { DemoState } from "./state";
+import { STOCK_CHECK_STAGE, type DemoState } from "./state";
 
-/** Where the two-person approval stands. It is derived from the persisted state, never stored. */
-export type LaunchPhase = "sourcing_pending" | "rejected" | "launch_pending" | "sent_back" | "launched";
+/**
+ * Where the launch flow stands. It is derived from the persisted state, never stored.
+ * "stock_check" is the agent's supplier and ERP check (screen 03) between approval 1
+ * and the approval-2 screen: approval 2 is refused until the presenter moves past it.
+ */
+export type LaunchPhase = "sourcing_pending" | "rejected" | "stock_check" | "launch_pending" | "sent_back" | "launched";
 
 /** The audit action that marks a listing sent back. Its `ref` is the listing id. */
 export const SEND_BACK_ACTION_PREFIX = "Sent back listing and promo";
 
-type ApprovalState = Pick<DemoState, "approvals" | "audit">;
+type ApprovalState = Pick<DemoState, "approvals" | "audit"> & { stage?: number };
 
 export type ApproverView = {
   id: string;
@@ -77,26 +81,37 @@ export function findSendBack(scenario: Scenario, state: Pick<DemoState, "audit">
 
 export function launchPhase(scenario: Scenario, state: ApprovalState): LaunchPhase {
   if (state.approvals.launch) return "launched";
-  if (state.approvals.sourcing) return findSendBack(scenario, state) ? "sent_back" : "launch_pending";
+  if (state.approvals.sourcing) {
+    if (findSendBack(scenario, state)) return "sent_back";
+    return state.stage === STOCK_CHECK_STAGE ? "stock_check" : "launch_pending";
+  }
   return findRejection(scenario, state) ? "rejected" : "sourcing_pending";
 }
 
 /**
  * The rail for each phase. The approval modal over screen 01 outlines step 2, the
- * launch approval outlines step 5 and an approved launch outlines "Live".
+ * stock check outlines step 3, the launch approval outlines step 5 and an approved
+ * launch outlines "Live". Step 3 shows done only once the check has really completed
+ * (`stockChecked`), so a launch screen reached without it leaves step 3 open.
  */
-export function launchRail(phase: LaunchPhase, modalOpen = false): RailStep[] {
+export function launchRail(phase: LaunchPhase, modalOpen = false, stockChecked = true): RailStep[] {
   switch (phase) {
     case "sourcing_pending":
       return railSteps(modalOpen ? 2 : 1);
     case "rejected":
       return railSteps(1);
+    case "stock_check":
+      return railSteps(3);
     case "launch_pending":
     case "sent_back":
-      return railSteps(5);
+      return withStockCheck(railSteps(5), stockChecked);
     case "launched":
-      return railSteps(6);
+      return withStockCheck(railSteps(6), stockChecked);
   }
+}
+
+function withStockCheck(steps: RailStep[], stockChecked: boolean): RailStep[] {
+  return stockChecked ? steps : steps.map((step) => (step.n === 3 ? { ...step, state: "upcoming" as const } : step));
 }
 
 function approverView(scenario: Scenario, slot: 1 | 2): ApproverView {
@@ -141,7 +156,7 @@ export function approvalView(scenario: Scenario, state: ApprovalState): Approval
   return {
     phase,
     approvers: [first, second],
-    defaultActorId: phase === "sourcing_pending" || phase === "rejected" ? first.id : second.id,
+    defaultActorId: phase === "sourcing_pending" || phase === "rejected" || phase === "stock_check" ? first.id : second.id,
     sourcing: {
       kicker: "HUMAN APPROVAL 1 OF 2",
       title: "Approve sourcing?",

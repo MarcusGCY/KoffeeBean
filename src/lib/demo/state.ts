@@ -21,6 +21,11 @@ export const STATE_KEYS: readonly string[] = STATE_KEY_NAMES.map(key);
 export const MIN_STAGE = 0;
 export const MAX_STAGE = 7;
 
+/** `stage` while the agent is on screen 03: after approval 1, before the listing draft. */
+export const STOCK_CHECK_STAGE = 3;
+/** `stage` once the presenter has moved past screen 03 on to the listing draft. */
+export const PAST_STOCK_CHECK_STAGE = 4;
+
 export type ApprovalSlot = "sourcing" | "launch";
 
 export type DemoApproval = {
@@ -152,6 +157,12 @@ export async function commitApproval(slot: ApprovalSlot, approval: DemoApproval,
 
 export async function appendAudit(row: DemoAuditRow): Promise<void> {
   await run([["RPUSH", key("audit"), JSON.stringify(row)]]);
+}
+
+/** Appends several audit rows in one request, so readers never see only some of them. */
+export async function appendAuditRows(rows: DemoAuditRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  await run(rows.map((row): Command => ["RPUSH", key("audit"), JSON.stringify(row)]));
 }
 
 /**

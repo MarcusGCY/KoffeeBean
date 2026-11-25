@@ -5,6 +5,7 @@ import { requirePresenterPage } from "@/lib/demo/guard";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoState, type DemoState } from "@/lib/demo/state";
+import { stockCheckView } from "@/lib/demo/stock-check-view";
 
 export const instant = false;
 
@@ -13,7 +14,7 @@ export const metadata = {
   robots: { index: false, follow: false },
 };
 
-const EMPTY_STATE: Pick<DemoState, "approvals" | "audit"> = { approvals: {}, audit: [] };
+const EMPTY_STATE: Pick<DemoState, "stage" | "approvals" | "audit"> = { stage: 0, approvals: {}, audit: [] };
 
 export default async function PelitaOpsPage() {
   await connection();
@@ -21,5 +22,5 @@ export default async function PelitaOpsPage() {
   // A store that is not configured or is down still shows screen 01 as a new proposal.
   const state = await getDemoState().catch(() => EMPTY_STATE);
   const scenario = loadScenario();
-  return <PelitaOpsConsole view={opsConsoleView(scenario, state)} approval={approvalView(scenario, state)} />;
+  return <PelitaOpsConsole view={opsConsoleView(scenario, state)} approval={approvalView(scenario, state)} stockCheck={stockCheckView(scenario, state)} />;
 }

@@ -11,6 +11,7 @@ export type ApprovalRefusal =
   | "already_approved"
   | "proposal_rejected"
   | "sourcing_required"
+  | "stock_check_required"
   | "sent_back";
 
 export type ApprovalInput = { approverId: string; confirmed: boolean };
@@ -60,6 +61,7 @@ async function approve(scenario: Scenario, slot: ApprovalSlot, input: ApprovalIn
   if (slot === "launch") {
     if (!state.approvals.sourcing) return refuse("sourcing_required");
     if (phase === "sent_back") return refuse("sent_back");
+    if (phase === "stock_check") return refuse("stock_check_required");
   }
 
   const { actor } = who;
@@ -97,6 +99,7 @@ export async function sendBackLaunch(scenario: Scenario, input: { approverId: st
   if (!who.ok) return who;
   if (state.approvals.launch) return refuse("already_approved");
   if (!state.approvals.sourcing) return refuse("sourcing_required");
+  if (launchPhase(scenario, state) === "stock_check") return refuse("stock_check_required");
   const existing = findSendBack(scenario, state);
   if (existing) return { ok: true, changed: false, phase: "sent_back", sentBack: { by: existing.by, atLabel: existing.atLabel } };
 
