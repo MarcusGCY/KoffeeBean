@@ -310,7 +310,11 @@ describe("two-person approval state transitions", () => {
   it("writes an approval and its audit row in one request, only to keys on the fixed list", async () => {
     await approveSourcing(scenario, { approverId: first.id, confirmed: true }, T1);
     const writes = sent.filter((command) => command[0] === "SET" || command[0] === "RPUSH");
-    expect(writes.map((command) => command[0])).toEqual(["SET", "RPUSH"]);
+    expect(writes.map((command) => [command[0], String(command[1]).replace("kb:demo:pelita:", "")])).toEqual([
+      ["SET", "claim:sourcing"],
+      ["SET", "approvals"],
+      ["RPUSH", "audit"],
+    ]);
     await reachApproval2();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     await sendBackLaunch(scenario, { approverId: second.id }, T2);
@@ -321,7 +325,7 @@ describe("two-person approval state transitions", () => {
       expect(String(target).startsWith("kb:demo:pelita:")).toBe(true);
       expect(STATE_KEYS).toContain(target);
     }
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed"]);
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
   });
 });
 

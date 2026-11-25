@@ -431,6 +431,7 @@ describe("Approval 2 publishes", () => {
 
     const calls = writes();
     expect(calls.map(([name, target]) => [name, String(target).replace("kb:demo:pelita:", "")])).toEqual([
+      ["SET", "claim:launch"],
       ["SET", "approvals"],
       ["RPUSH", "audit"],
       ["RPUSH", "audit"],
@@ -493,11 +494,11 @@ describe("Approval 2 publishes", () => {
     expect(await phaseOf()).toBe("launch_pending");
   });
 
-  it("adds no state key: the fixed list is unchanged and every write stays inside it", async () => {
+  it("adds no state key beyond the fixed list, and every write stays inside it", async () => {
     await toScreen05();
     await approveLaunch(scenario, { approverId: second.id, confirmed: true }, T2);
     await resetDemo();
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed"]);
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
     expect(sent.length).toBeGreaterThan(0);
     for (const [name, target] of sent) {
       expect(["GET", "SET", "DEL", "RPUSH", "LRANGE"]).toContain(name);

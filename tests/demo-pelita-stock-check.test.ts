@@ -763,8 +763,8 @@ describe("screen 03 renders", () => {
 describe("reset clears the stock check", () => {
   beforeEach(useFakeRedis);
 
-  it("adds no state key: the fixed list is unchanged and every write stays inside it", async () => {
-    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed"]);
+  it("adds no state key beyond the fixed list, and every write stays inside it", async () => {
+    expect(STATE_KEY_NAMES).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
     await sourcingApproved();
     await runStockCheck(scenario, instantDeps());
     await continueFromStockCheck(scenario);

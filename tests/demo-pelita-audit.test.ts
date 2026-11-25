@@ -442,12 +442,12 @@ describe("the audit timeline against the real launch flow", () => {
 describe("reset clears the audit timeline, and the timeline adds no state key", () => {
   beforeEach(useFakeRedis);
 
-  it("keeps the fixed key list at the four existing keys", () => {
-    expect([...STATE_KEY_NAMES]).toEqual(["stage", "approvals", "audit", "listed"]);
+  it("keeps the fixed key list: the four state keys plus the write guards", () => {
+    expect([...STATE_KEY_NAMES]).toEqual(["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"]);
     expect(STATE_KEYS).toEqual(STATE_KEY_NAMES.map((name) => `kb:demo:pelita:${name}`));
   });
 
-  it("writes only the existing keys during a full run, and reading the timeline writes nothing", async () => {
+  it("writes only keys on the fixed list during a full run, and reading the timeline writes nothing", async () => {
     openGate();
     await toLaunched();
     const Page = (await import("@/app/demo/pelita/audit/page")).default;
@@ -455,7 +455,7 @@ describe("reset clears the audit timeline, and the timeline adds no state key", 
     renderToStaticMarkup(await Page());
     expect(sent.every(([name]) => name === "GET" || name === "LRANGE")).toBe(true);
     const pelitaKeys = [...store.keys()].filter((k) => k.startsWith("kb:demo:pelita:") && !(k in FOREIGN));
-    expect(pelitaKeys.sort()).toEqual([...STATE_KEYS].sort());
+    expect(pelitaKeys.sort()).toEqual(STATE_KEYS.filter((k) => k !== "kb:demo:pelita:opening").sort());
   });
 
   it("empties the timeline after reset, drops the elapsed time and the counts, and leaves foreign keys alone", async () => {

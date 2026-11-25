@@ -127,8 +127,11 @@ export async function runListingDraft(scenario: Scenario, deps: ListingDeps = co
   const claims = await deps.claims(scenario, deps);
   if (claims.status !== "passed" || findForbiddenClaim(scenario, scenario.listing.description) !== null) return refuse("claims_failed");
 
-  // Another request may have finished the same draft while this one waited.
+  // Another request may have finished the same draft while this one waited, and a reset
+  // may have wiped the approval it needs: rows must never land after a reset.
   const latest = await getDemoState();
+  const stale = blocked(launchPhase(scenario, latest));
+  if (stale) return refuse(stale);
   if (!findListingDraft(scenario, latest)) {
     const at = deps.now().toISOString();
     await appendAuditRows([

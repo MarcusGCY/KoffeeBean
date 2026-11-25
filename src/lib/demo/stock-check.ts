@@ -167,8 +167,11 @@ export async function runStockCheck(scenario: Scenario, deps: StockCheckDeps = c
   const { units } = erp.purchaseOrder;
   if (units < supplier.moq || units > supplier.availableUnits) return refuse("supply_shortfall");
 
-  // Another request may have finished the same check while this one waited.
+  // Another request may have finished the same check while this one waited, and a reset
+  // may have wiped the approval it needs: rows must never land after a reset.
   const latest = await getDemoState();
+  const stale = blocked(launchPhase(scenario, latest));
+  if (stale) return refuse(stale);
   if (!findStockCheck(scenario, latest)) {
     const at = deps.now().toISOString();
     const agent = agentActor(scenario);

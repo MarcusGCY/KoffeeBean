@@ -118,6 +118,9 @@ describe("resetDemo", () => {
       ["DEL", "kb:demo:pelita:approvals"],
       ["DEL", "kb:demo:pelita:audit"],
       ["DEL", "kb:demo:pelita:listed"],
+      ["DEL", "kb:demo:pelita:claim:sourcing"],
+      ["DEL", "kb:demo:pelita:claim:launch"],
+      ["DEL", "kb:demo:pelita:opening"],
       ["SET", "kb:demo:pelita:stage", "0"],
       ["SET", "kb:demo:pelita:listed", "0"],
     ]);

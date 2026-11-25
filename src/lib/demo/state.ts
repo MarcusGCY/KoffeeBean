@@ -1,10 +1,13 @@
-import { redisPipeline } from "../upstash";
+import { redisPipeline, redisTransaction } from "../upstash";
 
 /** Every Redis key the Pelita demo track touches lives under this prefix. */
 export const KEY_PREFIX = "kb:demo:pelita:";
 
-/** The complete, fixed set of state keys. Reset deletes exactly these. */
-export const STATE_KEY_NAMES = ["stage", "approvals", "audit", "listed"] as const;
+/**
+ * The complete, fixed set of state keys. Reset deletes exactly these. The `claim:` keys
+ * and `opening` are write guards (SET NX), not state a screen reads.
+ */
+export const STATE_KEY_NAMES = ["stage", "approvals", "audit", "listed", "claim:sourcing", "claim:launch", "opening"] as const;
 export type StateKeyName = (typeof STATE_KEY_NAMES)[number];
 
 /** The only place a demo key is built. */
@@ -58,11 +61,15 @@ type Command = (string | number)[];
 
 const COMMANDS = new Set(["GET", "SET", "DEL", "RPUSH", "LRANGE"]);
 
+/** How long a claim guard outlives its request, so a request that died mid-write cannot block the slot for good. */
+const CLAIM_TTL_SEC = 60;
+
 /**
  * Every demo write and read goes through here. Each command names exactly one
- * key, and it must be inside the demo prefix and on the fixed list.
+ * key, and it must be inside the demo prefix and on the fixed list. With
+ * `atomic` the commands run as one MULTI/EXEC.
  */
-async function run(commands: Command[]): Promise<unknown[]> {
+async function run(commands: Command[], atomic = false): Promise<unknown[]> {
   for (const command of commands) {
     const [name, target] = command;
     if (typeof name !== "string" || !COMMANDS.has(name)) throw new Error("Demo store command not allowed");
@@ -70,7 +77,7 @@ async function run(commands: Command[]): Promise<unknown[]> {
       throw new Error("Demo store key outside the demo prefix");
     }
   }
-  return redisPipeline(commands);
+  return atomic ? redisTransaction(commands) : redisPipeline(commands);
 }
 
 function parseStage(value: unknown): number {
@@ -145,13 +152,28 @@ export async function recordApproval(slot: ApprovalSlot, approval: DemoApproval)
 /** What approval 2 changes besides the approval itself: the publish audit rows, the listed flag and the stage. */
 export type CommitExtras = { rows?: DemoAuditRow[]; listed?: boolean; stage?: number };
 
+const CLAIM_NAMES: Record<ApprovalSlot, StateKeyName> = { sourcing: "claim:sourcing", launch: "claim:launch" };
+
+/** `SET key 1 NX EX`: true for exactly one caller until the key expires or is deleted. */
+async function claim(name: StateKeyName): Promise<boolean> {
+  const [result] = await run([["SET", key(name), "1", "NX", "EX", CLAIM_TTL_SEC]]);
+  return result === "OK";
+}
+
+async function release(name: StateKeyName): Promise<void> {
+  await run([["DEL", key(name)]]).catch(() => undefined);
+}
+
 /**
- * Records one approval and its audit row in a single request, together with any
- * `extras` (approval 2 publishes in the same request, so a reader never sees an
+ * Records one approval and its audit row in a single MULTI/EXEC, together with any
+ * `extras` (approval 2 publishes in the same transaction, so a reader never sees an
  * approval without its listing). Returns false and writes nothing when the slot
- * already holds an approval. The check is made just before the write: the shared
- * approvals key has no compare-and-set on the fixed command list, so two truly
- * simultaneous requests could still both pass.
+ * already holds an approval.
+ *
+ * The slot is claimed first with SET NX on its own key, so two simultaneous requests
+ * for the same slot cannot both get past it: the second is refused. The approvals check
+ * after the claim covers a claim that has expired since. A claim whose write failed is
+ * released so the approver can try again.
  */
 export async function commitApproval(
   slot: ApprovalSlot,
@@ -159,21 +181,47 @@ export async function commitApproval(
   row: DemoAuditRow,
   extras: CommitExtras = {},
 ): Promise<boolean> {
-  const [current] = await run([["GET", key("approvals")]]);
-  const approvals = parseApprovals(current);
-  if (approvals[slot]) return false;
-  const commands: Command[] = [
-    ["SET", key("approvals"), JSON.stringify({ ...approvals, [slot]: approval })],
-    ["RPUSH", key("audit"), JSON.stringify(row)],
-    ...(extras.rows ?? []).map((extra): Command => ["RPUSH", key("audit"), JSON.stringify(extra)]),
-  ];
-  if (extras.listed !== undefined) commands.push(["SET", key("listed"), extras.listed ? "1" : "0"]);
-  if (extras.stage !== undefined) {
-    if (!Number.isInteger(extras.stage) || extras.stage < MIN_STAGE || extras.stage > MAX_STAGE) throw new Error("Demo stage out of range");
-    commands.push(["SET", key("stage"), String(extras.stage)]);
+  if (extras.stage !== undefined && (!Number.isInteger(extras.stage) || extras.stage < MIN_STAGE || extras.stage > MAX_STAGE)) {
+    throw new Error("Demo stage out of range");
   }
-  await run(commands);
-  return true;
+  const claimName = CLAIM_NAMES[slot];
+  if (!(await claim(claimName))) return false;
+  try {
+    const [current] = await run([["GET", key("approvals")]]);
+    const approvals = parseApprovals(current);
+    if (approvals[slot]) return false;
+    const commands: Command[] = [
+      ["SET", key("approvals"), JSON.stringify({ ...approvals, [slot]: approval })],
+      ["RPUSH", key("audit"), JSON.stringify(row)],
+      ...(extras.rows ?? []).map((extra): Command => ["RPUSH", key("audit"), JSON.stringify(extra)]),
+    ];
+    if (extras.listed !== undefined) commands.push(["SET", key("listed"), extras.listed ? "1" : "0"]);
+    if (extras.stage !== undefined) commands.push(["SET", key("stage"), String(extras.stage)]);
+    await run(commands, true);
+    return true;
+  } catch (error) {
+    await release(claimName);
+    throw error;
+  }
+}
+
+/**
+ * Writes the two opening agent rows once per reset. Returns false and writes nothing when
+ * the audit list is not empty or another request holds the guard. Both rows go in one
+ * MULTI/EXEC; a failed write releases the guard.
+ */
+export async function commitOpeningRows(rows: DemoAuditRow[]): Promise<boolean> {
+  if (rows.length === 0) return false;
+  if (!(await claim("opening"))) return false;
+  try {
+    const [existing] = await run([["LRANGE", key("audit"), 0, 0]]);
+    if (Array.isArray(existing) && existing.length > 0) return false;
+    await run(rows.map((row): Command => ["RPUSH", key("audit"), JSON.stringify(row)]), true);
+    return true;
+  } catch (error) {
+    await release("opening");
+    throw error;
+  }
 }
 
 export async function appendAudit(row: DemoAuditRow): Promise<void> {
@@ -197,10 +245,13 @@ export async function appendAuditRowsAndSetStage(rows: DemoAuditRow[], stage: nu
  * nothing approved and nothing listed.
  */
 export async function resetDemo(): Promise<DemoState> {
-  await run([
-    ...STATE_KEY_NAMES.map((name): Command => ["DEL", key(name)]),
-    ["SET", key("stage"), "0"],
-    ["SET", key("listed"), "0"],
-  ]);
+  await run(
+    [
+      ...STATE_KEY_NAMES.map((name): Command => ["DEL", key(name)]),
+      ["SET", key("stage"), "0"],
+      ["SET", key("listed"), "0"],
+    ],
+    true,
+  );
   return { stage: MIN_STAGE, approvals: {}, audit: [], listed: false };
 }

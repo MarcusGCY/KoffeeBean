@@ -24,11 +24,11 @@ function endpoint(path: string): string {
   return `${base}${path}`;
 }
 
-export async function redisPipeline(commands: (string | number)[][]): Promise<unknown[]> {
+async function redisBatch(path: "/pipeline" | "/multi-exec", commands: (string | number)[][]): Promise<unknown[]> {
   if (!redisConfigured()) throw new StoreUnavailableError();
   let response: Response;
   try {
-    response = await fetch(endpoint("/pipeline"), {
+    response = await fetch(endpoint(path), {
       method: "POST",
       headers: {
         authorization: `Bearer ${(process.env.UPSTASH_REDIS_REST_TOKEN ?? "").trim()}`,
@@ -54,6 +54,15 @@ export async function redisPipeline(commands: (string | number)[][]): Promise<un
     }
     return item.result;
   });
+}
+
+export function redisPipeline(commands: (string | number)[][]): Promise<unknown[]> {
+  return redisBatch("/pipeline", commands);
+}
+
+/** Like redisPipeline, but the commands run as one MULTI/EXEC, so a reader sees all of them or none. */
+export function redisTransaction(commands: (string | number)[][]): Promise<unknown[]> {
+  return redisBatch("/multi-exec", commands);
 }
 
 async function redisCommand(command: (string | number)[]): Promise<unknown> {

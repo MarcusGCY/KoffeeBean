@@ -1,12 +1,12 @@
 import { SEND_BACK_ACTION_PREFIX, launchPhase, launchRail } from "./approval-view";
 import { EDIT_ACTION_PREFIX, SEND_ACTION } from "./listing-view";
 import { CONSOLE_TITLE, REJECT_ACTION_PREFIX, railSteps, type RailStep } from "./ops-console";
-import { publishedView } from "./published-view";
+import { detectionToLive, publishedView } from "./published-view";
 import type { Scenario } from "./scenario";
 import type { DemoAuditRow, DemoState } from "./state";
 import { findStockCheck } from "./stock-check-view";
 
-export const AUDIT_FOOTER = "Nothing reaches shoppers without two human approvals. Every step the agent takes after the proposal is logged here.";
+export const AUDIT_FOOTER = "Nothing reaches shoppers without two human approvals. Every agent step is logged.";
 export const EMPTY_LABEL = "Nothing is logged yet. Steps appear here as the launch moves along.";
 export const UNAVAILABLE_LABEL = "The audit store could not be read. Try again in a moment.";
 
@@ -176,8 +176,9 @@ function auditRail(scenario: Scenario, state: AuditState): RailStep[] {
 /**
  * Everything screen 07 renders. `state` is null when the store could not be read, which
  * shows an unavailable notice instead of an empty trail. The rows come only from the
- * persisted audit list, in the order they were written. The detection-to-live time is the
- * fixture's, and shows only once approval 2 has really published.
+ * persisted audit list, in the order they were written. The detection-to-live time is
+ * measured from the real first and publish rows (the fixture's figure when either is
+ * missing), and shows only once approval 2 has really published.
  */
 export function auditView(scenario: Scenario, state: AuditState | null): AuditView {
   const rows = state?.audit ?? [];
@@ -204,7 +205,7 @@ export function auditView(scenario: Scenario, state: AuditState | null): AuditVi
     agent: { count: agentCount, label: plural(agentCount, "agent step") },
     approvals: { count: refs.length, refs, label: plural(refs.length, "human approval") },
     otherHuman: otherHumanCount > 0 ? { count: otherHumanCount, label: `${plural(otherHumanCount, "other human action")} · not approvals` } : null,
-    elapsed: published ? { pill: `${scenario.timing.totalLabel}, gap to live`, detail: published.liveIn } : null,
+    elapsed: published && state ? { pill: `${detectionToLive(scenario, state).label}, gap to live`, detail: published.liveIn } : null,
     notLiveLabel: "Not live yet",
     footer: AUDIT_FOOTER,
     emptyLabel: EMPTY_LABEL,

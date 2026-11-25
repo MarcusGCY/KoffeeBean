@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { AUDIT_PATH } from "@/lib/demo/audit-links";
+import { AUDIT_PATH, OPS_PATH } from "@/lib/demo/audit-links";
 import { launchRail, type ApprovalView, type LaunchPhase, type RecordedApproval } from "@/lib/demo/approval-view";
 import { approveRequest, refusalMessage, sendBackRequest } from "@/lib/demo/approval-client";
 import { editListingRequest, listingMessage, runListingDraftRequest, sendForApprovalRequest } from "@/lib/demo/listing-client";
@@ -299,29 +299,14 @@ export function PelitaOpsConsole({
     setError(null);
     try {
       await resetDemoRequest();
-      setStatus("new");
-      setRejection(null);
-      if (approval) {
-        setPhase("sourcing_pending");
-        setActingId(approval.approvers[0].id);
-        setSourcing(null);
-        setLaunch(null);
-        setSentBack(null);
-        setModalOpen(false);
-        checkStarted.current = false;
-        draftStarted.current = false;
-        setCheckStatus("running");
-        setDraftStatus("running");
-        setPublished(null);
-        setLaunchData(null);
-        setStock((current) => (current ? { ...current, complete: false, doneLabel: null, canContinue: false } : current));
-        setDraft((current) => (current ? { ...current, complete: false, doneLabel: null, canEdit: false, canSend: false } : current));
-      }
     } catch {
       setError("Could not reset the demo. Try again.");
-    } finally {
       setBusy(false);
+      return;
     }
+    // Every piece of screen state (checks, draft, edits, approvals, the acting person) starts
+    // again from what the server now holds, and screen 01 writes its opening rows on that load.
+    window.location.assign(OPS_PATH);
   }
 
   const pending = status === "new";
@@ -383,7 +368,7 @@ export function PelitaOpsConsole({
 
       <Rail steps={steps} auditHref={AUDIT_PATH} />
 
-      <main className="px-12 py-6">
+      <main className={`px-12 ${draftScreen || launchScreen ? "py-4" : "py-6"}`}>
         {approval && stockScreen && stock ? (
           <PelitaStockCheck
             data={stock}
