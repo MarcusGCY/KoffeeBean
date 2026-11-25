@@ -5,8 +5,16 @@ import { useMemo, useState } from "react";
 import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
+import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, safeAvatarUrl } from "@/lib/return-to";
 import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
 import { PelitaProductCard } from "./PelitaProductCard";
+
+/** Name, email, and avatar safe to show in the header. Null means signed out. */
+export type PelitaAccount = {
+  name?: string;
+  email?: string;
+  picture?: string;
+};
 
 type Browse = { kind: "deals" } | { kind: "all" } | { kind: "category"; name: string } | { kind: "launched" };
 
@@ -35,13 +43,43 @@ function resultsLabel(count: number): string {
   return `${count} ${count === 1 ? "result" : "results"}`;
 }
 
+function AccountCluster({ account }: { account: PelitaAccount | null }) {
+  if (!account) {
+    return (
+      <a href={PELITA_SIGN_IN_HREF} className="flex items-center gap-2 whitespace-nowrap font-bold text-white">
+        <UserIcon />
+        Sign in
+      </a>
+    );
+  }
+  const label = account.name || account.email;
+  const picture = safeAvatarUrl(account.picture);
+  return (
+    <div className="flex items-center gap-3 whitespace-nowrap font-bold text-white">
+      {picture ? (
+        <img src={picture} alt={label ? "" : "Signed in"} width={28} height={28} className="size-7 rounded-full object-cover" />
+      ) : (
+        <UserIcon />
+      )}
+      {label ? (
+        <span className="max-w-48 truncate" title={label}>
+          {label}
+        </span>
+      ) : null}
+      <a href={PELITA_SIGN_OUT_HREF} className="underline underline-offset-4">
+        Sign out
+      </a>
+    </div>
+  );
+}
+
 /**
  * Screen 00: the storefront before the demo story starts. Once the launched product is
  * listed (`view.published`), it opens on screen 06 instead: the product's category with
  * the new card first, the "live" toast and the search proof. The cart lives in this
  * component's state only.
  */
-export function PelitaStorefront({ view }: { view: StorefrontView }) {
+export function PelitaStorefront({ view, account = null }: { view: StorefrontView; account?: PelitaAccount | null }) {
   const published = view.published;
   const [browse, setBrowse] = useState<Browse>(published ? { kind: "launched" } : { kind: "deals" });
   const [chip, setChip] = useState(0);
@@ -113,10 +151,7 @@ export function PelitaStorefront({ view }: { view: StorefrontView }) {
             className="h-full flex-1 bg-transparent font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-3"
           />
         </form>
-        <div className="flex items-center gap-2 font-bold text-white">
-          <UserIcon />
-          Sign in
-        </div>
+        <AccountCluster account={account} />
         <div
           className="flex h-[52px] items-center gap-2.5 rounded-full bg-surface px-5 font-extrabold text-primary-dark"
           role="status"
