@@ -2,7 +2,7 @@ import type { ApprovalRefusal } from "./approval";
 import type { LaunchPhase, RecordedApproval } from "./approval-view";
 import type { PublishedView } from "./published-view";
 
-/** Browser calls to the presenter-gated approval API. Same-origin, so the presenter cookie travels with them. */
+/** Same-origin calls to the public Pelita approval API. A cross-site request is refused. */
 
 type Action = "approve_sourcing" | "approve_launch" | "send_back";
 

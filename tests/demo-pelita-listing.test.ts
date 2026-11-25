@@ -750,16 +750,16 @@ describe("screen 04 renders", () => {
 });
 
 describe("listing API", () => {
-  it("answers 404 when the gate is closed or the cookie is missing, including on production", async () => {
+  it("answers 404 when the gate is closed, and reaches the store with no cookie when it is open", async () => {
     const body = { action: "draft" };
     expect((await listingRoute(post(LISTING_URL, body))).status).toBe(404);
     openGate();
-    expect((await listingRoute(post(LISTING_URL, body, { cookie: false }))).status).toBe(404);
+    expect((await listingRoute(post(LISTING_URL, body, { cookie: false }))).status).toBe(503);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await listingRoute(post(LISTING_URL, body))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await listingRoute(post(LISTING_URL, body, { cookie: false }))).status).toBe(404);
+    expect((await listingRoute(post(LISTING_URL, body, { cookie: false }))).status).toBe(503);
     expect((await listingRoute(post(LISTING_URL, body))).status).toBe(503);
   });
 

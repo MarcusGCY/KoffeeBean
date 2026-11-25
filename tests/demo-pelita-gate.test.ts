@@ -64,7 +64,7 @@ describe("demo track gate", () => {
     expect(demoTrack()).toBe("pelita");
   });
 
-  it("stays off on Vercel production unless KB_DEMO_TRACK is exactly pelita, and then stays presenter-gated", () => {
+  it("stays off on Vercel production unless KB_DEMO_TRACK is exactly pelita, and then is public without a presenter cookie", () => {
     process.env.VERCEL_ENV = "production";
     expect(demoTrack()).toBeNull();
     expect(demoEnabled()).toBe(false);
@@ -83,12 +83,12 @@ describe("demo track gate", () => {
 
     process.env.APPROVAL_SECRET = SECRET;
     expect(demoEnabled()).toBe(true);
-    expect(guardDemoApi(new Request(url))?.status).toBe(404);
-    expect(guardDemoApi(withCookie(url, `${token}0`))?.status).toBe(404);
+    expect(guardDemoApi(new Request(url))).toBeNull();
+    expect(guardDemoApi(withCookie(url, `${token}0`))).toBeNull();
     expect(guardDemoApi(withCookie(url, token))).toBeNull();
   });
 
-  it("answers 404 without a secret, without a cookie, and with a bad cookie", async () => {
+  it("answers 404 without a secret, and serves the API with no cookie once the gate is open", async () => {
     process.env.KB_DEMO_TRACK = "pelita";
     const token = signPresenterToken(SECRET);
     const url = "https://x.test/api/demo/pelita/state";
@@ -98,10 +98,10 @@ describe("demo track gate", () => {
 
     process.env.APPROVAL_SECRET = SECRET;
     expect(demoEnabled()).toBe(true);
-    expect(guardDemoApi(new Request(url))?.status).toBe(404);
-    expect(guardDemoApi(withCookie(url, `${token}0`))?.status).toBe(404);
+    expect(guardDemoApi(new Request(url))).toBeNull();
+    expect(guardDemoApi(withCookie(url, `${token}0`))).toBeNull();
     expect(guardDemoApi(withCookie(url, token))).toBeNull();
-    expect((await readState(new Request(url)) as Response).status).toBe(404);
+    expect((await readState(new Request(url)) as Response).status).toBe(503);
   });
 
   it("404s every demo route when the gate is off, even with a valid token", async () => {
@@ -155,40 +155,59 @@ describe("proxy and the demo API", () => {
   beforeEach(clearEnv);
   afterEach(clearEnv);
 
-  it("lets /api/demo/pelita through to its own gate, and keeps other /api/demo paths owner-only", async () => {
+  it("lets /api/demo/pelita through to its own gate, and keeps admin demo and quality owner-only", async () => {
     const pelita = await proxy(new NextRequest("https://x.test/api/demo/pelita/state"));
     expect(pelita.status).toBe(200);
-    for (const path of ["/api/demo/reset", "/api/demo/bi-seed", "/admin/demo"]) {
+    for (const path of ["/api/demo/reset", "/api/demo/bi-seed", "/admin/demo", "/admin/quality", "/api/quality/audit"]) {
       const res = await proxy(new NextRequest(`https://x.test${path}`));
       expect(res.status, path).toBe(404);
     }
   });
 
-  it("answers a real 404 for /demo/pelita pages unless the gate is open and the cookie is valid", async () => {
+  it("answers a real 404 for Pelita pages unless the track gate is open, with or without a cookie", async () => {
     const page = (cookie?: string) =>
       proxy(new NextRequest("https://x.test/demo/pelita", cookie ? { headers: { cookie } } : undefined));
+    const publicPath = (path: string) => proxy(new NextRequest(`https://x.test${path}`));
     const token = signPresenterToken(SECRET);
 
     expect((await page()).status).toBe(404);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
+    expect((await publicPath("/pelita")).status).toBe(404);
+    expect((await publicPath("/pelita/ops")).status).toBe(404);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(404);
 
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
-    expect((await page()).status).toBe(404);
-    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await page()).status).toBe(200);
+    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(200);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
+    expect((await publicPath("/pelita")).status).toBe(200);
+    expect((await publicPath("/pelita/ops")).status).toBe(200);
+    expect((await publicPath("/pelita/audit")).status).toBe(200);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(200);
 
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
+    expect((await publicPath("/pelita")).status).toBe(404);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await page()).status).toBe(404);
-    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await page()).status).toBe(200);
+    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(200);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
+    expect((await publicPath("/pelita")).status).toBe(200);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(200);
+  });
+
+  it("rewrites /pelita onto the Pelita storefront and keeps the shop at /", async () => {
+    const nextConfig = (await import("../next.config")).default;
+    const rewrites = await nextConfig.rewrites?.();
+    const list = Array.isArray(rewrites) ? rewrites : [];
+    expect(list).toEqual([
+      { source: "/pelita", destination: "/demo/pelita" },
+      { source: "/pelita/:path*", destination: "/demo/pelita/:path*" },
+    ]);
+    expect(list.some((rule) => "source" in rule && rule.source === "/")).toBe(false);
   });
 });
 
@@ -245,6 +264,9 @@ describe("the real shop stays unchanged when the demo track is off or pelita", (
     const proxySource = readFileSync(path.join(ROOT, "src/proxy.ts"), "utf8");
     expect(proxySource).toContain('pathname.startsWith("/api/demo/pelita/")');
     expect(proxySource).not.toMatch(/\/api\/(github|triage|privacy)/);
+    const guard = readFileSync(path.join(ROOT, "src/lib/demo/guard.ts"), "utf8");
+    expect(guard).toMatch(/req\.headers\.get\("cookie"\)/);
+    expect(guard).not.toMatch(/verifyPresenterToken|presenterCookieOk/);
   });
 
   it("passes the storefront, cart, orders and prod API routes through on production with the flag unset and set", async () => {

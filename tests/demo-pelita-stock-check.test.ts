@@ -509,16 +509,16 @@ describe("ordering: the check follows approval 1 and approval 2 follows the chec
 });
 
 describe("the gate: page, proxy and API", () => {
-  it("the stock-check API answers 404 when the gate is closed or the cookie is missing, including on production", async () => {
+  it("the stock-check API answers 404 when the gate is closed, and reaches the store with no cookie when it is open", async () => {
     const body = { action: "run" };
     expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(404);
     openGate();
-    expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(404);
+    expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(503);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(404);
+    expect((await stockCheckRoute(post(STOCK_URL, body, { cookie: false }))).status).toBe(503);
     expect((await stockCheckRoute(post(STOCK_URL, body))).status).toBe(503);
   });
 
@@ -587,7 +587,7 @@ describe("the gate: page, proxy and API", () => {
     expect(await timeout.json()).toEqual({ error: "supplier_timeout" });
   });
 
-  it("the proxy 404s /demo/pelita/ops without the gate and the cookie, and lets the API through to its own gate", async () => {
+  it("the proxy 404s Pelita pages when the track gate is closed and lets them through when it is open", async () => {
     const page = (cookie?: string) =>
       proxy(new NextRequest("https://x.test/demo/pelita/ops", cookie ? { headers: { cookie } } : undefined));
     const token = signPresenterToken(SECRET);
@@ -596,34 +596,41 @@ describe("the gate: page, proxy and API", () => {
 
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
-    expect((await page()).status).toBe(404);
+    expect((await page()).status).toBe(200);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await page()).status).toBe(404);
-    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await page()).status).toBe(200);
+    expect((await page(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(200);
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
     delete process.env.VERCEL_ENV;
 
     expect((await proxy(new NextRequest(STOCK_URL, { method: "POST" }))).status).toBe(200);
-    expect((await stockCheckRoute(new Request(STOCK_URL, { method: "POST", headers: { origin: "https://x.test" } }))).status).toBe(404);
+    const open = new Request(STOCK_URL, {
+      method: "POST",
+      headers: { origin: "https://x.test", "content-type": "application/json" },
+      body: JSON.stringify({ action: "run" }),
+    });
+    expect((await stockCheckRoute(open)).status).toBe(503);
+    delete process.env.KB_DEMO_TRACK;
+    expect((await stockCheckRoute(post(STOCK_URL, { action: "run" }))).status).toBe(404);
   });
 
-  it("the ops page is a 404 without the gate and the cookie, and passes the stock check view when open", async () => {
+  it("the ops page is a 404 when the gate is closed, and passes the stock check view when open with no cookie", async () => {
     const Page = (await import("@/app/demo/pelita/ops/page")).default;
     await expect(Page()).rejects.toThrow();
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
-    await expect(Page()).rejects.toThrow();
+    expect(isValidElement(await Page())).toBe(true);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     cookieJar.value = signPresenterToken(SECRET);
     await expect(Page()).rejects.toThrow();
     process.env.KB_DEMO_TRACK = "pelita";
     cookieJar.value = undefined;
-    await expect(Page()).rejects.toThrow();
+    expect(isValidElement(await Page())).toBe(true);
     cookieJar.value = signPresenterToken(SECRET);
     expect(isValidElement(await Page())).toBe(true);
     delete process.env.VERCEL_ENV;

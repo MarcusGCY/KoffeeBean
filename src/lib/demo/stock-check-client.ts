@@ -2,7 +2,7 @@ import type { LaunchPhase } from "./approval-view";
 import type { StockCheckRefusal } from "./stock-check";
 import type { StockCheckView } from "./stock-check-view";
 
-/** Browser calls to the presenter-gated stock-check API. Same-origin, so the presenter cookie travels with them. */
+/** Same-origin calls to the public Pelita stock-check API. A cross-site request is refused. */
 
 export class StockCheckRefused extends Error {
   constructor(readonly reason: StockCheckRefusal | "store_unavailable" | "reset_during_request" | "failed") {

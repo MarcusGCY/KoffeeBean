@@ -2,7 +2,7 @@ import type { ApprovalView, LaunchPhase } from "./approval-view";
 import type { ListingRefusal } from "./listing";
 import { DESCRIPTION_MAX, type ListingDraftView } from "./listing-view";
 
-/** Browser calls to the presenter-gated listing API. Same-origin, so the presenter cookie travels with them. */
+/** Same-origin calls to the public Pelita listing API. A cross-site request is refused. */
 
 export class ListingRefused extends Error {
   constructor(readonly reason: ListingRefusal | "store_unavailable" | "reset_during_request" | "failed") {

@@ -517,7 +517,7 @@ describe("/demo/pelita/audit gate", () => {
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
   });
 
-  it("is a 404 on production until the flag is set, then renders for a presenter", async () => {
+  it("is a 404 on production until the flag is set, then renders with no cookie", async () => {
     process.env.VERCEL_ENV = "production";
     process.env.APPROVAL_SECRET = SECRET;
     cookieJar.value = signPresenterToken(SECRET);
@@ -526,14 +526,11 @@ describe("/demo/pelita/audit gate", () => {
     openGate();
     process.env.VERCEL_ENV = "production";
     cookieJar.value = undefined;
-    await expect((await loadPage())()).rejects.toMatchObject(notFound);
-
-    cookieJar.value = signPresenterToken(SECRET);
     const html = renderToStaticMarkup(await (await loadPage())());
     expect(html).toContain("Audit trail · Magnesium Glycinate");
   });
 
-  it("is a 404 without a secret, without a cookie, and with a forged or expired cookie", async () => {
+  it("is a 404 without a secret, and renders with no cookie or a forged cookie once the gate is open", async () => {
     process.env.KB_DEMO_TRACK = "pelita";
     cookieJar.value = signPresenterToken(SECRET);
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
@@ -541,28 +538,35 @@ describe("/demo/pelita/audit gate", () => {
     process.env.APPROVAL_SECRET = SECRET;
     const Page = await loadPage();
     cookieJar.value = undefined;
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(renderToStaticMarkup(await Page())).toContain("Audit trail · Magnesium Glycinate");
     cookieJar.value = `${signPresenterToken(SECRET)}0`;
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(renderToStaticMarkup(await Page())).toContain("Audit trail · Magnesium Glycinate");
     cookieJar.value = signPresenterToken(SECRET, Date.now() - 2 * 60 * 60 * 1000, 60 * 1000);
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(renderToStaticMarkup(await Page())).toContain("Audit trail · Magnesium Glycinate");
   });
 
   it("never reads the store before the gate has said yes", async () => {
     process.env.KB_DEMO_TRACK = "pelita";
-    process.env.APPROVAL_SECRET = SECRET;
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
     expect(sent).toEqual([]);
+
+    process.env.APPROVAL_SECRET = SECRET;
+    cookieJar.value = undefined;
+    expect(renderToStaticMarkup(await (await loadPage())())).toContain("Audit trail · Magnesium Glycinate");
+    expect(sent.length).toBeGreaterThan(0);
   });
 
-  it("renders for a valid presenter cookie, and the proxy gate covers the page path", async () => {
+  it("renders with no presenter cookie, and the proxy gate covers the public paths", async () => {
     openGate();
+    cookieJar.value = undefined;
     const html = renderToStaticMarkup(await (await loadPage())());
     expect(html).toContain("Audit trail · Magnesium Glycinate");
-    const cookie = `${PRESENTER_COOKIE}=${signPresenterToken(SECRET)}`;
-    expect(pelitaPageAllowed("/demo/pelita/audit", cookie)).toBe(true);
-    expect(pelitaPageAllowed("/demo/pelita/audit", null)).toBe(false);
-    expect(pelitaPageAllowed("/demo/pelita/audit", `${PRESENTER_COOKIE}=forged`)).toBe(false);
+    expect(pelitaPageAllowed("/demo/pelita/audit")).toBe(true);
+    expect(pelitaPageAllowed("/pelita")).toBe(true);
+    expect(pelitaPageAllowed("/pelita/audit")).toBe(true);
+    delete process.env.KB_DEMO_TRACK;
+    expect(pelitaPageAllowed("/demo/pelita/audit")).toBe(false);
+    expect(pelitaPageAllowed("/pelita")).toBe(false);
   });
 
   it("adds no API of its own: the page keeps requirePresenterPage and the browser makes no request", () => {

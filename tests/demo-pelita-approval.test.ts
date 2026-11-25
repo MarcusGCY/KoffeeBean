@@ -601,16 +601,16 @@ describe("/demo/pelita/ops page", () => {
 });
 
 describe("approval API", () => {
-  it("answers 404 when the gate is closed or the cookie is missing, including on production", async () => {
+  it("answers 404 when the gate is closed, and reaches the store with no cookie when it is open", async () => {
     const body = { action: "approve_sourcing", approverId: first.id, confirmed: true };
     expect((await approvalRoute(post(URL, body))).status).toBe(404);
     openGate();
-    expect((await approvalRoute(post(URL, body, { cookie: false }))).status).toBe(404);
+    expect((await approvalRoute(post(URL, body, { cookie: false }))).status).toBe(503);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await approvalRoute(post(URL, body))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await approvalRoute(post(URL, body, { cookie: false }))).status).toBe(404);
+    expect((await approvalRoute(post(URL, body, { cookie: false }))).status).toBe(503);
     expect((await approvalRoute(post(URL, body))).status).toBe(503);
   });
 

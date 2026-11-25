@@ -76,7 +76,7 @@ describe("/demo/pelita page respects the gate", () => {
     await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
   });
 
-  it("is a 404 on production until KB_DEMO_TRACK=pelita, then renders for a presenter", async () => {
+  it("is a 404 on production until KB_DEMO_TRACK=pelita, then renders with no cookie", async () => {
     process.env.VERCEL_ENV = "production";
     process.env.APPROVAL_SECRET = SECRET;
     cookieJar.value = signPresenterToken(SECRET);
@@ -85,25 +85,24 @@ describe("/demo/pelita page respects the gate", () => {
 
     process.env.KB_DEMO_TRACK = "pelita";
     cookieJar.value = undefined;
-    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
-    cookieJar.value = `${signPresenterToken(SECRET)}0`;
-    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    const open = await Page();
+    expect(isValidElement(open)).toBe(true);
+    expect((open as ReactElement).type).toBe(PelitaStorefront);
 
-    cookieJar.value = signPresenterToken(SECRET);
-    const element = await Page();
-    expect(isValidElement(element)).toBe(true);
-    expect((element as ReactElement).type).toBe(PelitaStorefront);
+    cookieJar.value = `${signPresenterToken(SECRET)}0`;
+    const forged = await Page();
+    expect((forged as ReactElement).type).toBe(PelitaStorefront);
   });
 
-  it("is a 404 without a cookie or with a forged one", async () => {
+  it("renders with no cookie and with a forged cookie when the track gate is open", async () => {
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
     const Page = await loadPage();
-    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    expect((await Page() as ReactElement).type).toBe(PelitaStorefront);
     cookieJar.value = `${signPresenterToken(SECRET)}0`;
-    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    expect((await Page() as ReactElement).type).toBe(PelitaStorefront);
     cookieJar.value = signPresenterToken("some-other-secret");
-    await expect(Page()).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    expect((await Page() as ReactElement).type).toBe(PelitaStorefront);
   });
 
   it("renders the storefront from the fixture for a presenter", async () => {
@@ -118,18 +117,14 @@ describe("/demo/pelita page respects the gate", () => {
     expect(props.view).toEqual(storefrontView(loadScenario()));
   });
 
-  it("is refused by the proxy before the page runs when the gate is closed", async () => {
-    const closed = await proxy(new NextRequest("https://x.test/demo/pelita"));
-    expect(closed.status).toBe(404);
+  it("is refused by the proxy before the page runs when the gate is closed, and /pelita is public when it is open", async () => {
+    expect((await proxy(new NextRequest("https://x.test/demo/pelita"))).status).toBe(404);
+    expect((await proxy(new NextRequest("https://x.test/pelita"))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
-    const noCookie = await proxy(new NextRequest("https://x.test/demo/pelita"));
-    expect(noCookie.status).toBe(404);
-    const token = signPresenterToken(SECRET);
-    const open = await proxy(
-      new NextRequest("https://x.test/demo/pelita", { headers: { cookie: `${PRESENTER_COOKIE}=${token}` } }),
-    );
-    expect(open.status).toBe(200);
+    expect((await proxy(new NextRequest("https://x.test/demo/pelita"))).status).toBe(200);
+    expect((await proxy(new NextRequest("https://x.test/pelita"))).status).toBe(200);
+    expect((await proxy(new NextRequest("https://x.test/pelita/ops"))).status).toBe(200);
   });
 });
 

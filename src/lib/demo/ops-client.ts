@@ -1,6 +1,6 @@
 import type { Rejection } from "./ops-console";
 
-/** Browser calls to the presenter-gated demo API. Same-origin, so the presenter cookie travels with them. */
+/** Same-origin calls to the public Pelita demo API. A cross-site request is refused. */
 
 async function post(path: string, body?: unknown): Promise<Response> {
   return fetch(path, {

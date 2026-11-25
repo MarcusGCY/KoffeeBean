@@ -1,9 +1,9 @@
 export type DemoTrack = "pelita";
 
 /**
- * Server-side gate for the presenter-only demo track. Returns "pelita" only
+ * Server-side gate for the public Pelita demo. Returns "pelita" only
  * when KB_DEMO_TRACK is exactly "pelita", including on Vercel production.
- * Unset, blank, or any other value returns null, and every demo route answers
+ * Unset, blank, or any other value returns null, and every Pelita route answers
  * 404. Production stays closed unless that variable is set on purpose.
  */
 export function demoTrack(): DemoTrack | null {
