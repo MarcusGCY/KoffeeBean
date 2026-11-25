@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { PelitaOpsConsole } from "@/components/pelita-ops/PelitaOpsConsole";
+import { approvalView } from "@/lib/demo/approval-view";
 import { requirePresenterPage } from "@/lib/demo/guard";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { loadScenario } from "@/lib/demo/scenario";
@@ -19,5 +20,6 @@ export default async function PelitaOpsPage() {
   await requirePresenterPage();
   // A store that is not configured or is down still shows screen 01 as a new proposal.
   const state = await getDemoState().catch(() => EMPTY_STATE);
-  return <PelitaOpsConsole view={opsConsoleView(loadScenario(), state)} />;
+  const scenario = loadScenario();
+  return <PelitaOpsConsole view={opsConsoleView(scenario, state)} approval={approvalView(scenario, state)} />;
 }

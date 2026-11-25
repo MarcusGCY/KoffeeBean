@@ -133,6 +133,23 @@ export async function recordApproval(slot: ApprovalSlot, approval: DemoApproval)
   await run([["SET", key("approvals"), JSON.stringify(next)]]);
 }
 
+/**
+ * Records one approval and its audit row in a single request. Returns false and
+ * writes nothing when the slot already holds an approval. The check is made just
+ * before the write: the shared approvals key has no compare-and-set on the fixed
+ * command list, so two truly simultaneous requests could still both pass.
+ */
+export async function commitApproval(slot: ApprovalSlot, approval: DemoApproval, row: DemoAuditRow): Promise<boolean> {
+  const [current] = await run([["GET", key("approvals")]]);
+  const approvals = parseApprovals(current);
+  if (approvals[slot]) return false;
+  await run([
+    ["SET", key("approvals"), JSON.stringify({ ...approvals, [slot]: approval })],
+    ["RPUSH", key("audit"), JSON.stringify(row)],
+  ]);
+  return true;
+}
+
 export async function appendAudit(row: DemoAuditRow): Promise<void> {
   await run([["RPUSH", key("audit"), JSON.stringify(row)]]);
 }

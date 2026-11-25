@@ -40,6 +40,14 @@ type Command = (string | number)[];
 const SECRET = "test-approval-secret";
 const ENV_KEYS = ["KB_DEMO_TRACK", "VERCEL_ENV", "APPROVAL_SECRET", "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"] as const;
 const ROOT = path.resolve(__dirname, "..");
+const APPROVAL_FILES = [
+  "src/lib/demo/approval.ts",
+  "src/lib/demo/approval-view.ts",
+  "src/lib/demo/approval-client.ts",
+  "src/components/pelita-ops/PelitaApprovalModal.tsx",
+  "src/components/pelita-ops/PelitaLaunchApproval.tsx",
+  "src/app/api/demo/pelita/approval/route.ts",
+];
 const FOREIGN = {
   "kb:chat:h:user-1": "7",
   "kb:demo:other": "keep",
@@ -232,7 +240,12 @@ describe("ops console page data (screen 01)", () => {
   });
 
   it("holds none of the demand-gap numbers in its own source", () => {
-    for (const file of ["src/lib/demo/ops-console.ts", "src/components/pelita-ops/PelitaOpsConsole.tsx", "src/app/demo/pelita/ops/page.tsx"]) {
+    for (const file of [
+      "src/lib/demo/ops-console.ts",
+      "src/components/pelita-ops/PelitaOpsConsole.tsx",
+      "src/app/demo/pelita/ops/page.tsx",
+      ...APPROVAL_FILES,
+    ]) {
       const text = readFileSync(path.join(ROOT, file), "utf8");
       expect(text, file).not.toMatch(/2,?180|\b250\b|96,\s*104|\b64\b|\b84\b|\b140\b|\b39\b/);
     }
@@ -248,6 +261,7 @@ describe("ops console touches no database, identity or env", () => {
       "src/lib/demo/proposal.ts",
       "src/lib/demo/ops-client.ts",
       "src/app/api/demo/pelita/proposal/route.ts",
+      ...APPROVAL_FILES,
     ];
     for (const file of files) {
       const text = readFileSync(path.join(ROOT, file), "utf8");

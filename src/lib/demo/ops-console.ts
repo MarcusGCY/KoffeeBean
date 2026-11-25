@@ -10,6 +10,16 @@ export type StepState = "done" | "current" | "upcoming";
 
 export type RailStep = { n: number; label: string; kind: StepKind; state: StepState };
 
+/** The 7-step rail with step `current` (1-based) outlined, earlier steps done and later ones upcoming. */
+export function railSteps(current: number): RailStep[] {
+  return STEPS.map((step, i) => ({
+    n: i + 1,
+    label: step.label,
+    kind: step.kind,
+    state: i + 1 < current ? "done" : i + 1 === current ? "current" : "upcoming",
+  }));
+}
+
 // Presentation choices for screen 01 (SPEC §10): the step names and who acts on each.
 const STEPS: readonly { label: string; kind: StepKind }[] = [
   { label: "Detect", kind: "agent" },
@@ -118,12 +128,7 @@ export function opsConsoleView(scenario: Scenario, state: Pick<DemoState, "appro
     demoTag: scenario.demoTag,
     title: CONSOLE_TITLE,
     person: { name: person.name, initials: person.initials, role: person.role },
-    steps: STEPS.map((step, i) => ({
-      n: i + 1,
-      label: step.label,
-      kind: step.kind,
-      state: i + 1 < current ? "done" : i + 1 === current ? "current" : "upcoming",
-    })),
+    steps: railSteps(current),
     kicker: KICKER,
     detectedLabel: scenario.gap.detectedLabel,
     headline: scenario.gap.headline,

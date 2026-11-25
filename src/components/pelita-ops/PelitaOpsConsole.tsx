@@ -1,10 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { launchRail, type ApprovalView, type LaunchPhase, type RecordedApproval } from "@/lib/demo/approval-view";
+import { approveRequest, refusalMessage, sendBackRequest } from "@/lib/demo/approval-client";
 import { formatCount, type OpsConsoleView, type ProposalStatus, type RailStep, type Rejection } from "@/lib/demo/ops-console";
 import { rejectProposalRequest, resetDemoRequest } from "@/lib/demo/ops-client";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { PelitaMark, SparkleIcon, TickIcon } from "../pelita/PelitaIcons";
+import { PelitaApprovalModal } from "./PelitaApprovalModal";
+import { PelitaLaunchApproval } from "./PelitaLaunchApproval";
 
 const CURRENT_RING: Record<RailStep["kind"], string> = {
   agent: "border-agent",
@@ -82,13 +86,63 @@ function Sparkline({ view }: { view: OpsConsoleView }) {
   );
 }
 
-/** Screen 01: the demand-gap proposal. Violet is the agent, navy is a human decision. */
-export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
+/**
+ * Screen 01 (the demand-gap proposal) and, when `approval` is given, the two-person
+ * approval over it: screen 02 (a modal) and screen 05. Violet is the agent, navy is
+ * a human decision. Without `approval` the Approve button stays off.
+ */
+export function PelitaOpsConsole({ view, approval }: { view: OpsConsoleView; approval?: ApprovalView }) {
   const [status, setStatus] = useState<ProposalStatus>(view.status);
   const [rejection, setRejection] = useState<Rejection | null>(view.rejection);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<LaunchPhase | null>(approval?.phase ?? null);
+  const [actingId, setActingId] = useState(approval?.defaultActorId ?? view.approverId);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [sourcing, setSourcing] = useState<RecordedApproval | null>(approval?.recorded.sourcing ?? null);
+  const [launch, setLaunch] = useState<RecordedApproval | null>(approval?.recorded.launch ?? null);
+  const [sentBack, setSentBack] = useState(approval?.sentBack ?? null);
   const { gap, proposal } = view;
+
+  const actor = approval?.approvers.find((a) => a.id === actingId) ?? approval?.approvers[0];
+  const other = approval?.approvers.find((a) => a.id !== actor?.id);
+  const person = actor ?? view.person;
+
+  async function approve(slot: "sourcing" | "launch") {
+    if (!actor) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await approveRequest(slot, actor.id);
+      if (slot === "sourcing") {
+        setSourcing(result.approval);
+        setModalOpen(false);
+        const next = approval?.approvers.find((a) => a.slot === 2);
+        if (next) setActingId(next.id);
+      } else {
+        setLaunch(result.approval);
+      }
+      setPhase(result.phase);
+    } catch (failure) {
+      setError(refusalMessage(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sendBack() {
+    if (!actor) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setSentBack(await sendBackRequest(actor.id));
+      setPhase("sent_back");
+    } catch (failure) {
+      setError(refusalMessage(failure));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function reject() {
     setBusy(true);
@@ -96,6 +150,7 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
     try {
       setRejection(await rejectProposalRequest());
       setStatus("rejected");
+      if (approval) setPhase("rejected");
     } catch {
       setError("Could not record the rejection. Try again.");
     } finally {
@@ -110,6 +165,14 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
       await resetDemoRequest();
       setStatus("new");
       setRejection(null);
+      if (approval) {
+        setPhase("sourcing_pending");
+        setActingId(approval.approvers[0].id);
+        setSourcing(null);
+        setLaunch(null);
+        setSentBack(null);
+        setModalOpen(false);
+      }
     } catch {
       setError("Could not reset the demo. Try again.");
     } finally {
@@ -118,7 +181,8 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
   }
 
   const pending = status === "new";
-  const steps: RailStep[] = view.steps;
+  const steps: RailStep[] = phase ? launchRail(phase, modalOpen) : view.steps;
+  const launchScreen = phase === "launch_pending" || phase === "sent_back" || phase === "launched";
 
   return (
     <div className="flex flex-1 flex-col" data-ops-console data-proposal-status={status}>
@@ -133,6 +197,19 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
         <div aria-hidden="true" className="h-9 w-0.5 bg-line-2" />
         <h1 className="text-lg font-bold text-ink-2">{view.title}</h1>
         <div className="flex-1" />
+        {other && (
+          <button
+            type="button"
+            onClick={() => {
+              setActingId(other.id);
+              setError(null);
+            }}
+            disabled={busy}
+            className="text-base font-semibold text-ink-3 underline underline-offset-4 disabled:opacity-60"
+          >
+            Switch to {other.name}
+          </button>
+        )}
         <button
           type="button"
           onClick={reset}
@@ -149,11 +226,11 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
         </span>
         <div className="flex items-center gap-3 font-bold">
           <span className="flex h-11 w-11 items-center justify-center rounded-full bg-human text-[17px] font-extrabold text-white" aria-hidden="true">
-            {view.person.initials}
+            {person.initials}
           </span>
           <div className="leading-tight">
-            {view.person.name}
-            <div className="text-base font-semibold text-ink-3">{view.person.role}</div>
+            {person.name}
+            <div className="text-base font-semibold text-ink-3">{person.role}</div>
           </div>
         </div>
       </header>
@@ -161,7 +238,21 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
       <Rail steps={steps} />
 
       <main className="px-12 py-6">
-        {pending ? (
+        {approval && launchScreen && actor ? (
+          <PelitaLaunchApproval
+            key={phase}
+            data={approval.launch}
+            phase={phase}
+            actor={actor}
+            sourcing={sourcing}
+            launch={launch}
+            sentBack={sentBack}
+            busy={busy}
+            error={error}
+            onApprove={() => approve("launch")}
+            onSendBack={sendBack}
+          />
+        ) : pending ? (
           <section
             aria-labelledby="gap-headline"
             className="rounded-xl border-2 border-[#c9bef5] bg-surface px-10 py-8 shadow-[inset_8px_0_0_var(--color-agent)]"
@@ -238,17 +329,24 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
                 </button>
                 <button
                   type="button"
-                  disabled
-                  aria-describedby="approval-note"
-                  className="h-14 rounded-md bg-human px-7 text-lg font-bold text-white opacity-60"
+                  disabled={!approval || busy}
+                  onClick={() => {
+                    setError(null);
+                    setModalOpen(true);
+                  }}
+                  aria-describedby={approval ? undefined : "approval-note"}
+                  aria-haspopup={approval ? "dialog" : undefined}
+                  className={`h-14 rounded-md bg-human px-7 text-lg font-bold text-white ${approval ? "disabled:opacity-60" : "opacity-60"}`}
                 >
                   Approve…
                 </button>
               </div>
             </div>
-            <p id="approval-note" className="mt-3 text-right text-base font-semibold text-ink-3">
-              Two-person approval is not part of this screen yet.
-            </p>
+            {!approval && (
+              <p id="approval-note" className="mt-3 text-right text-base font-semibold text-ink-3">
+                Two-person approval is not part of this screen yet.
+              </p>
+            )}
           </section>
         ) : (
           <section aria-labelledby="gap-outcome" className="rounded-xl border-2 border-line bg-surface px-10 py-8">
@@ -264,12 +362,22 @@ export function PelitaOpsConsole({ view }: { view: OpsConsoleView }) {
           </section>
         )}
 
-        {error && (
+        {error && !modalOpen && !launchScreen && (
           <p role="alert" className="mt-3 text-right text-base font-bold text-danger">
             {error}
           </p>
         )}
       </main>
+      {approval && modalOpen && actor && (
+        <PelitaApprovalModal
+          data={approval.sourcing}
+          actor={actor}
+          busy={busy}
+          error={error}
+          onCancel={() => setModalOpen(false)}
+          onApprove={() => approve("sourcing")}
+        />
+      )}
     </div>
   );
 }

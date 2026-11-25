@@ -91,3 +91,15 @@ export function PelitaMark() {
     </svg>
   );
 }
+
+/** Navy person with a tick. Marks a human approval only. */
+export function HumanIcon({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="12" fill="currentColor" />
+      <circle cx="10.5" cy="8.6" r="3.2" fill="#fff" />
+      <path d="M4.6 18.2 C5.4 14.4 7.6 12.9 10.5 12.9 C12 12.9 13.3 13.3 14.3 14.1" fill="#fff" />
+      <path d="M14.2 16.6 L16.2 18.6 L20 14.6" stroke="#fff" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
