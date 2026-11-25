@@ -47,3 +47,6 @@ next-env.d.ts
 # triage eval runs (keep the sample scorecard)
 evals/results/*
 !evals/results/sample.json
+
+# generated demo mockups (node docs/demo-pelita/src/gen.js)
+/docs/demo-pelita/src/html/

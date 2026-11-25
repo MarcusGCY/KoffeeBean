@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { auth0Configured, getAuth0 } from "./lib/auth0";
 import { isAdminUser } from "./lib/demo-auth";
+import { isPelitaPage, pelitaPageAllowed } from "./lib/demo/access";
 
 function notFound(): NextResponse {
   return new NextResponse("Not found", {
@@ -15,6 +16,8 @@ function notFound(): NextResponse {
 }
 
 function isDemoSurface(pathname: string): boolean {
+  // The Pelita demo track has its own gate and signed presenter cookie.
+  if (pathname.startsWith("/api/demo/pelita/")) return false;
   return pathname === "/admin/demo" || pathname.startsWith("/admin/demo/") || pathname.startsWith("/api/demo/");
 }
 
@@ -26,6 +29,9 @@ function isOwnerSurface(pathname: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
+  if (isPelitaPage(request.nextUrl.pathname) && !pelitaPageAllowed(request.nextUrl.pathname, request.headers.get("cookie"))) {
+    return notFound();
+  }
   const demo = isOwnerSurface(request.nextUrl.pathname);
   // Signed revert/reset grants are checked in the route. They have no Auth0 session.
   const signedPost = request.method === "POST" && request.nextUrl.pathname.startsWith("/api/demo/");

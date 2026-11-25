@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 80" role="img" aria-label="Pelita Health &amp; Beauty">
+  <!-- Mark: rose rounded square, soft white plus (care), sunny lamp-flame at its heart (pelita = lamp) -->
+  <rect x="0" y="4" width="72" height="72" rx="20" fill="#B5195B"/>
+  <path d="M28 16 h16 a4 4 0 0 1 4 4 v12 h12 a4 4 0 0 1 4 4 v16 a4 4 0 0 1 -4 4 h-12 v12 a4 4 0 0 1 -4 4 h-16 a4 4 0 0 1 -4 -4 v-12 h-12 a4 4 0 0 1 -4 -4 v-16 a4 4 0 0 1 4 -4 h12 v-12 a4 4 0 0 1 4 -4z" fill="#FFFFFF"/>
+  <path d="M36 27 C44 36 46 43 42 49 C40 52 38 53 36 53 C34 53 32 52 30 49 C26 43 28 36 36 27Z" fill="#FFC93C"/>
+  <path d="M36 38 C39 42 39 46 37 48.5 C36.4 49.2 35.6 49.2 35 48.5 C33 46 33 42 36 38Z" fill="#B5195B"/>
+  <!-- Wordmark -->
+  <text x="88" y="47" font-family="Figtree, system-ui, sans-serif" font-size="40" font-weight="800" fill="#0F172A" letter-spacing="-0.8">Pelita</text>
+  <text x="90" y="70" font-family="Figtree, system-ui, sans-serif" font-size="15" font-weight="800" fill="#B5195B" letter-spacing="3.6">HEALTH &amp; BEAUTY</text>
+</svg>
