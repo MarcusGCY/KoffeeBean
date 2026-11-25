@@ -18,8 +18,8 @@ function Skeleton({ className, label }: { className: string; label?: string }) {
 
 function Field({ label, children, emphasis = false }: { label: string; children: React.ReactNode; emphasis?: boolean }) {
   return (
-    <div className="border-b border-line-2 py-1.5">
-      <dt className="text-base font-semibold text-ink-3">{label}</dt>
+    <div className="border-b border-line-2 py-1">
+      <dt className="text-base font-semibold leading-6 text-ink-3">{label}</dt>
       <dd className={`font-bold leading-[1.35] ${emphasis ? "text-[22px]" : "text-lg"}`}>{children}</dd>
     </div>
   );
@@ -65,7 +65,7 @@ export function PelitaListingDraft({
       aria-busy={running}
       data-listing-draft
       data-listing-status={status}
-      className="grid grid-cols-[560px_1fr] gap-7"
+      className="grid grid-cols-[520px_1fr] gap-6"
     >
       <div className="rounded-xl border border-line-2 bg-surface px-7 py-6">
         <div className="flex items-center justify-between">
@@ -117,7 +117,7 @@ export function PelitaListingDraft({
         )}
       </div>
 
-      <div className="rounded-xl border-2 border-[#c9bef5] bg-surface px-[34px] py-4 shadow-[inset_8px_0_0_var(--color-agent)]">
+      <div className="rounded-xl border-2 border-[#c9bef5] bg-surface px-[34px] py-3 shadow-[inset_8px_0_0_var(--color-agent)]">
         <div className="flex items-center justify-between">
           <h2 id="listing-title" className="flex items-center gap-3 text-base font-extrabold tracking-[0.2px] text-agent">
             <SparkleIcon />
@@ -142,8 +142,8 @@ export function PelitaListingDraft({
               <Field label={data.title.label} emphasis>
                 {data.title.value}
               </Field>
-              <div className="border-b border-line-2 py-1.5">
-                <dt className="flex items-center gap-3 text-base font-semibold text-ink-3">
+              <div className="border-b border-line-2 py-1">
+                <dt className="flex items-center gap-3 text-base font-semibold leading-6 text-ink-3">
                   {description.label}
                   {description.edited && (
                     <span data-edited-tag className="rounded-sm bg-[#f1f5f9] px-2 text-base font-bold text-ink-2">
@@ -198,7 +198,7 @@ export function PelitaListingDraft({
               </div>
             </dl>
 
-            <div className="mt-2.5 rounded-lg border-2 border-[#9ad3b8] bg-success-50 px-[18px] py-2.5" data-claims-check>
+            <div className="mt-2 rounded-lg border-2 border-[#9ad3b8] bg-success-50 px-[18px] py-2" data-claims-check>
               <button
                 type="button"
                 aria-expanded={claimsOpen}
@@ -244,13 +244,13 @@ export function PelitaListingDraft({
           </p>
         )}
 
-        <div className="mt-3 flex items-center justify-end gap-4">
+        <div className="mt-2 flex items-center justify-end gap-4">
           {status === "failed" ? (
             <button
               type="button"
               onClick={onRetry}
               disabled={busy}
-              className="h-14 rounded-md border-2 border-line bg-surface px-7 text-lg font-bold text-ink disabled:opacity-60"
+              className="h-12 rounded-md border-2 border-line bg-surface px-7 text-lg font-bold text-ink disabled:opacity-60"
             >
               Retry
             </button>
@@ -263,7 +263,7 @@ export function PelitaListingDraft({
                   setEditing(true);
                 }}
                 disabled={!done || !data.canEdit || busy || editing}
-                className="h-14 rounded-md border-2 border-line bg-surface px-7 text-lg font-bold text-ink disabled:opacity-50"
+                className="h-12 rounded-md border-2 border-line bg-surface px-7 text-lg font-bold text-ink disabled:opacity-50"
               >
                 {data.editLabel}
               </button>
@@ -271,7 +271,7 @@ export function PelitaListingDraft({
                 type="button"
                 onClick={onSend}
                 disabled={!done || !data.canSend || busy || editing}
-                className="h-14 rounded-md bg-primary px-7 text-lg font-bold text-white disabled:opacity-50"
+                className="h-12 rounded-md bg-primary px-7 text-lg font-bold text-white disabled:opacity-50"
               >
                 {data.sendLabel}
               </button>
