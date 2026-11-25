@@ -196,16 +196,20 @@ export type NudgeInputs = {
   /** True for `is_test` shoppers and the configured demo shopper. */
   demo: boolean;
   orders: (NudgeOrder & { id: string })[];
+  /** Reason stored on the newest waiting "suggest" audit entry, if any. */
+  waitingSuggestReason?: string;
 };
 
 /** One Management API read: this shopper's flags and retained orders, as the nudge engine reads them. */
 export async function readNudgeInputs(userId: string): Promise<NudgeInputs> {
   const meta = await getAppMetadata(userId);
   const flags = normalizeShopperFlags(meta);
+  const waiting = normalizeActivity(meta.agent_activity).find((row) => row.action === "suggest" && row.status === "waiting");
   return {
     flags,
     demo: flags.isTest || isDemoShopperSub(userId),
     orders: nudgeOrders(readOrders(meta)),
+    ...(waiting ? { waitingSuggestReason: waiting.reason } : {}),
   };
 }
 
