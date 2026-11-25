@@ -12,6 +12,11 @@ const TITLES: Record<YuuSignalStatus, string> = {
   dropped: "Dropped",
 };
 
+/** "1 member", "2 members". Zero and every other count take the plural. */
+function counted(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 /** Ops view of simulated yuu signals and member points. */
 export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
   const [panel, setPanel] = useState(initial);
@@ -41,7 +46,7 @@ export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
           </h2>
           <p className="text-base font-semibold text-ink-3">
             yuu (simulated)
-            {panel ? ` · ${panel.windowMinutes} minute window` : ""}
+            {panel ? ` · window of ${counted(panel.windowMinutes, "minute")}` : ""}
           </p>
         </div>
         <button
@@ -70,7 +75,7 @@ export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
                     <li key={signal.id || signal.sku} data-yuu-signal={signal.sku} data-yuu-status={signal.status}>
                       <p className="font-bold">{signal.productName}</p>
                       <p className="text-base text-ink-2">
-                        score {signal.score} · {signal.distinctMembers} members · qty {signal.totalQty}
+                        score {signal.score} · {counted(signal.distinctMembers, "member")} · qty {signal.totalQty}
                       </p>
                       <p className="text-base text-ink-3">
                         {signal.reason ?? "—"} · {signal.source === "bi_bot" ? "bi bot" : "detector"}
@@ -91,7 +96,7 @@ export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
           <ul className="mt-2 flex flex-wrap gap-2">
             {panel.members.map((member) => (
               <li key={member.id} className="rounded-full border border-line-2 bg-surface px-3 py-1 text-base font-semibold">
-                {member.displayName} · {member.points} pts · {member.tier}
+                {member.displayName} · {counted(member.points, "pt")} · {member.tier}
                 {member.test ? " · test" : ""}
               </li>
             ))}
