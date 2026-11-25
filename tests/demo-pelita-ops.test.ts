@@ -294,7 +294,7 @@ describe("/demo/pelita/ops gate", () => {
     await expect((await loadPage())()).rejects.toMatchObject(notFound);
   });
 
-  it("is a 404 on production until the flag is set, then renders for a presenter", async () => {
+  it("is a 404 on production until the flag is set, then renders with no cookie", async () => {
     process.env.VERCEL_ENV = "production";
     process.env.APPROVAL_SECRET = SECRET;
     cookieJar.value = signPresenterToken(SECRET);
@@ -303,42 +303,40 @@ describe("/demo/pelita/ops gate", () => {
     openGate();
     process.env.VERCEL_ENV = "production";
     cookieJar.value = undefined;
-    await expect((await loadPage())()).rejects.toMatchObject(notFound);
+    expect(isValidElement(await (await loadPage())())).toBe(true);
     cookieJar.value = `${signPresenterToken(SECRET)}0`;
-    await expect((await loadPage())()).rejects.toMatchObject(notFound);
-
-    openGate();
-    process.env.VERCEL_ENV = "production";
     expect(isValidElement(await (await loadPage())())).toBe(true);
   });
 
-  it("is a 404 without a cookie or with a forged one", async () => {
+  it("renders with no cookie and with a forged cookie when the track gate is open", async () => {
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
     const Page = await loadPage();
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(isValidElement(await Page())).toBe(true);
     cookieJar.value = `${signPresenterToken(SECRET)}0`;
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(isValidElement(await Page())).toBe(true);
     cookieJar.value = signPresenterToken("some-other-secret");
-    await expect(Page()).rejects.toMatchObject(notFound);
+    expect(isValidElement(await Page())).toBe(true);
   });
 
-  it("is refused by the proxy with a real 404 unless the gate is open and the cookie is valid", async () => {
+  it("is refused by the proxy with a real 404 unless the track gate is open", async () => {
     const ops = (cookie?: string) =>
       proxy(new NextRequest("https://x.test/demo/pelita/ops", cookie ? { headers: { cookie } } : undefined));
     const token = signPresenterToken(SECRET);
     expect((await ops(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
-    expect((await ops()).status).toBe(404);
-    expect((await ops(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await ops()).status).toBe(200);
+    expect((await ops(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(200);
     expect((await ops(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
+    expect((await proxy(new NextRequest("https://x.test/pelita/ops"))).status).toBe(200);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await ops(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
+    expect((await proxy(new NextRequest("https://x.test/pelita/ops"))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await ops()).status).toBe(404);
-    expect((await ops(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(404);
+    expect((await ops()).status).toBe(200);
+    expect((await ops(`${PRESENTER_COOKIE}=${token}x`)).status).toBe(200);
     expect((await ops(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
   });
 
@@ -374,15 +372,15 @@ describe("/demo/pelita/ops gate", () => {
 describe("proposal API gate", () => {
   const url = "https://x.test/api/demo/pelita/proposal";
 
-  it("answers 404 for every request when the gate is closed or the cookie is missing", async () => {
+  it("answers 404 when the gate is closed, and reaches the store with no cookie when it is open", async () => {
     expect((await proposalRoute(post(url, { action: "reject" }))).status).toBe(404);
     openGate();
-    expect((await proposalRoute(post(url, { action: "reject" }, { cookie: false }))).status).toBe(404);
+    expect((await proposalRoute(post(url, { action: "reject" }, { cookie: false }))).status).toBe(503);
     process.env.VERCEL_ENV = "production";
     delete process.env.KB_DEMO_TRACK;
     expect((await proposalRoute(post(url, { action: "reject" }))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
-    expect((await proposalRoute(post(url, { action: "reject" }, { cookie: false }))).status).toBe(404);
+    expect((await proposalRoute(post(url, { action: "reject" }, { cookie: false }))).status).toBe(503);
     expect((await proposalRoute(post(url, { action: "reject" }))).status).toBe(503);
   });
 

@@ -1,6 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  async rewrites() {
+    return [
+      { source: "/pelita", destination: "/demo/pelita" },
+      { source: "/pelita/:path*", destination: "/demo/pelita/:path*" },
+    ];
+  },
   cacheComponents: true,
   // @cursor/sdk loads Node built-ins and optional native chunks. Bundling it
   // into the server function breaks cloud-agent calls on Vercel.

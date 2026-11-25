@@ -16,7 +16,7 @@ function notFound(): NextResponse {
 }
 
 function isDemoSurface(pathname: string): boolean {
-  // The Pelita demo track has its own gate and signed presenter cookie.
+  // Pelita pages and /api/demo/pelita/* use the track gate. They are not admin surfaces.
   if (pathname.startsWith("/api/demo/pelita/")) return false;
   return pathname === "/admin/demo" || pathname.startsWith("/admin/demo/") || pathname.startsWith("/api/demo/");
 }
@@ -29,7 +29,7 @@ function isOwnerSurface(pathname: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
-  if (isPelitaPage(request.nextUrl.pathname) && !pelitaPageAllowed(request.nextUrl.pathname, request.headers.get("cookie"))) {
+  if (isPelitaPage(request.nextUrl.pathname) && !pelitaPageAllowed(request.nextUrl.pathname)) {
     return notFound();
   }
   const demo = isOwnerSurface(request.nextUrl.pathname);

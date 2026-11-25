@@ -228,22 +228,26 @@ describe("elapsed-time toggle", () => {
     expect((await getDemoSnapshot()).elapsedMode).toBe("fixture");
   });
 
-  it("is presenter-only: no cookie or a bad cookie gets a 404 and writes nothing, a cross-site request a 403", async () => {
+  it("is public when the track is on: a missing or forged cookie still sets the mode, a cross-site request is 403, and the track off is 404", async () => {
     openGate();
     const url = "https://x.test/api/demo/pelita/elapsed";
-    expect((await elapsedRoute(post(url, { mode: "real" }, null))).status).toBe(404);
-    expect((await elapsedRoute(post(url, { mode: "real" }, "forged"))).status).toBe(404);
+    expect((await elapsedRoute(post(url, { mode: "real" }, null))).status).toBe(200);
+    expect(store.get(`${PREFIX}elapsed`)).toBe("real");
+    store.delete(`${PREFIX}elapsed`);
+    expect((await elapsedRoute(post(url, { mode: "real" }, "forged"))).status).toBe(200);
+    expect(store.get(`${PREFIX}elapsed`)).toBe("real");
+    store.delete(`${PREFIX}elapsed`);
+
     const cross = new Request(url, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: "https://evil.test", cookie: `${PRESENTER_COOKIE}=${signPresenterToken(SECRET)}` },
+      headers: { "content-type": "application/json", origin: "https://evil.test" },
       body: JSON.stringify({ mode: "real" }),
     });
     expect((await elapsedRoute(cross)).status).toBe(403);
     expect(store.has(`${PREFIX}elapsed`)).toBe(false);
-    expect(sent).toEqual([]);
 
     delete process.env.KB_DEMO_TRACK;
-    expect((await elapsedRoute(post(url, { mode: "real" }))).status).toBe(404);
+    expect((await elapsedRoute(post(url, { mode: "real" }, null))).status).toBe(404);
     expect(store.has(`${PREFIX}elapsed`)).toBe(false);
   });
 
