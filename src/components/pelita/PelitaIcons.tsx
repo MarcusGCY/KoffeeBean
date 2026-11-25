@@ -58,3 +58,36 @@ export function PelitaMarkOnRose() {
     </svg>
   );
 }
+
+/** Violet four-point sparkle. Marks AI agent output only. */
+export function SparkleIcon({ size = 32 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="16" fill="currentColor" />
+      <path d="M16 6 C16.8 12 19 14.2 25 15 C19 15.8 16.8 18 16 24 C15.2 18 13 15.8 7 15 C13 14.2 15.2 12 16 6Z" fill="#fff" />
+    </svg>
+  );
+}
+
+export function TickIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M5 12.5 L10 17.5 L19 7" />
+    </svg>
+  );
+}
+
+/** Pelita mark and wordmark for the white ops header (docs/demo-pelita/logo.svg). */
+export function PelitaMark() {
+  return (
+    <svg viewBox="0 0 72 80" width="46" height="51" aria-hidden="true">
+      <rect x="0" y="4" width="72" height="72" rx="20" fill="#B5195B" />
+      <path
+        d="M28 16 h16 a4 4 0 0 1 4 4 v12 h12 a4 4 0 0 1 4 4 v16 a4 4 0 0 1 -4 4 h-12 v12 a4 4 0 0 1 -4 4 h-16 a4 4 0 0 1 -4 -4 v-12 h-12 a4 4 0 0 1 -4 -4 v-16 a4 4 0 0 1 4 -4 h12 v-12 a4 4 0 0 1 4 -4z"
+        fill="#fff"
+      />
+      <path d="M36 27 C44 36 46 43 42 49 C40 52 38 53 36 53 C34 53 32 52 30 49 C26 43 28 36 36 27Z" fill="#FFC93C" />
+      <path d="M36 38 C39 42 39 46 37 48.5 C36.4 49.2 35.6 49.2 35 48.5 C33 46 33 42 36 38Z" fill="#B5195B" />
+    </svg>
+  );
+}

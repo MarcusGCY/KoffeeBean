@@ -6,8 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import raw from "@/data/demo-scenario.json";
 import { proxy } from "@/proxy";
 import { NextRequest } from "next/server";
+import { PelitaOpsConsole } from "@/components/pelita-ops/PelitaOpsConsole";
 import { PelitaStorefront } from "@/components/pelita/PelitaStorefront";
 import { demandGapView } from "@/lib/demo/demand-gap";
+import { opsConsoleView } from "@/lib/demo/ops-console";
 import { PRESENTER_COOKIE, signPresenterToken } from "@/lib/demo/presenter";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { loadScenario, parseScenario } from "@/lib/demo/scenario";
@@ -247,6 +249,10 @@ describe("demand-gap figures come from the fixture in one place", () => {
       ...sourceFiles("src/app/demo/pelita"),
       "src/lib/demo/storefront.ts",
       "src/lib/demo/demand-gap.ts",
+      "src/lib/demo/ops-console.ts",
+      "src/lib/demo/proposal.ts",
+      "src/lib/demo/ops-client.ts",
+      "src/app/api/demo/pelita/proposal/route.ts",
     ];
     for (const file of files) {
       const text = read(file);
@@ -254,6 +260,31 @@ describe("demand-gap figures come from the fixture in one place", () => {
     }
     const html = renderStorefront();
     expect(html).not.toMatch(/2,180|1,980|\b230\b/);
+  });
+});
+
+describe("the ops console reads the demand-gap figures only through demandGapView", () => {
+  const renderOps = (scenario = loadScenario()) =>
+    renderToStaticMarkup(createElement(PelitaOpsConsole, { view: opsConsoleView(scenario, { approvals: {}, audit: [] }) }));
+
+  it("shows the fixture figures and follows fixture edits", () => {
+    const gap = demandGapView(loadScenario());
+    const html = renderOps();
+    expect(html).toContain(gap.searches.toLocaleString("en-US"));
+    expect(html).toContain(`data-chart-max="${gap.chartMax}"`);
+    expect(html).toContain(`${gap.noPurchasePct}%`);
+
+    const edited = editedScenario((draft) => {
+      draft.gap.searchesPerDay[0] = 100;
+      draft.gap.searches = 2184;
+      draft.gap.chartMax = 300;
+      draft.gap.matchingProductsInStock = 3;
+    });
+    const out = renderOps(edited);
+    expect(out).toContain("2,184");
+    expect(out).not.toContain("2,180");
+    expect(out).toContain('data-chart-max="300"');
+    expect(out).toContain(">3</div>");
   });
 });
 
