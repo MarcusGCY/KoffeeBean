@@ -379,7 +379,7 @@ export function PelitaStorefront({
               No results for “{query.trim()}”.
             </p>
           ) : (
-            <div className={`${launchedView ? "mt-[18px]" : "mt-3.5"} grid grid-cols-5 gap-[22px]`}>
+            <div className={`${launchedView ? "mt-[18px]" : "mt-3.5"} grid grid-cols-1 gap-[22px] sm:grid-cols-2 lg:grid-cols-5`}>
               {products.map((product) => (
                 <PelitaProductCard key={product.id} product={product} onAdd={addToCart} onBuyYuu={(id) => void buyYuu(id)} yuuBusy={yuuBusy} />
               ))}

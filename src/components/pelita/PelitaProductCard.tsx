@@ -101,9 +101,11 @@ export function PelitaProductCard({
         type="button"
         disabled={yuuBusy}
         onClick={() => onBuyYuu?.(product.id)}
-        className="mt-2 h-10 rounded-md bg-primary px-2 text-base font-bold text-white disabled:opacity-60"
+        title="Simulated yuu purchase"
+        className="mt-2 flex h-auto min-h-10 w-full min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 overflow-visible rounded-md bg-primary px-2 py-2 text-center leading-tight text-white disabled:opacity-60"
       >
-        Buy with yuu (simulated)
+        <span className="max-w-full text-base font-bold wrap-anywhere">Buy with yuu</span>
+        <span className="max-w-full text-xs font-semibold wrap-anywhere text-primary-50">(simulated)</span>
       </button>
     </article>
   );
