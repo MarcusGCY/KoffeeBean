@@ -5,7 +5,9 @@ import { useMemo, useState } from "react";
 import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
+import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, safeAvatarUrl } from "@/lib/return-to";
+import type { StorefrontYuu, YuuPurchaseResult, YuuTierName } from "@/lib/yuu/types";
 import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
 import { PelitaProductCard } from "./PelitaProductCard";
 
@@ -79,18 +81,62 @@ function AccountCluster({ account }: { account: PelitaAccount | null }) {
  * the new card first, the "live" toast and the search proof. The cart lives in this
  * component's state only.
  */
-export function PelitaStorefront({ view, account = null }: { view: StorefrontView; account?: PelitaAccount | null }) {
+type YuuBalance = { displayName: string; points: number; tier: YuuTierName };
+type YuuNotice = { kind: "ok"; result: YuuPurchaseResult } | { kind: "error"; text: string };
+
+export function PelitaStorefront({
+  view,
+  account = null,
+  yuu = null,
+}: {
+  view: StorefrontView;
+  account?: PelitaAccount | null;
+  yuu?: StorefrontYuu | null;
+}) {
   const published = view.published;
   const [browse, setBrowse] = useState<Browse>(published ? { kind: "launched" } : { kind: "deals" });
   const [chip, setChip] = useState(0);
   const [toastOpen, setToastOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
+  const [memberId, setMemberId] = useState(yuu?.personas[0]?.id ?? "");
+  const [balances, setBalances] = useState<Record<string, YuuBalance>>({});
+  const [yuuBusy, setYuuBusy] = useState(false);
+  const [yuuNotice, setYuuNotice] = useState<YuuNotice | null>(null);
 
   const byId = useMemo(() => new Map(view.catalogue.map((p) => [p.id, p])), [view.catalogue]);
   const cartCount = Object.values(cart).reduce((sum, n) => sum + n, 0);
   const cartTotal = Object.entries(cart).reduce((sum, [id, qty]) => sum + (byId.get(id)?.price ?? 0) * qty, 0);
   const addToCart = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
+  const selected = yuu?.personas.find((persona) => persona.id === memberId) ?? null;
+  const knownMember = yuu?.signedInMember ?? null;
+  const purchased = Object.values(balances);
+  const activeBalance: YuuBalance | null = account
+    ? (knownMember ? balances[knownMember.id] ?? knownMember : purchased[0] ?? null)
+    : selected
+      ? balances[selected.id] ?? selected
+      : null;
+
+  async function buyYuu(sku: string) {
+    if (yuuBusy) return;
+    if (!account && !memberId) {
+      setYuuNotice({ kind: "error", text: "Pick a yuu member (simulated) first." });
+      return;
+    }
+    setYuuBusy(true);
+    try {
+      const result = await buyWithYuuRequest({ sku, qty: 1, memberId: account ? undefined : memberId });
+      setBalances((current) => ({
+        ...current,
+        [result.memberId]: { displayName: result.displayName, points: result.points, tier: result.tier },
+      }));
+      setYuuNotice({ kind: "ok", result });
+    } catch (error) {
+      setYuuNotice({ kind: "error", text: error instanceof Error ? error.message : "Could not record the yuu purchase." });
+    } finally {
+      setYuuBusy(false);
+    }
+  }
 
   const showDeals = () => {
     setQuery("");
@@ -151,6 +197,28 @@ export function PelitaStorefront({ view, account = null }: { view: StorefrontVie
             className="h-full flex-1 bg-transparent font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-3"
           />
         </form>
+        {!account && yuu && yuu.personas.length > 0 && (
+          <label className="flex items-center gap-2 whitespace-nowrap text-white">
+            <span className="text-base font-bold">yuu</span>
+            <select
+              aria-label="yuu member (simulated)"
+              value={memberId}
+              onChange={(event) => setMemberId(event.target.value)}
+              className="h-10 max-w-52 rounded-md bg-surface px-2 text-base font-semibold text-ink"
+            >
+              {yuu.personas.map((persona) => (
+                <option key={persona.id} value={persona.id}>
+                  {persona.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {activeBalance && (
+          <span data-yuu-tier className="whitespace-nowrap rounded-full bg-surface px-3 py-1 text-base font-bold text-primary-dark">
+            {activeBalance.tier} · {activeBalance.points} pts
+          </span>
+        )}
         <AccountCluster account={account} />
         <div
           className="flex h-[52px] items-center gap-2.5 rounded-full bg-surface px-5 font-extrabold text-primary-dark"
@@ -313,7 +381,7 @@ export function PelitaStorefront({ view, account = null }: { view: StorefrontVie
           ) : (
             <div className={`${launchedView ? "mt-[18px]" : "mt-3.5"} grid grid-cols-5 gap-[22px]`}>
               {products.map((product) => (
-                <PelitaProductCard key={product.id} product={product} onAdd={addToCart} />
+                <PelitaProductCard key={product.id} product={product} onAdd={addToCart} onBuyYuu={(id) => void buyYuu(id)} yuuBusy={yuuBusy} />
               ))}
             </div>
           )}
@@ -344,6 +412,35 @@ export function PelitaStorefront({ view, account = null }: { view: StorefrontVie
           )}
         </section>
       </main>
+
+      {yuuNotice && (
+        <aside
+          role="status"
+          data-yuu-toast
+          className="fixed bottom-8 right-14 z-10 w-[420px] rounded-xl border-2 border-primary bg-surface px-6 py-5 shadow-[0_18px_50px_rgba(15,23,42,0.2)]"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-base font-extrabold text-primary-dark">yuu (simulated)</p>
+              {yuuNotice.kind === "ok" ? (
+                <>
+                  <p className="mt-1 text-lg font-bold">
+                    {yuuNotice.result.displayName} earned {yuuNotice.result.pointsEarned} points
+                  </p>
+                  <p className="text-ink-2">
+                    <span data-yuu-tier>{yuuNotice.result.tier}</span> · {yuuNotice.result.points} points · {yuuNotice.result.productName}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 text-lg font-bold">{yuuNotice.text}</p>
+              )}
+            </div>
+            <button type="button" onClick={() => setYuuNotice(null)} aria-label="Dismiss yuu notice" className="text-lg font-bold text-ink-3">
+              ×
+            </button>
+          </div>
+        </aside>
+      )}
 
       {published?.toast && toastOpen && (
         <aside

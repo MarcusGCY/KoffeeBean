@@ -62,6 +62,17 @@ export const biPayloadSchemas = {
     orderId: id,
     totalCents: cents,
   }),
+  /**
+   * One simulated yuu purchase. `shopper_hash` is the member hash (the Auth0 `sub`
+   * when the member is linked, otherwise a stable yuu member key). Amount is cents
+   * so it stays an integer, like every other BI money field. No name and no raw sub.
+   */
+  purchase: z.strictObject({
+    sku: id,
+    qty: z.number().int().min(1).max(1000),
+    amountCents: cents,
+    channel: z.enum(["web", "sim"]),
+  }),
 } as const;
 
 export type BiEventType = keyof typeof biPayloadSchemas;

@@ -83,6 +83,7 @@ describe("event types and payload shaping", () => {
         "recommend.undone",
         "order.cancelled",
         "order.placed",
+        "purchase",
       ].sort(),
     );
     expect(isBiEventType("barista.turn")).toBe(true);

@@ -8,6 +8,7 @@ import { ensureOpeningRows } from "@/lib/demo/opening";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoSnapshot, type DemoState } from "@/lib/demo/state";
 import { stockCheckView } from "@/lib/demo/stock-check-view";
+import { loadYuuPanel } from "@/lib/yuu/read";
 
 export const instant = false;
 
@@ -27,6 +28,7 @@ export default async function PelitaOpsPage() {
   // The opening agent rows are written once, on the first load after a reset. A failed write never blocks the screen.
   if (snapshot) await ensureOpeningRows(scenario, snapshot.state, snapshot.epoch).catch(() => false);
   const state = snapshot ? { ...snapshot.state, elapsedMode: snapshot.elapsedMode } : EMPTY_STATE;
+  const yuu = await loadYuuPanel();
   return (
     <PelitaOpsConsole
       view={opsConsoleView(scenario, state)}
@@ -34,6 +36,7 @@ export default async function PelitaOpsPage() {
       stockCheck={stockCheckView(scenario, state)}
       listing={listingDraftView(scenario, state)}
       elapsedMode={snapshot?.elapsedMode}
+      yuu={yuu}
     />
   );
 }
