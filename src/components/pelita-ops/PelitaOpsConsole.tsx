@@ -20,6 +20,8 @@ import { PelitaApprovalModal } from "./PelitaApprovalModal";
 import { PelitaListingDraft, type ListingDraftStatus } from "./PelitaListingDraft";
 import { PelitaLaunchApproval } from "./PelitaLaunchApproval";
 import { PelitaStockCheck, type StockCheckStatus } from "./PelitaStockCheck";
+import { PelitaYuuPanel } from "./PelitaYuuPanel";
+import type { YuuPanel } from "@/lib/yuu/types";
 
 const CURRENT_RING: Record<RailStep["kind"], string> = {
   agent: "border-agent",
@@ -119,12 +121,14 @@ export function PelitaOpsConsole({
   stockCheck,
   listing,
   elapsedMode = "fixture",
+  yuu = null,
 }: {
   view: OpsConsoleView;
   approval?: ApprovalView;
   stockCheck?: StockCheckView;
   listing?: ListingDraftView;
   elapsedMode?: ElapsedMode;
+  yuu?: YuuPanel | null;
 }) {
   const [status, setStatus] = useState<ProposalStatus>(view.status);
   const [rejection, setRejection] = useState<Rejection | null>(view.rejection);
@@ -524,6 +528,7 @@ export function PelitaOpsConsole({
           </p>
         )}
       </main>
+      <PelitaYuuPanel initial={yuu} />
       {approval && modalOpen && actor && (
         <PelitaApprovalModal
           data={approval.sourcing}

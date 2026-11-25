@@ -11,7 +11,17 @@ const STOCK_TONE = {
   out: "text-ink-3",
 } as const;
 
-export function PelitaProductCard({ product, onAdd }: { product: ProductCardData; onAdd: (id: string) => void }) {
+export function PelitaProductCard({
+  product,
+  onAdd,
+  onBuyYuu,
+  yuuBusy = false,
+}: {
+  product: ProductCardData;
+  onAdd: (id: string) => void;
+  onBuyYuu?: (id: string) => void;
+  yuuBusy?: boolean;
+}) {
   const [wished, setWished] = useState(false);
   const out = product.stock.status === "out";
 
@@ -87,6 +97,14 @@ export function PelitaProductCard({ product, onAdd }: { product: ProductCardData
         <span aria-hidden="true" className="size-2.5 rounded-full bg-current" />
         {product.stock.label}
       </p>
+      <button
+        type="button"
+        disabled={yuuBusy}
+        onClick={() => onBuyYuu?.(product.id)}
+        className="mt-2 h-10 rounded-md bg-primary px-2 text-base font-bold text-white disabled:opacity-60"
+      >
+        Buy with yuu (simulated)
+      </button>
     </article>
   );
 }

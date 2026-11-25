@@ -11,7 +11,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "eval": "tsx scripts/triage-eval.ts"
+    "eval": "tsx scripts/triage-eval.ts",
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "yuu:simulate": "tsx scripts/yuu-simulate.ts"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.31.1",
