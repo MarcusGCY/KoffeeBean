@@ -4,6 +4,10 @@ import { demoEnabled, notFoundResponse } from "@/lib/demo/guard";
 import { acceptBiSignal, normaliseConfidence } from "@/lib/yuu/signal";
 import { yuuFailure, yuuJson } from "@/lib/yuu/http";
 
+/**
+ * Files the Pelita product proposal for approval 1. This is the only route that
+ * turns a yuu signal into that approval. The escalation webhook does not.
+ */
 const bodySchema = z.strictObject({
   sku: z.string().regex(/^PL-\d{5}$/),
   rationale: z.string().trim().min(8).max(400),

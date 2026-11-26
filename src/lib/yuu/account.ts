@@ -1,6 +1,7 @@
 import { listUsersAppMetadata, mgmtConfigured, getAppMetadata, patchAppMetadata } from "@/lib/auth0-mgmt";
 import { biHashConfigured, hashShopperId } from "@/lib/bi-hash";
 import { isTestShopper } from "@/lib/bi-track";
+import { yuuStoreId } from "./stores";
 import type { YuuPurchaseChannel } from "./types";
 
 /**
@@ -33,6 +34,10 @@ export type YuuStoredPurchase = {
   at: string;
   /** Missing on rows written before partner purchases. Those count as Pelita shelf buys. */
   channel?: YuuPurchaseChannel;
+  /** Missing on older rows. Readers treat that as the Pelita store. */
+  store?: string;
+  /** One Buy click is one basket. Lines that share a basket were bought together. */
+  basket?: string;
 };
 
 export type YuuAccount = {
@@ -76,6 +81,8 @@ export function storedPurchase(input: {
   points: number;
   at: string;
   channel?: YuuPurchaseChannel;
+  store?: string;
+  basket?: string;
 }): YuuStoredPurchase {
   return {
     sku: input.sku,
@@ -85,6 +92,8 @@ export function storedPurchase(input: {
     points: input.points,
     at: input.at,
     channel: input.channel === "partner" ? "partner" : "web",
+    store: yuuStoreId(input.store),
+    basket: input.basket && /^[A-Za-z0-9_-]{1,40}$/.test(input.basket) ? input.basket : undefined,
   };
 }
 
@@ -99,7 +108,18 @@ function readPurchase(value: unknown): YuuStoredPurchase | null {
   if (qty == null || cents == null || points == null) return null;
   if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) return null;
   const channel = row.channel === "partner" ? "partner" : row.channel === "web" ? "web" : undefined;
-  return { sku: row.sku, name: clipName(row.name) || row.sku, qty, cents, points, at: row.at, ...(channel ? { channel } : {}) };
+  const basket = typeof row.basket === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(row.basket) ? row.basket : undefined;
+  return {
+    sku: row.sku,
+    name: clipName(row.name) || row.sku,
+    qty,
+    cents,
+    points,
+    at: row.at,
+    store: yuuStoreId(row.store),
+    ...(channel ? { channel } : {}),
+    ...(basket ? { basket } : {}),
+  };
 }
 
 /** Defensive read of `app_metadata.yuu`. Missing or empty means this shopper has no yuu history. */

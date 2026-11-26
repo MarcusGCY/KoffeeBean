@@ -54,6 +54,10 @@ describe("yuu partner purchases", () => {
     const signedIn = html({ name: "Ada" });
     expect(signedIn).toContain(YUU_BUY_LABEL);
     expect(signedIn).not.toContain(YUU_SIGN_IN_LABEL);
+    expect(signedIn).toContain('aria-label="yuu store"');
+    expect(signedIn).toContain("Pelita Singapore");
+    expect(signedIn).toContain("Harbour Mart");
+    expect(signedIn).toContain('value="harbour-mart"');
     expect(signedIn).toContain(`href="${PELITA_SIGN_OUT_HREF}"`);
     expect(signedIn).not.toContain("returnTo=%2Fpelita%2Fyuu");
     expect(signedIn.match(new RegExp(YUU_BUY_LABEL, "g"))).toHaveLength(scenario.storefront.yuuPartners.productIds.length);

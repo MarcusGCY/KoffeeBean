@@ -18,7 +18,7 @@ export async function POST(req: Request) {
     return yuuJson({ error: "invalid_body" }, 400);
   }
   try {
-    await runYuuDetector(windowMinutes);
+    await runYuuDetector(windowMinutes, new Date(), { awaitWebhook: true });
     return yuuJson({ isDemo: true, ...(await readYuuPanel(windowMinutes)) });
   } catch (error) {
     return yuuFailure(error, "[yuu] detect failed");

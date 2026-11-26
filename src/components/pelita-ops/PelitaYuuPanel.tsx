@@ -85,6 +85,15 @@ export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
                         {signal.reason ?? "—"} · {signal.source === "bi_bot" ? "bi bot" : "detector"}
                         {signal.proposalRef ? ` · ${signal.proposalRef}` : ""}
                       </p>
+                      {signal.status === "escalated" && signal.webhook && (
+                        <p className="text-base font-semibold text-ink-2" data-yuu-webhook={signal.webhook.status}>
+                          {signal.webhook.status === "sent" && "webhook sent"}
+                          {signal.webhook.status === "failed" &&
+                            `webhook failed${signal.webhook.code == null ? "" : ` ${signal.webhook.code}`}`}
+                          {signal.webhook.status === "unconfigured" && "webhook not configured"}
+                          {signal.webhook.status === "pending" && "webhook sending"}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
