@@ -71,7 +71,7 @@ export const biPayloadSchemas = {
     sku: id,
     qty: z.number().int().min(1).max(1000),
     amountCents: cents,
-    channel: z.enum(["web", "sim"]),
+    channel: z.enum(["web", "sim", "partner"]),
   }),
 } as const;
 

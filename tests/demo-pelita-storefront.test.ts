@@ -120,11 +120,13 @@ describe("/demo/pelita page respects the gate", () => {
   it("is refused by the proxy before the page runs when the gate is closed, and /pelita is public when it is open", async () => {
     expect((await proxy(new NextRequest("https://x.test/demo/pelita"))).status).toBe(404);
     expect((await proxy(new NextRequest("https://x.test/pelita"))).status).toBe(404);
+    expect((await proxy(new NextRequest("https://x.test/pelita/yuu"))).status).toBe(404);
     process.env.KB_DEMO_TRACK = "pelita";
     process.env.APPROVAL_SECRET = SECRET;
     expect((await proxy(new NextRequest("https://x.test/demo/pelita"))).status).toBe(200);
     expect((await proxy(new NextRequest("https://x.test/pelita"))).status).toBe(200);
     expect((await proxy(new NextRequest("https://x.test/pelita/ops"))).status).toBe(200);
+    expect((await proxy(new NextRequest("https://x.test/pelita/yuu"))).status).toBe(200);
   });
 });
 

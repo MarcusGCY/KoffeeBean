@@ -1,6 +1,7 @@
 import { listUsersAppMetadata, mgmtConfigured, getAppMetadata, patchAppMetadata } from "@/lib/auth0-mgmt";
 import { biHashConfigured, hashShopperId } from "@/lib/bi-hash";
 import { isTestShopper } from "@/lib/bi-track";
+import type { YuuPurchaseChannel } from "./types";
 
 /**
  * yuu purchases live on Auth0 `app_metadata.yuu`, the same document KoffeeBean uses for orders
@@ -30,6 +31,8 @@ export type YuuStoredPurchase = {
   cents: number;
   points: number;
   at: string;
+  /** Missing on rows written before partner purchases. Those count as Pelita shelf buys. */
+  channel?: YuuPurchaseChannel;
 };
 
 export type YuuAccount = {
@@ -72,6 +75,7 @@ export function storedPurchase(input: {
   cents: number;
   points: number;
   at: string;
+  channel?: YuuPurchaseChannel;
 }): YuuStoredPurchase {
   return {
     sku: input.sku,
@@ -80,6 +84,7 @@ export function storedPurchase(input: {
     cents: input.cents,
     points: input.points,
     at: input.at,
+    channel: input.channel === "partner" ? "partner" : "web",
   };
 }
 
@@ -93,7 +98,8 @@ function readPurchase(value: unknown): YuuStoredPurchase | null {
   const points = finiteInt(row.points, 0, 1_000_000);
   if (qty == null || cents == null || points == null) return null;
   if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) return null;
-  return { sku: row.sku, name: clipName(row.name) || row.sku, qty, cents, points, at: row.at };
+  const channel = row.channel === "partner" ? "partner" : row.channel === "web" ? "web" : undefined;
+  return { sku: row.sku, name: clipName(row.name) || row.sku, qty, cents, points, at: row.at, ...(channel ? { channel } : {}) };
 }
 
 /** Defensive read of `app_metadata.yuu`. Missing or empty means this shopper has no yuu history. */

@@ -174,6 +174,7 @@ describe("proxy and the demo API", () => {
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(404);
     expect((await publicPath("/pelita")).status).toBe(404);
     expect((await publicPath("/pelita/ops")).status).toBe(404);
+    expect((await publicPath("/pelita/yuu")).status).toBe(404);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(404);
 
     process.env.KB_DEMO_TRACK = "pelita";
@@ -183,6 +184,7 @@ describe("proxy and the demo API", () => {
     expect((await page(`${PRESENTER_COOKIE}=${token}`)).status).toBe(200);
     expect((await publicPath("/pelita")).status).toBe(200);
     expect((await publicPath("/pelita/ops")).status).toBe(200);
+    expect((await publicPath("/pelita/yuu")).status).toBe(200);
     expect((await publicPath("/pelita/audit")).status).toBe(200);
     expect((await proxy(new NextRequest(`https://x.test/demo/pelita/enter?k=${token}`))).status).toBe(200);
 

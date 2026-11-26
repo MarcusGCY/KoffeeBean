@@ -72,6 +72,10 @@ export const scenarioSchema = z
         productIds: z.array(z.string()).length(5),
         chips: z.array(z.string()),
       }),
+      /** Coalition yuu products, including the demand-gap sku Pelita does not stock yet. */
+      yuuPartners: z.object({
+        productIds: z.array(z.string().regex(/^PL-\d{5}$/)).min(1).max(6),
+      }),
     }),
     catalogue: z.array(catalogueItem).length(20),
     gap: z.object({
@@ -209,6 +213,12 @@ export const scenarioSchema = z
     for (const id of [...s.storefront.dealsOfTheWeek.productIds, ...s.storefront.publishedRow.productIds]) {
       if (!ids.has(id)) issue(`storefront references unknown product ${id}`);
     }
+    const partners = s.storefront.yuuPartners.productIds;
+    if (new Set(partners).size !== partners.length) issue("yuu partner products must be unique");
+    for (const id of partners) {
+      if (!ids.has(id)) issue(`yuu partner shelf references unknown product ${id}`);
+    }
+    if (!partners.includes(s.proposal.productId)) issue("yuu partner shelf must include the demand-gap product");
     if (!ids.has(s.proposal.productId)) issue("proposal references an unknown product");
     if (s.listing.productId !== s.proposal.productId) issue("listing and proposal must be the same product");
     if (s.approvers[0].id === s.approvers[1].id) issue("the two approvers must be different people");

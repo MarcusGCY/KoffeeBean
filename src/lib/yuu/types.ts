@@ -5,8 +5,17 @@
 
 export const YUU_LABEL = "yuu (simulated)" as const;
 
+/** Visible heading on the partner shelf. */
+export const YUU_PARTNER_HEADING = "yuu partner purchases";
+/** Visible label on a signed-in Buy control, on the Pelita shelf and at partner stores. */
+export const YUU_BUY_LABEL = "Buy with yuu";
+/** Visible label when nobody is signed in. The control is a link to sign in. */
+export const YUU_SIGN_IN_LABEL = "Sign in to buy with yuu";
+
 export type YuuTierName = "Member" | "Silver" | "Gold";
-export type YuuChannel = "web" | "sim";
+/** `partner` is a coalition purchase at another store. `sim` is only on old rows. */
+export type YuuChannel = "web" | "partner" | "sim";
+export type YuuPurchaseChannel = "web" | "partner";
 export type YuuSignalStatus = "dropped" | "shortlisted" | "escalated";
 export type YuuSignalSource = "detector" | "bi_bot";
 

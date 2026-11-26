@@ -255,9 +255,9 @@ function purchaseOf(at: string, sku = "PL-20055"): YuuStoredPurchase {
   return { sku, name: "Magnesium Glycinate 400 mg", qty: 1, cents: 3290, points: 32, at };
 }
 
-async function buyAs(userId: string, sku: string, qty = 1): Promise<Response> {
+async function buyAs(userId: string, sku: string, qty = 1, channel?: "web" | "partner"): Promise<Response> {
   getShopper.mockResolvedValue({ id: userId, name: "Ada Lovelace" });
-  return purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku, qty }));
+  return purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku, qty, ...(channel ? { channel } : {}) }));
 }
 
 beforeEach(() => {
@@ -410,8 +410,9 @@ describe("purchase API", () => {
     expect(JSON.stringify(yuu)).not.toContain("auth0|ada");
     const recorded = events[0] as unknown[];
     expect(recorded[0]).toBe(hashShopperId("auth0|ada"));
+    expect(recorded[1]).toBe("yuu-web");
     expect(JSON.stringify(recorded)).not.toContain("auth0|ada");
-    expect(JSON.parse(String(recorded[1]))).toEqual({ sku: "PL-80014", qty: 1, amountCents: 1190, channel: "web" });
+    expect(JSON.parse(String(recorded[2]))).toEqual({ sku: "PL-80014", qty: 1, amountCents: 1190, channel: "web" });
     const signal = [...signals.values()].find((row) => row.sku === "PL-80014");
     expect(signal).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold });
     expect(queries.some((query) => query.startsWith("insert into yuu_transactions"))).toBe(false);
@@ -424,6 +425,27 @@ describe("purchase API", () => {
     delete process.env.KB_DEMO_TRACK;
     const closed = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014" }));
     expect(closed.status).toBe(404);
+  });
+
+  it("records a partner purchase of the unlisted demand-gap sku", async () => {
+    const sku = loadScenario().proposal.productId;
+    const res = await buyAs("auth0|ada", sku, 1, "partner");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      sku,
+      amountSgd: "32.90",
+      pointsEarned: 32,
+      points: 32,
+      channel: "partner",
+    });
+    const yuu = auth0.users.get("auth0|ada")?.yuu as { purchases: { sku: string; channel: string }[] };
+    expect(yuu.purchases[0]).toMatchObject({ sku, channel: "partner" });
+    const recorded = events[0] as unknown[];
+    expect(recorded[1]).toBe("yuu-partner");
+    expect(JSON.parse(String(recorded[2]))).toMatchObject({ sku, channel: "partner", amountCents: 3290 });
+    const signal = [...signals.values()].find((row) => row.sku === sku);
+    expect(signal).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold });
   });
 
   it("refuses the write when the shopper's metadata has no room for yuu", async () => {

@@ -1,4 +1,4 @@
-import type { YuuPanel, YuuPurchaseResult } from "@/lib/yuu/types";
+import type { YuuPanel, YuuPurchaseChannel, YuuPurchaseResult } from "@/lib/yuu/types";
 
 /** Same-origin calls for yuu. A cross-site request is refused. */
 
@@ -10,7 +10,7 @@ async function post(path: string, body?: unknown): Promise<Response> {
   });
 }
 
-export async function buyWithYuuRequest(body: { sku: string; qty?: number }): Promise<YuuPurchaseResult> {
+export async function buyWithYuuRequest(body: { sku: string; qty?: number; channel?: YuuPurchaseChannel }): Promise<YuuPurchaseResult> {
   const res = await post("/api/demo/pelita/yuu/purchase", body);
   const data = (await res.json().catch(() => null)) as YuuPurchaseResult | { error?: string } | null;
   if (!res.ok || !data || !("pointsEarned" in data)) {

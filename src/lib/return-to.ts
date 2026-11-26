@@ -2,9 +2,13 @@ const CONTROL = /[\u0000-\u001F\u007F\u2028\u2029]/;
 
 /** Where the Pelita storefront sends a shopper after login or logout. */
 export const PELITA_RETURN_PATH = "/pelita";
+/** Partner-store yuu shelf. Unlisted skus, including the demand-gap product, are bought here. */
+export const PELITA_YUU_PATH = "/pelita/yuu";
 
 export const PELITA_SIGN_IN_HREF = authHref("/auth/login", PELITA_RETURN_PATH);
 export const PELITA_SIGN_OUT_HREF = authHref("/auth/logout", PELITA_RETURN_PATH);
+export const PELITA_YUU_SIGN_IN_HREF = authHref("/auth/login", PELITA_YUU_PATH);
+export const PELITA_YUU_SIGN_OUT_HREF = authHref("/auth/logout", PELITA_YUU_PATH);
 
 /**
  * A same-origin path, query, and hash. Absolute URLs, protocol-relative URLs,

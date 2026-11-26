@@ -68,6 +68,9 @@
       "category": "Vitamins & supplements",
       "productIds": ["PL-20055", "PL-20013", "PL-20026", "PL-20039", "PL-20042"],
       "chips": ["All", "Multivitamins", "Fish oil", "Magnesium & minerals", "Gut health"]
+    },
+    "yuuPartners": {
+      "productIds": ["PL-20055", "PL-80014", "PL-80027"]
     }
   },
   "catalogue": [
