@@ -12,6 +12,8 @@ export type PartnerOffer = {
    * approval 2 lists it. Partner purchases do not put it on the Pelita shelf.
    */
   atPelita: boolean;
+  /** Real pack shot when a launch config names one. Absent means the kit SVG. */
+  imageUrl?: string | null;
 };
 
 /** Coalition products a signed-in shopper can buy with yuu, including skus Pelita does not stock. */

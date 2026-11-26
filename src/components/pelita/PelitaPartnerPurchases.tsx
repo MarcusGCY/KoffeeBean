@@ -1,7 +1,7 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
-import { PELITA_ART } from "@/lib/demo/pelita-art";
 import type { PartnerOffer } from "@/lib/demo/yuu-partners";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { formatSgd } from "@/lib/demo/storefront";
@@ -9,6 +9,7 @@ import { PELITA_SIGN_OUT_HREF } from "@/lib/return-to";
 import { YUU_PARTNER_DEFAULT_STORE_ID, YUU_STORES } from "@/lib/yuu/stores";
 import { YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL, type YuuTierName } from "@/lib/yuu/types";
 import type { PelitaAccount } from "./PelitaStorefront";
+import { PelitaProductImage } from "./PelitaProductImage";
 import { YuuBuyFeedback, type YuuBuyNote } from "./YuuBuyFeedback";
 
 type Balance = { points: number; tier: YuuTierName };
@@ -109,13 +110,20 @@ export function PelitaPartnerPurchases({
           {offers.map((offer) => (
             <article key={offer.id} data-yuu-partner={offer.id} className="flex flex-col rounded-xl border border-line-2 bg-surface p-3.5">
               <div className="flex h-32 items-center justify-center rounded-md bg-[#f8f5f2]">
-                <div
-                  className="h-[98px] w-[98px] [&>svg]:h-full [&>svg]:w-full"
-                  dangerouslySetInnerHTML={{ __html: PELITA_ART[offer.art] }}
-                />
+                <div className="h-[98px] w-[98px]">
+                  <PelitaProductImage imageUrl={offer.imageUrl} art={offer.art} alt="" className="h-full w-full" />
+                </div>
               </div>
               <p className="mt-2.5 text-base font-bold text-ink-3">Partner store</p>
-              <h2 className="text-lg font-bold leading-[1.25]">{offer.name}</h2>
+              <h2 className="text-lg font-bold leading-[1.25]">
+                {offer.atPelita ? (
+                  <Link href={`/pelita/product/${offer.id}`} data-product-link="">
+                    {offer.name}
+                  </Link>
+                ) : (
+                  offer.name
+                )}
+              </h2>
               <p className="text-base text-ink-3">{offer.size}</p>
               <p className="mt-1 text-price font-extrabold tracking-[-0.5px]">{formatSgd(offer.price)}</p>
               <p className={`mt-1.5 text-base font-bold ${offer.atPelita ? "text-ink-2" : "text-primary-dark"}`}>

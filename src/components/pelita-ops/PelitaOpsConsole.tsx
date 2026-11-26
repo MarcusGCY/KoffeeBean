@@ -20,7 +20,9 @@ import { PelitaApprovalModal } from "./PelitaApprovalModal";
 import { PelitaListingDraft, type ListingDraftStatus } from "./PelitaListingDraft";
 import { PelitaLaunchApproval } from "./PelitaLaunchApproval";
 import { PelitaStockCheck, type StockCheckStatus } from "./PelitaStockCheck";
+import { PelitaLaunchSchedule } from "./PelitaLaunchSchedule";
 import { PelitaYuuPanel } from "./PelitaYuuPanel";
+import type { LaunchScheduleRow } from "@/lib/demo/launch";
 import type { YuuPanel } from "@/lib/yuu/types";
 
 const CURRENT_RING: Record<RailStep["kind"], string> = {
@@ -122,6 +124,7 @@ export function PelitaOpsConsole({
   listing,
   elapsedMode = "fixture",
   yuu = null,
+  launches = [],
 }: {
   view: OpsConsoleView;
   approval?: ApprovalView;
@@ -129,6 +132,7 @@ export function PelitaOpsConsole({
   listing?: ListingDraftView;
   elapsedMode?: ElapsedMode;
   yuu?: YuuPanel | null;
+  launches?: LaunchScheduleRow[];
 }) {
   const [status, setStatus] = useState<ProposalStatus>(view.status);
   const [rejection, setRejection] = useState<Rejection | null>(view.rejection);
@@ -378,6 +382,7 @@ export function PelitaOpsConsole({
       <Rail steps={steps} auditHref={AUDIT_PATH} />
 
       <main className={`px-12 ${draftScreen || launchScreen ? "py-4" : "py-6"}`}>
+        {launches.length > 0 && <PelitaLaunchSchedule rows={launches} />}
         {approval && stockScreen && stock ? (
           <PelitaStockCheck
             data={stock}

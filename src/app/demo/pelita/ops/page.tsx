@@ -2,6 +2,8 @@ import { connection } from "next/server";
 import { PelitaOpsConsole } from "@/components/pelita-ops/PelitaOpsConsole";
 import { approvalView } from "@/lib/demo/approval-view";
 import { requirePresenterPage } from "@/lib/demo/guard";
+import { toScheduleRow } from "@/lib/demo/launch";
+import { listLaunches } from "@/lib/demo/launch-store";
 import { listingDraftView } from "@/lib/demo/listing-view";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { ensureOpeningRows } from "@/lib/demo/opening";
@@ -29,6 +31,7 @@ export default async function PelitaOpsPage() {
   if (snapshot) await ensureOpeningRows(scenario, snapshot.state, snapshot.epoch).catch(() => false);
   const state = snapshot ? { ...snapshot.state, elapsedMode: snapshot.elapsedMode } : EMPTY_STATE;
   const yuu = await loadYuuPanel();
+  const launches = await listLaunches().catch(() => []);
   return (
     <PelitaOpsConsole
       view={opsConsoleView(scenario, state)}
@@ -37,6 +40,7 @@ export default async function PelitaOpsPage() {
       listing={listingDraftView(scenario, state)}
       elapsedMode={snapshot?.elapsedMode}
       yuu={yuu}
+      launches={launches.map((config) => toScheduleRow(config))}
     />
   );
 }

@@ -1,10 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
-import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, type ProductCardData } from "@/lib/demo/storefront";
 import { YUU_BUY_LABEL, YUU_SIGN_IN_LABEL } from "@/lib/yuu/types";
 import { CartIcon, HeartIcon } from "./PelitaIcons";
+import { PelitaProductImage } from "./PelitaProductImage";
 import { YuuBuyFeedback, type YuuBuyNote } from "./YuuBuyFeedback";
 
 const STOCK_TONE = {
@@ -41,10 +42,14 @@ export function PelitaProductCard({
       data-highlight={product.highlight ? "" : undefined}
     >
       <div className="relative flex h-32 items-center justify-center overflow-hidden rounded-md bg-[#f8f5f2]">
-        <div
-          className="mb-[22px] h-[98px] w-[98px] [&>svg]:h-full [&>svg]:w-full"
-          dangerouslySetInnerHTML={{ __html: PELITA_ART[product.art] }}
-        />
+        <Link
+          href={`/pelita/product/${product.id}`}
+          data-product-link=""
+          aria-label={product.name}
+          className="mb-[22px] block h-[98px] w-[98px]"
+        >
+          <PelitaProductImage imageUrl={product.imageUrl} art={product.art} alt="" className="h-full w-full" />
+        </Link>
         {product.tag && (
           <span
             className={`absolute left-2 top-2 rounded-full px-2.5 py-0.5 text-[16px] font-bold leading-6 text-white ${
@@ -70,7 +75,11 @@ export function PelitaProductCard({
         )}
       </div>
 
-      <h3 className="mt-2.5 text-lg font-bold leading-[1.25]">{product.name}</h3>
+      <h3 className="mt-2.5 text-lg font-bold leading-[1.25]">
+        <Link href={`/pelita/product/${product.id}`} data-product-link="">
+          {product.name}
+        </Link>
+      </h3>
       <p className="text-base text-ink-3">{product.size}</p>
 
       <div className="mt-1 flex items-end justify-between">
