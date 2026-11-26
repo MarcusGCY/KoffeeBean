@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
+import { readPelitaBag, writePelitaBag } from "@/lib/demo/pelita-bag";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, PELITA_YUU_PATH, safeAvatarUrl } from "@/lib/return-to";
@@ -100,6 +101,9 @@ export function PelitaStorefront({
   const [toastOpen, setToastOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
+  useEffect(() => {
+    setCart(readPelitaBag());
+  }, []);
   const [balance, setBalance] = useState<YuuBalance | null>(
     yuu?.signedInMember
       ? { displayName: yuu.signedInMember.displayName, points: yuu.signedInMember.points, tier: yuu.signedInMember.tier }
@@ -112,7 +116,12 @@ export function PelitaStorefront({
   const byId = useMemo(() => new Map(view.catalogue.map((p) => [p.id, p])), [view.catalogue]);
   const cartCount = Object.values(cart).reduce((sum, n) => sum + n, 0);
   const cartTotal = Object.entries(cart).reduce((sum, [id, qty]) => sum + (byId.get(id)?.price ?? 0) * qty, 0);
-  const addToCart = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
+  const addToCart = (id: string) =>
+    setCart((c) => {
+      const next = { ...c, [id]: (c[id] ?? 0) + 1 };
+      writePelitaBag(next);
+      return next;
+    });
   const activeBalance = account ? balance : null;
 
   async function buyYuu(sku: string) {

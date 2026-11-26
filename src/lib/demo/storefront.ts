@@ -20,6 +20,8 @@ export type ProductCardData = {
   tag: "New" | "Bestseller" | null;
   memberPrice: number | null;
   stock: { status: StockStatus; label: string };
+  /** Set when a launch config names a real image. Absent means the kit SVG. */
+  imageUrl?: string | null;
 };
 
 export type PublishedChip = {

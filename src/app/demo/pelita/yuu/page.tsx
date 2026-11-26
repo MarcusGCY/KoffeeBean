@@ -2,6 +2,9 @@ import { connection } from "next/server";
 import { PelitaPartnerPurchases } from "@/components/pelita/PelitaPartnerPurchases";
 import type { PelitaAccount } from "@/components/pelita/PelitaStorefront";
 import { requirePresenterPage } from "@/lib/demo/guard";
+import { listLaunches } from "@/lib/demo/launch-store";
+import { builtinLaunches } from "@/lib/demo/pl-20055-package";
+import { applyLaunchesToPartners } from "@/lib/demo/launch-view";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoSnapshot } from "@/lib/demo/state";
 import { partnerOffers } from "@/lib/demo/yuu-partners";
@@ -22,6 +25,7 @@ export default async function PelitaYuuPartnersPage() {
   const scenario = loadScenario();
   const snapshot = await getDemoSnapshot().catch(() => null);
   const listed = snapshot?.state.listed === true;
+  const launches = await listLaunches().catch(() => builtinLaunches());
   const session = await signedInAccount();
   const yuu = await loadStorefrontYuu(session.memberKey);
   const balance = yuu.signedInMember
@@ -29,7 +33,7 @@ export default async function PelitaYuuPartnersPage() {
     : null;
   return (
     <PelitaPartnerPurchases
-      offers={partnerOffers(scenario, listed)}
+      offers={applyLaunchesToPartners(partnerOffers(scenario, listed), scenario, launches)}
       account={session.account}
       signInHref={PELITA_YUU_SIGN_IN_HREF}
       wordmark={scenario.brand.wordmark}

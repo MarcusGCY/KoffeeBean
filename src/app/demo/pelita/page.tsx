@@ -1,6 +1,9 @@
 import { connection } from "next/server";
 import { PelitaStorefront, type PelitaAccount } from "@/components/pelita/PelitaStorefront";
 import { requirePresenterPage } from "@/lib/demo/guard";
+import { listLaunches } from "@/lib/demo/launch-store";
+import { builtinLaunches } from "@/lib/demo/pl-20055-package";
+import { applyLaunchConfigs } from "@/lib/demo/launch-view";
 import { publishedView } from "@/lib/demo/published-view";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoSnapshot } from "@/lib/demo/state";
@@ -23,15 +26,15 @@ export default async function PelitaStorefrontPage() {
   const snapshot = await getDemoSnapshot().catch(() => null);
   const state = snapshot ? { ...snapshot.state, elapsedMode: snapshot.elapsedMode } : null;
   const listed = state?.listed === true;
+  const launches = await listLaunches().catch(() => builtinLaunches());
   const session = await signedInAccount();
   const yuu = await loadStorefrontYuu(session.memberKey);
-  return (
-    <PelitaStorefront
-      view={storefrontView(scenario, { listed, published: state ? publishedView(scenario, state) : null })}
-      account={session.account}
-      yuu={yuu}
-    />
+  const view = applyLaunchConfigs(
+    storefrontView(scenario, { listed, published: state ? publishedView(scenario, state) : null }),
+    scenario,
+    launches,
   );
+  return <PelitaStorefront view={view} account={session.account} yuu={yuu} />;
 }
 
 /** Header identity. A session failure leaves the page public and signed out. */
