@@ -99,6 +99,20 @@ describe("returnTo stays on this origin", () => {
     expect(absoluteLogoutReturnTo("/pelita", "https://evil.test")).toBe("https://shop.example/pelita");
   });
 
+  it("sends every Pelita logout to the allowlisted /pelita URL, not a deeper path or a query", () => {
+    process.env.APP_BASE_URL = "https://koffee-bean.vercel.app";
+    for (const returnTo of ["/pelita", "/pelita/", "/pelita/yuu", "/pelita?next=1", "/demo/pelita/yuu"]) {
+      const logout = prepareAuthReturnTo(
+        new NextRequest(`https://preview.vercel.app/auth/logout?returnTo=${encodeURIComponent(returnTo)}`),
+      );
+      expect(logout).toBeInstanceOf(NextRequest);
+      expect((logout as NextRequest).nextUrl.searchParams.get("returnTo"), returnTo).toBe("https://koffee-bean.vercel.app/pelita");
+    }
+    delete process.env.APP_BASE_URL;
+    const account = prepareAuthReturnTo(new NextRequest("https://x.test/auth/logout?returnTo=/account"));
+    expect((account as NextRequest).nextUrl.searchParams.get("returnTo")).toBe("https://x.test/account");
+  });
+
   it("keeps only an https avatar with no credentials", () => {
     expect(safeAvatarUrl("https://cdn.example/ada.png")).toBe("https://cdn.example/ada.png");
     expect(safeAvatarUrl("http://cdn.example/ada.png")).toBeUndefined();

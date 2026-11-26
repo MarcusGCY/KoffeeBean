@@ -8,6 +8,28 @@ import { safeRelativeReturnTo } from "./return-to";
  * origin) so the caller cannot choose the host. The fragment is dropped
  * because the allowlist matches the URL without it.
  */
+/**
+ * Pelita sign-out always lands on `/pelita`, with no query and no deeper path.
+ * Auth0 matches the absolute logout URL exactly, so `/pelita/yuu` is rejected.
+ */
+export function pelitaLogoutReturn(relative: string): string {
+  let pathname = relative;
+  try {
+    pathname = new URL(relative, "https://returnto.invalid").pathname;
+  } catch {
+    return relative;
+  }
+  if (
+    pathname === "/pelita" ||
+    pathname.startsWith("/pelita/") ||
+    pathname === "/demo/pelita" ||
+    pathname.startsWith("/demo/pelita/")
+  ) {
+    return "/pelita";
+  }
+  return relative;
+}
+
 export function absoluteLogoutReturnTo(relative: string, requestOrigin: string): string | null {
   const safe = safeRelativeReturnTo(relative);
   if (!safe) return null;
@@ -53,7 +75,7 @@ export function prepareAuthReturnTo(request: NextRequest): NextRequest | NextRes
   if (!safe) return invalidReturnTo();
 
   if (pathname === "/auth/logout") {
-    const absolute = absoluteLogoutReturnTo(safe, request.nextUrl.origin);
+    const absolute = absoluteLogoutReturnTo(pelitaLogoutReturn(safe), request.nextUrl.origin);
     if (!absolute) return invalidReturnTo();
     return withReturnTo(request, absolute);
   }

@@ -2,11 +2,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { PelitaPartnerPurchases } from "@/components/pelita/PelitaPartnerPurchases";
+import { YuuBuyFeedback } from "@/components/pelita/YuuBuyFeedback";
 import { loadScenario } from "@/lib/demo/scenario";
 import { storefrontView } from "@/lib/demo/storefront";
 import { partnerOffers } from "@/lib/demo/yuu-partners";
-import { PELITA_YUU_PATH, PELITA_YUU_SIGN_IN_HREF } from "@/lib/return-to";
-import { YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL } from "@/lib/yuu/types";
+import { PELITA_SIGN_OUT_HREF, PELITA_YUU_PATH, PELITA_YUU_SIGN_IN_HREF } from "@/lib/return-to";
+import { yuuBoughtLine, YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL } from "@/lib/yuu/types";
 
 const scenario = loadScenario();
 
@@ -53,6 +54,19 @@ describe("yuu partner purchases", () => {
     const signedIn = html({ name: "Ada" });
     expect(signedIn).toContain(YUU_BUY_LABEL);
     expect(signedIn).not.toContain(YUU_SIGN_IN_LABEL);
+    expect(signedIn).toContain(`href="${PELITA_SIGN_OUT_HREF}"`);
+    expect(signedIn).not.toContain("returnTo=%2Fpelita%2Fyuu");
     expect(signedIn.match(new RegExp(YUU_BUY_LABEL, "g"))).toHaveLength(scenario.storefront.yuuPartners.productIds.length);
+  });
+
+  it("states a bought purchase and an error inline", () => {
+    expect(yuuBoughtLine(32)).toBe("Bought with yuu, +32 points");
+    const bought = renderToStaticMarkup(createElement(YuuBuyFeedback, { note: { kind: "ok", points: 32 } }));
+    expect(bought).toContain('data-yuu-bought');
+    expect(bought).toContain("Bought with yuu, +32 points");
+    const failed = renderToStaticMarkup(createElement(YuuBuyFeedback, { note: { kind: "error", text: "Could not record the yuu purchase." } }));
+    expect(failed).toContain('role="alert"');
+    expect(failed).toContain('data-yuu-error');
+    expect(failed).toContain("Could not record the yuu purchase.");
   });
 });

@@ -6,9 +6,9 @@ export const PELITA_RETURN_PATH = "/pelita";
 export const PELITA_YUU_PATH = "/pelita/yuu";
 
 export const PELITA_SIGN_IN_HREF = authHref("/auth/login", PELITA_RETURN_PATH);
+/** Every Pelita sign-out. Auth0 allowlists this path exactly, not `/pelita/yuu`. */
 export const PELITA_SIGN_OUT_HREF = authHref("/auth/logout", PELITA_RETURN_PATH);
 export const PELITA_YUU_SIGN_IN_HREF = authHref("/auth/login", PELITA_YUU_PATH);
-export const PELITA_YUU_SIGN_OUT_HREF = authHref("/auth/logout", PELITA_YUU_PATH);
 
 /**
  * A same-origin path, query, and hash. Absolute URLs, protocol-relative URLs,

@@ -5,6 +5,7 @@ import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, type ProductCardData } from "@/lib/demo/storefront";
 import { YUU_BUY_LABEL, YUU_SIGN_IN_LABEL } from "@/lib/yuu/types";
 import { CartIcon, HeartIcon } from "./PelitaIcons";
+import { YuuBuyFeedback, type YuuBuyNote } from "./YuuBuyFeedback";
 
 const STOCK_TONE = {
   in: "text-success-text",
@@ -18,6 +19,7 @@ export function PelitaProductCard({
   onBuyYuu,
   yuuSignInHref,
   yuuBusy = false,
+  yuuNote = null,
 }: {
   product: ProductCardData;
   onAdd: (id: string) => void;
@@ -25,6 +27,7 @@ export function PelitaProductCard({
   /** Set when nobody is signed in. Buy with yuu then sends the shopper to sign in. */
   yuuSignInHref?: string;
   yuuBusy?: boolean;
+  yuuNote?: YuuBuyNote | null;
 }) {
   const [wished, setWished] = useState(false);
   const out = product.stock.status === "out";
@@ -112,6 +115,7 @@ export function PelitaProductCard({
         <button
           type="button"
           disabled={yuuBusy}
+          aria-busy={yuuBusy || undefined}
           onClick={() => onBuyYuu?.(product.id)}
           title={YUU_BUY_LABEL}
           className="mt-2 flex h-auto min-h-10 w-full min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 overflow-visible rounded-md bg-primary px-2 py-2 text-center leading-tight text-white disabled:opacity-60"
@@ -120,6 +124,7 @@ export function PelitaProductCard({
           <span className="max-w-full text-xs font-semibold wrap-anywhere text-primary-50">(simulated)</span>
         </button>
       )}
+      <YuuBuyFeedback note={yuuNote ?? null} />
     </article>
   );
 }
