@@ -50,6 +50,13 @@ export type YuuPurchaseResult = {
   channel: YuuChannel;
 };
 
+export type YuuWebhookStatus = "sent" | "failed" | "unconfigured" | "pending";
+
+export type YuuWebhookView = {
+  status: YuuWebhookStatus;
+  code: number | null;
+};
+
 export type YuuSignalView = {
   id: string;
   sku: string;
@@ -62,6 +69,8 @@ export type YuuSignalView = {
   reason: string | null;
   source: YuuSignalSource;
   proposalRef: string | null;
+  /** Null until an escalation is offered to the webhook. */
+  webhook: YuuWebhookView | null;
 };
 
 export type YuuMemberView = {

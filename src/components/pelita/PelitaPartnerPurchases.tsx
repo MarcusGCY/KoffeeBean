@@ -6,6 +6,7 @@ import type { PartnerOffer } from "@/lib/demo/yuu-partners";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { formatSgd } from "@/lib/demo/storefront";
 import { PELITA_SIGN_OUT_HREF } from "@/lib/return-to";
+import { YUU_PARTNER_DEFAULT_STORE_ID, YUU_STORES } from "@/lib/yuu/stores";
 import { YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL, type YuuTierName } from "@/lib/yuu/types";
 import type { PelitaAccount } from "./PelitaStorefront";
 import { YuuBuyFeedback, type YuuBuyNote } from "./YuuBuyFeedback";
@@ -31,6 +32,7 @@ export function PelitaPartnerPurchases({
   initialBalance?: Balance | null;
 }) {
   const [balance, setBalance] = useState<Balance | null>(account ? initialBalance : null);
+  const [storeId, setStoreId] = useState(YUU_PARTNER_DEFAULT_STORE_ID);
   const [busySku, setBusySku] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const lock = useRef(false);
@@ -41,7 +43,7 @@ export function PelitaPartnerPurchases({
     lock.current = true;
     setBusySku(sku);
     try {
-      const result = await buyWithYuuRequest({ sku, qty: 1, channel: "partner" });
+      const result = await buyWithYuuRequest({ sku, qty: 1, channel: "partner", storeId });
       setBalance({ points: result.points, tier: result.tier });
       setNote({ sku, kind: "ok", points: result.pointsEarned });
     } catch (error) {
@@ -87,6 +89,22 @@ export function PelitaPartnerPurchases({
         <p className="mt-2 max-w-3xl text-lg text-ink-2">
           yuu members also earn points at partner stores. Pelita does not stock every product here. Listing one on the Pelita shelf still takes the two approvals.
         </p>
+        <label className="mt-5 flex w-fit items-center gap-3 text-base font-bold">
+          Store
+          <select
+            aria-label="yuu store"
+            name="store"
+            value={storeId}
+            onChange={(event) => setStoreId(event.target.value)}
+            className="h-10 rounded-md border border-line-2 bg-surface px-2 text-base font-semibold"
+          >
+            {YUU_STORES.map((store) => (
+              <option key={store.id} value={store.id}>
+                {store.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="mt-6 grid grid-cols-1 gap-[22px] sm:grid-cols-2 lg:grid-cols-3">
           {offers.map((offer) => (
             <article key={offer.id} data-yuu-partner={offer.id} className="flex flex-col rounded-xl border border-line-2 bg-surface p-3.5">

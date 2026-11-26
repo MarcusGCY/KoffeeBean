@@ -14,12 +14,22 @@ import {
   YuuMetadataFullError,
   type YuuListedAccount,
 } from "./account";
+import { randomBytes } from "node:crypto";
+import { after } from "next/server";
 import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_DEFAULT_WINDOW_MINUTES, type LoyaltyPurchase } from "./detector";
+import { YUU_DEFAULT_STORE_ID, isYuuStoreId } from "./stores";
+import {
+  escalationBody,
+  postEscalation,
+  yuuWebhookUrl,
+  type YuuEscalationNotice,
+} from "./webhook";
 import { pointsForCents, sgdFromCents, tierForPoints } from "./tier";
 import {
   YUU_LABEL,
   type YuuChannel,
   type YuuPurchaseChannel,
+  type YuuWebhookView,
   type YuuLoyaltyReport,
   type YuuMemberView,
   type YuuPanel,
@@ -156,20 +166,45 @@ function windowPurchases(ledger: Ledger, windowMinutes: number, now: Date): Loya
         qty: purchase.qty,
         amountCents: purchase.cents,
         isTest: entry.test,
+        storeId: purchase.store ?? YUU_DEFAULT_STORE_ID,
       });
     }
   }
   return rows;
 }
 
-/** Recomputes today's signals from Auth0 purchases inside the rolling window. */
-export async function runYuuDetector(windowMinutes = yuuWindowMinutes(), now = new Date()): Promise<YuuSignalView[]> {
+const SIGNAL_COLUMNS = `id::text AS id, sku, product_name, score, window_minutes, distinct_members, total_qty,
+            status, reason, source, proposal_ref, webhook_status, webhook_code`;
+
+function storesFor(sku: string, purchases: readonly LoyaltyPurchase[]): { store_id: string; qty: number }[] {
+  const totals = new Map<string, number>();
+  for (const row of purchases) {
+    if (row.isTest || row.sku !== sku) continue;
+    const storeId = row.storeId && isYuuStoreId(row.storeId) ? row.storeId : YUU_DEFAULT_STORE_ID;
+    totals.set(storeId, (totals.get(storeId) ?? 0) + row.qty);
+  }
+  return [...totals.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([store_id, qty]) => ({ store_id, qty }));
+}
+
+/**
+ * Recomputes today's signals from Auth0 purchases inside the rolling window.
+ * A new escalation is posted to the webhook after the response unless `awaitWebhook` is set,
+ * which the ops refresh uses so the returned panel can show the delivery status.
+ */
+export async function runYuuDetector(
+  windowMinutes = yuuWindowMinutes(),
+  now = new Date(),
+  options?: { awaitWebhook?: boolean },
+): Promise<YuuSignalView[]> {
   const sql = requireSql();
   const ledger = await loadLedger();
   const listed = await launchListed();
   const day = await singaporeDay(sql);
   const purchases = windowPurchases(ledger, windowMinutes, now);
-  const decisions = classifyPurchases(purchases, (sku) => yuuSkuBlocked(sku, listed), yuuThresholds());
+  const thresholds = yuuThresholds();
+  const decisions = classifyPurchases(purchases, (sku) => yuuSkuBlocked(sku, listed), thresholds);
   if (decisions.length > 0) {
     const payload = decisions.map((decision) => ({
       sku: decision.sku,
@@ -189,7 +224,70 @@ export async function runYuuDetector(windowMinutes = yuuWindowMinutes(), now = n
      WHERE window_day = $1::date AND proposal_ref IS NULL AND NOT (sku = ANY($2::text[]))`,
     [day, decisions.map((decision) => decision.sku)],
   );
-  return readSignals(sql, day);
+  const signals = await readSignals(sql, day);
+  const detectedAt = now.toISOString();
+  const notices: YuuEscalationNotice[] = [];
+  for (const decision of decisions) {
+    if (decision.status !== "escalated") continue;
+    const signal = signals.find((row) => row.sku === decision.sku && row.windowMinutes === windowMinutes);
+    if (!signal || signal.webhook?.status === "sent") continue;
+    notices.push({
+      signalId: signal.id,
+      sku: decision.sku,
+      productName: decision.productName,
+      score: decision.score,
+      repeatMembers: decision.repeatMembers,
+      distinctMembers: decision.distinctMembers,
+      qty: decision.totalQty,
+      windowMinutes,
+      minRepeatMembers: thresholds.minRepeatMembers,
+      minScore: thresholds.minScore,
+      stores: storesFor(decision.sku, purchases),
+      scanComplete: ledger.complete,
+      detectedAt,
+    });
+  }
+  const deliver = () => deliverEscalations(notices);
+  if (options?.awaitWebhook || process.env.VITEST === "true") {
+    await deliver();
+    return readSignals(sql, day);
+  }
+  try {
+    after(() => void deliver().catch(() => undefined));
+  } catch {
+    void deliver().catch(() => undefined);
+  }
+  return signals;
+}
+
+const CLAIM_WEBHOOK = `UPDATE yuu_signals
+SET webhook_status = 'pending', webhook_code = NULL
+WHERE id::text = $1 AND (webhook_status IS NULL OR webhook_status IN ('failed', 'unconfigured'))
+RETURNING id::text AS id`;
+
+const MARK_WEBHOOK = `UPDATE yuu_signals
+SET webhook_status = $2, webhook_code = $3
+WHERE id::text = $1 AND (webhook_status IS DISTINCT FROM 'sent')
+RETURNING id::text AS id`;
+
+async function deliverEscalations(notices: readonly YuuEscalationNotice[]): Promise<void> {
+  if (notices.length === 0) return;
+  const sql = requireSql();
+  for (const notice of notices) {
+    if (!yuuWebhookUrl()) {
+      await sql.query(MARK_WEBHOOK, [notice.signalId, "unconfigured", null]);
+      continue;
+    }
+    const claimed = await sql.query(CLAIM_WEBHOOK, [notice.signalId]);
+    if (!claimed.length) continue;
+    const body = escalationBody(notice);
+    const result = await postEscalation(body);
+    if (!result.configured) {
+      await sql.query(MARK_WEBHOOK, [notice.signalId, "unconfigured", null]);
+      continue;
+    }
+    await sql.query(MARK_WEBHOOK, [notice.signalId, result.ok ? "sent" : "failed", result.status]);
+  }
 }
 
 function signalFrom(row: Record<string, unknown>): YuuSignalView {
@@ -207,13 +305,20 @@ function signalFrom(row: Record<string, unknown>): YuuSignalView {
     reason: row.reason == null ? null : asText(row.reason),
     source: (source === "bi_bot" ? "bi_bot" : "detector") as YuuSignalSource,
     proposalRef: row.proposal_ref == null || row.proposal_ref === "" ? null : asText(row.proposal_ref),
+    webhook: webhookOf(row),
   };
+}
+
+function webhookOf(row: Record<string, unknown>): YuuWebhookView | null {
+  const status = row.webhook_status;
+  if (status !== "sent" && status !== "failed" && status !== "unconfigured" && status !== "pending") return null;
+  const code = row.webhook_code;
+  return { status, code: typeof code === "number" && Number.isInteger(code) ? code : code == null ? null : Number.isFinite(Number(code)) ? Math.trunc(Number(code)) : null };
 }
 
 async function readSignals(sql: BiSql, day: string): Promise<YuuSignalView[]> {
   const rows = await sql.query(
-    `SELECT id::text AS id, sku, product_name, score, window_minutes, distinct_members, total_qty,
-            status, reason, source, proposal_ref
+    `SELECT ${SIGNAL_COLUMNS}
      FROM yuu_signals
      WHERE window_day = $1::date`,
     [day],
@@ -225,8 +330,7 @@ export async function findSignal(sku: string, windowMinutes: number): Promise<Yu
   const sql = requireSql();
   const day = await singaporeDay(sql);
   const rows = await sql.query(
-    `SELECT id::text AS id, sku, product_name, score, window_minutes, distinct_members, total_qty,
-            status, reason, source, proposal_ref
+    `SELECT ${SIGNAL_COLUMNS}
      FROM yuu_signals
      WHERE sku = $1 AND window_minutes = $2 AND window_day = $3::date`,
     [sku, windowMinutes, day],
@@ -244,8 +348,7 @@ export async function markSignalFromBot(sku: string, windowMinutes: number, rati
      WHERE sku = $3 AND window_minutes = $4 AND window_day = $5::date
        AND status IN ('shortlisted', 'escalated')
        AND proposal_ref IS NULL
-     RETURNING id::text AS id, sku, product_name, score, window_minutes, distinct_members, total_qty,
-               status, reason, source, proposal_ref`,
+     RETURNING ${SIGNAL_COLUMNS}`,
     [rationale, proposalRef, sku, windowMinutes, day],
   );
   const row = rows[0] as Record<string, unknown> | undefined;
@@ -345,6 +448,7 @@ export async function purchaseYuu(input: {
   qty: number;
   shopperId: string;
   channel?: YuuPurchaseChannel;
+  storeId?: string;
   detect?: boolean;
   now?: Date;
 }): Promise<YuuPurchaseResult> {
@@ -353,6 +457,7 @@ export async function purchaseYuu(input: {
   const offer = catalogueOffer(input.sku);
   if (!offer) throw new YuuQueryError("unknown_sku");
   if (!Number.isInteger(input.qty) || input.qty < 1 || input.qty > 20) throw new YuuQueryError("invalid_qty");
+  if (input.storeId !== undefined && !isYuuStoreId(input.storeId)) throw new YuuQueryError("unknown_store");
   const now = input.now ?? new Date();
   const channel: YuuPurchaseChannel = input.channel === "partner" ? "partner" : "web";
   const amountCents = offer.priceCents * input.qty;
@@ -365,6 +470,8 @@ export async function purchaseYuu(input: {
     points: pointsEarned,
     at: now.toISOString(),
     channel,
+    store: input.storeId,
+    basket: randomBytes(8).toString("hex"),
   });
   let recorded: { account: { points: number }; test: boolean };
   try {

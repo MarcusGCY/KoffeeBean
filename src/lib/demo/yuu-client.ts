@@ -10,7 +10,12 @@ async function post(path: string, body?: unknown): Promise<Response> {
   });
 }
 
-export async function buyWithYuuRequest(body: { sku: string; qty?: number; channel?: YuuPurchaseChannel }): Promise<YuuPurchaseResult> {
+export async function buyWithYuuRequest(body: {
+  sku: string;
+  qty?: number;
+  channel?: YuuPurchaseChannel;
+  storeId?: string;
+}): Promise<YuuPurchaseResult> {
   const res = await post("/api/demo/pelita/yuu/purchase", body);
   const data = (await res.json().catch(() => null)) as YuuPurchaseResult | { error?: string } | null;
   if (!res.ok || !data || !("pointsEarned" in data)) {

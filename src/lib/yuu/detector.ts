@@ -59,6 +59,8 @@ export type LoyaltyPurchase = {
   qty: number;
   amountCents: number;
   isTest: boolean;
+  /** Omitted by older callers. The detector score does not use it. */
+  storeId?: string;
 };
 
 export type LoyaltyDecision = YuuSkuStat & {

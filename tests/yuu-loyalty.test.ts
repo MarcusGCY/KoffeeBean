@@ -6,10 +6,13 @@ import { POST as resetRoute } from "@/app/api/demo/pelita/reset/route";
 import { POST as simulateRoute } from "@/app/api/demo/pelita/yuu/simulate/route";
 import { POST as detectRoute } from "@/app/api/demo/pelita/yuu/detect/route";
 import { GET as loyaltyRoute } from "@/app/api/bi/loyalty/route";
+import { GET as transactionsRoute } from "@/app/api/bi/loyalty/transactions/route";
 import { POST as signalRoute } from "@/app/api/bi/loyalty/signal/route";
 import { getDemoState } from "@/lib/demo/state";
 import { loadScenario } from "@/lib/demo/scenario";
 import { capYuu, readYuuAccount, withPurchase, YUU_META_MAX_BYTES, YUU_PURCHASE_CAP, type YuuStoredPurchase } from "@/lib/yuu/account";
+import { yuuWebhookSignature } from "@/lib/yuu/webhook";
+import { YUU_DEFAULT_STORE_ID } from "@/lib/yuu/stores";
 import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_REASON, type LoyaltyPurchase } from "@/lib/yuu/detector";
 import { tierForPoints } from "@/lib/yuu/tier";
 import { evalFenced } from "./helpers/fake-redis-eval";
@@ -65,6 +68,8 @@ type Signal = {
   source: string;
   proposal_ref: string | null;
   window_day: string;
+  webhook_status?: string | null;
+  webhook_code?: number | null;
 };
 
 let signals: Map<string, Signal>;
@@ -108,6 +113,8 @@ function handle(text: string, params: unknown[] = []): unknown[] {
         source: prev?.source === "bi_bot" ? "bi_bot" : "detector",
         proposal_ref: prev?.proposal_ref ?? null,
         window_day: row.window_day,
+        webhook_status: prev?.webhook_status ?? null,
+        webhook_code: prev?.webhook_code ?? null,
       });
     }
     return [];
@@ -127,6 +134,20 @@ function handle(text: string, params: unknown[] = []): unknown[] {
   }
   if (sql.startsWith("select") && sql.includes("from yuu_signals")) {
     return [...signals.values()].filter((signal) => signal.window_day === params[0]);
+  }
+  if (sql.startsWith("update yuu_signals") && sql.includes("set webhook_status")) {
+    const id = String(params[0]);
+    const signal = [...signals.values()].find((row) => row.id === id);
+    if (!signal || signal.webhook_status === "sent") return [];
+    if (sql.includes("webhook_status = 'pending'")) {
+      if (signal.webhook_status && signal.webhook_status !== "failed" && signal.webhook_status !== "unconfigured") return [];
+      signal.webhook_status = "pending";
+      signal.webhook_code = null;
+      return [{ id }];
+    }
+    signal.webhook_status = String(params[1]);
+    signal.webhook_code = params[2] == null ? null : Number(params[2]);
+    return [{ id }];
   }
   if (sql.startsWith("update yuu_signals")) {
     const [reason, proposalRef, sku, window, day] = params as [string, string, string, number, string];
@@ -292,6 +313,10 @@ afterEach(() => {
   delete process.env.YUU_MIN_REPEAT_MEMBERS;
   delete process.env.YUU_MIN_SCORE;
   delete process.env.YUU_WINDOW_MINUTES;
+  delete process.env.YUU_SIGNAL_WEBHOOK_URL;
+  delete process.env.YUU_SIGNAL_WEBHOOK_SECRET;
+  delete process.env.APP_BASE_URL;
+  delete process.env.APP_URL;
 });
 
 describe("yuu tier and detector", () => {
@@ -633,13 +658,141 @@ describe("detection, signal and reset", () => {
   });
 });
 
+describe("stores, webhook and transaction rows", () => {
+  it("records a store and a basket, and defaults an older purchase to the Pelita store", async () => {
+    getShopper.mockResolvedValue({ id: "auth0|ada", name: "Ada Lovelace" });
+    const stored = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", {
+      sku: "PL-80014",
+      qty: 1,
+      channel: "partner",
+      storeId: "harbour-mart",
+    }));
+    expect(stored.status).toBe(200);
+    const yuu = auth0.users.get("auth0|ada")?.yuu as { purchases: { store: string; basket: string }[] };
+    expect(yuu.purchases[0]?.store).toBe("harbour-mart");
+    expect(yuu.purchases[0]?.basket).toMatch(/^[a-f0-9]{16}$/);
+    const unknown = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", storeId: "not-a-store" }));
+    expect(unknown.status).toBe(400);
+    expect(await unknown.json()).toEqual({ error: "unknown_store" });
+
+    const at = new Date().toISOString();
+    auth0.users.set("auth0|old", {
+      yuu: { points: 32, purchases: [{ sku: "PL-20055", name: "Magnesium Glycinate 400 mg", qty: 1, cents: 3290, points: 32, at }] },
+    });
+    const rows = await transactionsRoute(bearer("https://x.test/api/bi/loyalty/transactions?window_minutes=60"));
+    expect(rows.status).toBe(200);
+    const body = await rows.json();
+    const legacy = body.rows.find((row: { member_key: string }) => row.member_key === hashShopperId("auth0|old"));
+    expect(legacy).toMatchObject({ store_id: YUU_DEFAULT_STORE_ID, sku: "PL-20055", channel: "web", basket_id: expect.stringMatching(/^legacy-/) });
+    expect(JSON.stringify(body)).not.toContain("auth0|");
+    expect(body.rows.some((row: { store_id: string }) => row.store_id === "harbour-mart")).toBe(true);
+    const aggregate = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty"));
+    expect(await aggregate.json()).not.toHaveProperty("rows");
+  });
+
+  it("posts one escalation, signs the body, and does not post that escalation again", async () => {
+    const posts: { body: string; authorization: string | null; hub: string | null; yuu: string | null }[] = [];
+    const logged: unknown[][] = [];
+    vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args);
+    });
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      posts.push({
+        body: String(init?.body),
+        authorization: headers.get("authorization"),
+        hub: headers.get("x-hub-signature-256"),
+        yuu: headers.get("x-yuu-signature"),
+      });
+      return new Response("ok", { status: 202 });
+    }));
+    process.env.YUU_SIGNAL_WEBHOOK_URL = "https://hooks.example/yuu?token=do-not-log";
+    process.env.YUU_SIGNAL_WEBHOOK_SECRET = "webhook-secret-value";
+    process.env.APP_BASE_URL = "https://koffee-bean.vercel.app";
+    const sku = loadScenario().proposal.productId;
+    for (const user of ["auth0|ada", "auth0|ben"]) {
+      expect((await buyAs(user, sku)).status).toBe(200);
+      expect((await buyAs(user, sku, 1, "partner")).status).toBe(200);
+    }
+    expect(posts).toHaveLength(1);
+    const payload = JSON.parse(posts[0]?.body ?? "{}");
+    expect(payload).toMatchObject({
+      type: "yuu.signal.escalated",
+      label: "yuu (simulated)",
+      sku,
+      repeat_members: 2,
+      distinct_members: 2,
+      score: 4,
+      scan_complete: true,
+      links: {
+        ops: "https://koffee-bean.vercel.app/pelita/ops",
+        loyalty_api: "https://koffee-bean.vercel.app/api/bi/loyalty",
+      },
+    });
+    expect(payload.signal_id).toEqual(expect.any(String));
+    expect(payload.stores).toEqual([{ store_id: "pelita-sg", qty: 4 }]);
+    const signature = yuuWebhookSignature(posts[0]?.body ?? "", "webhook-secret-value");
+    expect(posts[0]?.authorization).toBe("Bearer webhook-secret-value");
+    expect(posts[0]?.hub).toBe(signature);
+    expect(posts[0]?.yuu).toBe(signature);
+    expect(posts[0]?.body).not.toContain("auth0|");
+    expect(JSON.stringify(logged)).not.toContain("webhook-secret-value");
+    expect(JSON.stringify(logged)).not.toContain("do-not-log");
+    expect(logged.some((line) => line.includes(202))).toBe(true);
+
+    const again = await detectRoute(demoPost("https://x.test/api/demo/pelita/yuu/detect"));
+    expect(again.status).toBe(200);
+    expect(posts).toHaveLength(1);
+    const panel = await again.json();
+    expect(panel.signals.find((signal: { sku: string }) => signal.sku === sku).webhook).toEqual({ status: "sent", code: 202 });
+  });
+
+  it("buckets purchases by hour for the monitoring feed", async () => {
+    const at = new Date().toISOString();
+    auth0.users.set("auth0|ada", {
+      yuu: {
+        points: 64,
+        purchases: [
+          { sku: "PL-20055", name: "Magnesium Glycinate 400 mg", qty: 1, cents: 3290, points: 32, at, store: "harbour-mart", channel: "partner", basket: "aaaa1111bbbb2222" },
+          { sku: "PL-20055", name: "Magnesium Glycinate 400 mg", qty: 2, cents: 6580, points: 65, at, store: "ridge-pharmacy", channel: "partner", basket: "cccc3333dddd4444" },
+        ],
+      },
+    });
+    auth0.users.set("auth0|ben", {
+      yuu: {
+        points: 32,
+        purchases: [{ sku: "PL-20055", name: "Magnesium Glycinate 400 mg", qty: 1, cents: 3290, points: 32, at, store: "harbour-mart", channel: "partner", basket: "eeee5555ffff6666" }],
+      },
+    });
+    const open = await transactionsRoute(new Request("https://x.test/api/bi/loyalty/transactions?bucket=hour&days=7"));
+    expect(open.status).toBe(401);
+    const tooLong = await transactionsRoute(bearer("https://x.test/api/bi/loyalty/transactions?bucket=hour&days=31"));
+    expect(tooLong.status).toBe(400);
+    const res = await transactionsRoute(bearer("https://x.test/api/bi/loyalty/transactions?bucket=hour&days=7"));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.bucket).toBe("hour");
+    expect(body.days).toBe(7);
+    expect(body.buckets).toEqual([
+      expect.objectContaining({
+        sku: "PL-20055",
+        qty: 4,
+        purchases: 3,
+        distinct_members: 2,
+        stores: 2,
+      }),
+    ]);
+    expect(JSON.stringify(body)).not.toContain("auth0|");
+  });
+});
+
 describe("route guards", () => {
   it("keeps demo writes same-origin and BI routes on the bearer secret", () => {
     const root = "src/app/api";
     for (const file of ["demo/pelita/yuu/purchase/route.ts", "demo/pelita/yuu/simulate/route.ts", "demo/pelita/yuu/detect/route.ts", "demo/pelita/reset/route.ts"]) {
       expect(readFileSync(`${root}/${file}`, "utf8")).toContain("guardDemoWrite(req)");
     }
-    for (const file of ["bi/loyalty/route.ts", "bi/loyalty/signal/route.ts", "bi/loyalty/detect/route.ts"]) {
+    for (const file of ["bi/loyalty/route.ts", "bi/loyalty/signal/route.ts", "bi/loyalty/detect/route.ts", "bi/loyalty/transactions/route.ts"]) {
       expect(readFileSync(`${root}/${file}`, "utf8")).toContain("requireBiSecret(req)");
     }
   });
