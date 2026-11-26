@@ -1,4 +1,7 @@
-/** Shared yuu (simulated) shapes. Safe to import from client components. */
+/**
+ * Shared yuu shapes. Safe to import from client components.
+ * The programme is simulated (it is not DFI yuu). Shoppers are real signed-in accounts.
+ */
 
 export const YUU_LABEL = "yuu (simulated)" as const;
 
@@ -15,8 +18,7 @@ export type YuuPersonaChoice = {
 };
 
 export type StorefrontYuu = {
-  personas: YuuPersonaChoice[];
-  /** The signed-in shopper's member, when they already have one. */
+  /** The signed-in shopper's balance. Null when they are signed out or have not bought. */
   signedInMember: YuuPersonaChoice | null;
 };
 
@@ -59,6 +61,10 @@ export type YuuMemberView = {
 export type YuuPanel = {
   label: typeof YUU_LABEL;
   windowMinutes: number;
+  minRepeatMembers: number;
+  minScore: number;
+  /** False when Auth0 returned more users than a Management API scan can read. */
+  scanComplete: boolean;
   signals: YuuSignalView[];
   members: YuuMemberView[];
 };
@@ -77,6 +83,10 @@ export type YuuSkuStat = {
 export type YuuLoyaltyReport = {
   label: typeof YUU_LABEL;
   windowMinutes: number;
+  minRepeatMembers: number;
+  minScore: number;
+  /** False when Auth0 returned more users than a Management API scan can read. */
+  scanComplete: boolean;
   members: {
     count: number;
     tierMix: Record<YuuTierName, number>;

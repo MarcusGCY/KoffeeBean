@@ -99,8 +99,11 @@ export function PelitaStorefront({
   const [toastOpen, setToastOpen] = useState(true);
   const [query, setQuery] = useState("");
   const [cart, setCart] = useState<Record<string, number>>({});
-  const [memberId, setMemberId] = useState(yuu?.personas[0]?.id ?? "");
-  const [balances, setBalances] = useState<Record<string, YuuBalance>>({});
+  const [balance, setBalance] = useState<YuuBalance | null>(
+    yuu?.signedInMember
+      ? { displayName: yuu.signedInMember.displayName, points: yuu.signedInMember.points, tier: yuu.signedInMember.tier }
+      : null,
+  );
   const [yuuBusy, setYuuBusy] = useState(false);
   const [yuuNotice, setYuuNotice] = useState<YuuNotice | null>(null);
 
@@ -108,28 +111,18 @@ export function PelitaStorefront({
   const cartCount = Object.values(cart).reduce((sum, n) => sum + n, 0);
   const cartTotal = Object.entries(cart).reduce((sum, [id, qty]) => sum + (byId.get(id)?.price ?? 0) * qty, 0);
   const addToCart = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
-  const selected = yuu?.personas.find((persona) => persona.id === memberId) ?? null;
-  const knownMember = yuu?.signedInMember ?? null;
-  const purchased = Object.values(balances);
-  const activeBalance: YuuBalance | null = account
-    ? (knownMember ? balances[knownMember.id] ?? knownMember : purchased[0] ?? null)
-    : selected
-      ? balances[selected.id] ?? selected
-      : null;
+  const activeBalance = account ? balance : null;
 
   async function buyYuu(sku: string) {
     if (yuuBusy) return;
-    if (!account && !memberId) {
-      setYuuNotice({ kind: "error", text: "Pick a yuu member (simulated) first." });
+    if (!account) {
+      setYuuNotice({ kind: "error", text: "Sign in to buy with yuu." });
       return;
     }
     setYuuBusy(true);
     try {
-      const result = await buyWithYuuRequest({ sku, qty: 1, memberId: account ? undefined : memberId });
-      setBalances((current) => ({
-        ...current,
-        [result.memberId]: { displayName: result.displayName, points: result.points, tier: result.tier },
-      }));
+      const result = await buyWithYuuRequest({ sku, qty: 1 });
+      setBalance({ displayName: result.displayName, points: result.points, tier: result.tier });
       setYuuNotice({ kind: "ok", result });
     } catch (error) {
       setYuuNotice({ kind: "error", text: error instanceof Error ? error.message : "Could not record the yuu purchase." });
@@ -197,23 +190,6 @@ export function PelitaStorefront({
             className="h-full flex-1 bg-transparent font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-3"
           />
         </form>
-        {!account && yuu && yuu.personas.length > 0 && (
-          <label className="flex items-center gap-2 whitespace-nowrap text-white">
-            <span className="text-base font-bold">yuu</span>
-            <select
-              aria-label="yuu member (simulated)"
-              value={memberId}
-              onChange={(event) => setMemberId(event.target.value)}
-              className="h-10 max-w-52 rounded-md bg-surface px-2 text-base font-semibold text-ink"
-            >
-              {yuu.personas.map((persona) => (
-                <option key={persona.id} value={persona.id}>
-                  {persona.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         {activeBalance && (
           <span data-yuu-tier className="whitespace-nowrap rounded-full bg-surface px-3 py-1 text-base font-bold text-primary-dark">
             {activeBalance.tier} · {activeBalance.points} pts
@@ -381,7 +357,14 @@ export function PelitaStorefront({
           ) : (
             <div className={`${launchedView ? "mt-[18px]" : "mt-3.5"} grid grid-cols-1 gap-[22px] sm:grid-cols-2 lg:grid-cols-5`}>
               {products.map((product) => (
-                <PelitaProductCard key={product.id} product={product} onAdd={addToCart} onBuyYuu={(id) => void buyYuu(id)} yuuBusy={yuuBusy} />
+                <PelitaProductCard
+                  key={product.id}
+                  product={product}
+                  onAdd={addToCart}
+                  onBuyYuu={account ? (id) => void buyYuu(id) : undefined}
+                  yuuSignInHref={account ? undefined : PELITA_SIGN_IN_HREF}
+                  yuuBusy={yuuBusy}
+                />
               ))}
             </div>
           )}

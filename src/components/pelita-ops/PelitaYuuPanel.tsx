@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { simulateYuuBurstRequest } from "@/lib/demo/yuu-client";
+import { refreshYuuSignalsRequest } from "@/lib/demo/yuu-client";
 import type { YuuPanel, YuuSignalStatus } from "@/lib/yuu/types";
 
 const ORDER: readonly YuuSignalStatus[] = ["escalated", "shortlisted", "dropped"];
@@ -17,19 +17,19 @@ function counted(count: number, singular: string, plural = `${singular}s`): stri
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-/** Ops view of simulated yuu signals and member points. */
+/** Ops view of yuu signals. Members are signed-in shoppers, labelled by a hash prefix. */
 export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
   const [panel, setPanel] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function simulate() {
+  async function refresh() {
     setBusy(true);
     setError(null);
     try {
-      setPanel(await simulateYuuBurstRequest());
+      setPanel(await refreshYuuSignalsRequest());
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "Could not simulate the yuu burst.");
+      setError(failure instanceof Error ? failure.message : "Could not refresh yuu signals.");
     } finally {
       setBusy(false);
     }
@@ -45,21 +45,25 @@ export function PelitaYuuPanel({ initial }: { initial: YuuPanel | null }) {
             yuu loyalty signals
           </h2>
           <p className="text-base font-semibold text-ink-3">
-            yuu (simulated)
+            yuu (simulated) · signed-in shoppers
             {panel ? ` · window of ${counted(panel.windowMinutes, "minute")}` : ""}
+            {panel ? ` · escalates at ${panel.minRepeatMembers} repeat shoppers and score ${panel.minScore}` : ""}
           </p>
         </div>
         <button
           type="button"
-          onClick={() => void simulate()}
+          onClick={() => void refresh()}
           disabled={busy}
           className="h-12 rounded-md bg-primary px-5 text-base font-bold text-white disabled:opacity-60"
         >
-          {busy ? "Simulating…" : "Simulate yuu burst"}
+          {busy ? "Refreshing…" : "Refresh signals"}
         </button>
       </div>
 
       {!panel && <p className="mt-4 text-base font-semibold text-ink-2">No loyalty rows loaded yet.</p>}
+      {panel && !panel.scanComplete && (
+        <p className="mt-3 text-base font-semibold text-ink-3">Shopper scan is incomplete, so some purchases may be missing.</p>
+      )}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-3">
         {ORDER.map((status) => {

@@ -5,11 +5,36 @@ import type { YuuSignalStatus, YuuSkuStat } from "./types";
 /** Rolling window used for the demo unless YUU_WINDOW_MINUTES overrides it. */
 export const YUU_DEFAULT_WINDOW_MINUTES = 60;
 
-/** A repeat trend needs at least this many members who each bought the sku twice. */
-export const YUU_MIN_REPEAT_MEMBERS = 3;
+/**
+ * Demo default: two signed-in shoppers who each buy the same sku again.
+ * A stage with only a handful of real accounts can still escalate.
+ * Override with YUU_MIN_REPEAT_MEMBERS (integer 1–50).
+ */
+export const YUU_DEFAULT_MIN_REPEAT_MEMBERS = 2;
 
-/** score = distinct repeat members × extra purchases. Below this, the sku is not a trend. */
-export const YUU_MIN_SCORE = 6;
+/**
+ * score = distinct repeat members × extra purchases (purchases after each member's first).
+ * Default 2, so two shoppers buying twice (score 2 × 2 = 4) clears it.
+ * Override with YUU_MIN_SCORE (integer 1–10000).
+ */
+export const YUU_DEFAULT_MIN_SCORE = 2;
+
+export type YuuThresholds = { minRepeatMembers: number; minScore: number };
+
+function boundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  if (!raw?.trim()) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) return fallback;
+  return parsed;
+}
+
+/** Thresholds for this process. Invalid or missing env values use the demo defaults. */
+export function yuuThresholds(env: NodeJS.ProcessEnv = process.env): YuuThresholds {
+  return {
+    minRepeatMembers: boundedInt(env.YUU_MIN_REPEAT_MEMBERS, YUU_DEFAULT_MIN_REPEAT_MEMBERS, 1, 50),
+    minScore: boundedInt(env.YUU_MIN_SCORE, YUU_DEFAULT_MIN_SCORE, 1, 10_000),
+  };
+}
 
 /** At most this many skus are shortlisted or escalated on one day. The strongest is escalated. */
 export const YUU_SHORTLIST_LIMIT = 3;
@@ -102,6 +127,7 @@ function scoreBucket(bucket: SkuBucket): { repeatMembers: number; repeatPurchase
 export function classifyPurchases(
   rows: readonly LoyaltyPurchase[],
   blocked: (sku: string) => boolean = () => false,
+  thresholds: YuuThresholds = yuuThresholds(),
 ): LoyaltyDecision[] {
   const testOnly = new Set<string>();
   const seen = new Set<string>();
@@ -147,7 +173,7 @@ export function classifyPurchases(
     const bulk = bucket.members.size === 1 && (bucket.totalQty >= YUU_BULK_QTY || txnCount >= YUU_BULK_TXNS);
     if (bulk) {
       base.reason = YUU_REASON.singleMemberBulk;
-    } else if (repeatMembers < YUU_MIN_REPEAT_MEMBERS || score < YUU_MIN_SCORE) {
+    } else if (repeatMembers < thresholds.minRepeatMembers || score < thresholds.minScore) {
       base.reason = YUU_REASON.belowThreshold;
     } else if (blocked(bucket.sku)) {
       base.reason = YUU_REASON.alreadyListed;

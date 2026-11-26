@@ -15,11 +15,14 @@ export function PelitaProductCard({
   product,
   onAdd,
   onBuyYuu,
+  yuuSignInHref,
   yuuBusy = false,
 }: {
   product: ProductCardData;
   onAdd: (id: string) => void;
   onBuyYuu?: (id: string) => void;
+  /** Set when nobody is signed in. Buy with yuu then sends the shopper to sign in. */
+  yuuSignInHref?: string;
   yuuBusy?: boolean;
 }) {
   const [wished, setWished] = useState(false);
@@ -97,16 +100,25 @@ export function PelitaProductCard({
         <span aria-hidden="true" className="size-2.5 rounded-full bg-current" />
         {product.stock.label}
       </p>
-      <button
-        type="button"
-        disabled={yuuBusy}
-        onClick={() => onBuyYuu?.(product.id)}
-        title="Simulated yuu purchase"
-        className="mt-2 flex h-auto min-h-10 w-full min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 overflow-visible rounded-md bg-primary px-2 py-2 text-center leading-tight text-white disabled:opacity-60"
-      >
-        <span className="max-w-full text-base font-bold wrap-anywhere">Buy with yuu</span>
-        <span className="max-w-full text-xs font-semibold wrap-anywhere text-primary-50">(simulated)</span>
-      </button>
+      {yuuSignInHref ? (
+        <a
+          href={yuuSignInHref}
+          className="mt-2 flex h-auto min-h-10 w-full min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 overflow-visible rounded-md bg-primary px-2 py-2 text-center leading-tight text-white"
+        >
+          <span className="max-w-full text-base font-bold wrap-anywhere">Sign in to buy with yuu</span>
+        </a>
+      ) : (
+        <button
+          type="button"
+          disabled={yuuBusy}
+          onClick={() => onBuyYuu?.(product.id)}
+          title="Buy with yuu"
+          className="mt-2 flex h-auto min-h-10 w-full min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 gap-y-0.5 overflow-visible rounded-md bg-primary px-2 py-2 text-center leading-tight text-white disabled:opacity-60"
+        >
+          <span className="max-w-full text-base font-bold wrap-anywhere">Buy with yuu</span>
+          <span className="max-w-full text-xs font-semibold wrap-anywhere text-primary-50">(simulated)</span>
+        </button>
+      )}
     </article>
   );
 }

@@ -1,12 +1,13 @@
--- Simulated DFI "yuu" loyalty for the Pelita demo. Not a real yuu programme and not real
--- customer data. Idempotent; safe to re-run. Apply with the repo runner, which needs
+-- yuu loyalty signals for the Pelita demo. Not a real yuu programme.
+-- Purchases live on Auth0 app_metadata.yuu (see 0005). These tables keep the detector's
+-- signal queue. Idempotent; safe to re-run. Apply with the repo runner, which needs
 -- DATABASE_URL and does not print it:
 --   npm run db:migrate
 --
 -- Tier is not stored. The app derives it from points: Member under 500, Silver under 2000, Gold from 2000.
 -- window_day is the Asia/Singapore calendar day, so a sku has one signal per window length per day.
--- auth0_sub is the only direct account link, and only for a shopper who bought while signed in.
--- bi_events purchase rows stay free of that value: they store the member hash.
+-- yuu_members and yuu_transactions are leftover from the simulated personas. 0005 empties them.
+-- bi_events purchase rows store a hash of the Auth0 sub, never the sub itself.
 
 CREATE TABLE IF NOT EXISTS yuu_members (
   id           TEXT        PRIMARY KEY,
@@ -55,16 +56,3 @@ CREATE TABLE IF NOT EXISTS yuu_signals (
 
 CREATE INDEX IF NOT EXISTS yuu_signals_day_status_idx
   ON yuu_signals (window_day, status, score DESC);
-
--- Eight simulated Singapore shoppers. Clearly labelled. Points start at 0; Reset puts them back there.
-INSERT INTO yuu_members (id, display_name, points, is_test)
-VALUES
-  ('sim-aisha-rahman', 'Aisha Rahman (simulated)', 0, false),
-  ('sim-benjamin-tan', 'Benjamin Tan (simulated)', 0, false),
-  ('sim-cheryl-lim', 'Cheryl Lim (simulated)', 0, false),
-  ('sim-danial-wong', 'Danial Wong (simulated)', 0, false),
-  ('sim-eileen-koh', 'Eileen Koh (simulated)', 0, false),
-  ('sim-farhan-ahmad', 'Farhan bin Ahmad (simulated)', 0, false),
-  ('sim-grace-ng', 'Grace Ng (simulated)', 0, false),
-  ('sim-harpreet-singh', 'Harpreet Singh (simulated)', 0, false)
-ON CONFLICT (id) DO NOTHING;
