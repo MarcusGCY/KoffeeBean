@@ -1,13 +1,23 @@
 import { launchConfigSchema, type DraftPush, type LaunchConfig } from "./launch";
 
 /**
- * Marcus-approved Signal 54 package for PL-20055 (90 Capsules), kept in the repo.
- * Approved 7:38 PM SGT, 26 Nov 2026. Redis can override it.
- * The draft push is ops preview metadata only and is never sent.
+ * Marcus-approved Signal 73 package for PL-20055 (90 Capsules), kept in the repo.
+ * Automated DFI Operation Team handoff. Evergreen Nutrition / Pelita ERP row 4.
+ * Redis can override it. The draft push is ops preview metadata only and is never sent.
  */
 
-const GO_LIVE_AT = "2026-12-09T09:00:00+08:00";
-const PROMO_ENDS_AT = "2026-12-23T23:59:59+08:00";
+/** Ops-only handoff identity. Shoppers never see it. */
+export const PL20055_SIGNAL = {
+  id: 73,
+  label: "Signal 73",
+  handoff: "automated DFI Operation Team handoff",
+  supplier: "Evergreen Nutrition",
+  erp: "Pelita ERP",
+  erpRow: 4,
+} as const;
+
+const GO_LIVE_AT = "2026-12-04T09:00:00+08:00";
+const PROMO_ENDS_AT = "2026-12-18T23:59:59+08:00";
 
 const config = launchConfigSchema.parse({
   sku: "PL-20055",
@@ -54,7 +64,7 @@ const config = launchConfigSchema.parse({
 });
 
 const PRICE_NOTE =
-  "S$32.90 incl. 9% GST (S$30.18 ex GST). yuu Member Intro Price S$29.90 incl. 9% GST (S$27.43 ex GST), S$3.00 off the U.P. Limit 1 bottle per yuu member while trial stock lasts. Promo window: 9 Dec 2026, 9:00 AM SGT – 23 Dec 2026, 11:59 PM SGT.";
+  "S$32.90 incl. 9% GST (S$30.18 ex GST). yuu Member Intro Price S$29.90 incl. 9% GST (S$27.43 ex GST), S$3.00 off the U.P. Limit 1 bottle per yuu member while trial stock lasts. Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT, or while trial stock lasts.";
 
 const DRAFT_PUSH: DraftPush = {
   title: "New at Pelita: Magnesium Glycinate 400 mg (90 Capsules)",
@@ -82,7 +92,11 @@ export function packagePriceNote(value: LaunchConfig): string | null {
   return isApprovedPl20055(value) ? PRICE_NOTE : null;
 }
 
-export function scheduleExtras(value: LaunchConfig): { draftPush: DraftPush | null; priceNote: string | null } {
-  if (!isApprovedPl20055(value)) return { draftPush: null, priceNote: null };
-  return { draftPush: DRAFT_PUSH, priceNote: PRICE_NOTE };
+export function scheduleExtras(value: LaunchConfig): {
+  draftPush: DraftPush | null;
+  priceNote: string | null;
+  signal: typeof PL20055_SIGNAL | null;
+} {
+  if (!isApprovedPl20055(value)) return { draftPush: null, priceNote: null, signal: null };
+  return { draftPush: DRAFT_PUSH, priceNote: PRICE_NOTE, signal: PL20055_SIGNAL };
 }

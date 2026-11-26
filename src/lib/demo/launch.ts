@@ -273,6 +273,16 @@ export function launchWriteResult(config: LaunchConfig, now = Date.now()): Launc
 
 export type DraftPush = { title: string; body: string };
 
+/** Ops-only ERP handoff. Nothing here is shown to shoppers or sent. */
+export type LaunchSignalMeta = {
+  id: number;
+  label: string;
+  handoff: string;
+  supplier: string;
+  erp: string;
+  erpRow: number;
+};
+
 export type LaunchScheduleRow = {
   sku: string;
   title: string;
@@ -285,6 +295,7 @@ export type LaunchScheduleRow = {
   /** Ops-only copy. Nothing in the app sends it. */
   draftPush?: DraftPush | null;
   priceNote?: string | null;
+  signal?: LaunchSignalMeta | null;
 };
 
 export function toScheduleRow(config: LaunchConfig, now = Date.now()): LaunchScheduleRow {

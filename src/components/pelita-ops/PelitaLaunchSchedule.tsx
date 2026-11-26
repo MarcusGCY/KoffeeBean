@@ -52,6 +52,11 @@ export function PelitaLaunchSchedule({ rows }: { rows: LaunchScheduleRow[] }) {
               <p data-go-live-at className="mt-1 text-base font-semibold text-ink-2">
                 {row.goLiveLabel ? `Go-live ${row.goLiveLabel}` : "No go-live time"}
               </p>
+              {row.signal && (
+                <p data-signal={row.signal.id} className="mt-1 text-base font-semibold text-ink-2">
+                  {row.signal.label} · {row.signal.handoff} · {row.signal.supplier} / {row.signal.erp} row {row.signal.erpRow}
+                </p>
+              )}
               {row.priceNote && <p data-price-note className="mt-2 max-w-3xl text-base text-ink-2">{row.priceNote}</p>}
               {row.draftPush && (
                 <aside data-draft-push className="mt-3 rounded-md border border-dashed border-ink bg-[#f8fafc] px-4 py-3">
