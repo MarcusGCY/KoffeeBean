@@ -4,29 +4,54 @@ import { hashShopperId } from "@/lib/bi-hash";
 import { POST as purchaseRoute } from "@/app/api/demo/pelita/yuu/purchase/route";
 import { POST as resetRoute } from "@/app/api/demo/pelita/reset/route";
 import { POST as simulateRoute } from "@/app/api/demo/pelita/yuu/simulate/route";
+import { POST as detectRoute } from "@/app/api/demo/pelita/yuu/detect/route";
 import { GET as loyaltyRoute } from "@/app/api/bi/loyalty/route";
 import { POST as signalRoute } from "@/app/api/bi/loyalty/signal/route";
 import { getDemoState } from "@/lib/demo/state";
 import { loadScenario } from "@/lib/demo/scenario";
-import { burstLines, burstPurchases } from "@/lib/yuu/simulate";
-import { classifyPurchases, yuuSkuBlocked, YUU_REASON, type LoyaltyPurchase } from "@/lib/yuu/detector";
+import { capYuu, readYuuAccount, withPurchase, YUU_META_MAX_BYTES, YUU_PURCHASE_CAP, type YuuStoredPurchase } from "@/lib/yuu/account";
+import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_REASON, type LoyaltyPurchase } from "@/lib/yuu/detector";
 import { tierForPoints } from "@/lib/yuu/tier";
-import { YUU_PERSONAS } from "@/lib/yuu/personas";
 import { evalFenced } from "./helpers/fake-redis-eval";
 
 const getShopper = vi.hoisted(() => vi.fn(async () => null as { id: string; name?: string } | null));
 const neonMock = vi.hoisted(() => vi.fn());
+const auth0 = vi.hoisted(() => ({
+  users: new Map<string, Record<string, unknown>>(),
+  patches: [] as { userId: string; patch: Record<string, unknown> }[],
+  complete: true,
+}));
 
 vi.mock("@/lib/shopper", () => ({ getShopper }));
 vi.mock("@neondatabase/serverless", () => ({ neon: neonMock }));
+vi.mock("@/lib/auth0-mgmt", () => ({
+  mgmtConfigured: () =>
+    Boolean(process.env.AUTH0_DOMAIN && process.env.AUTH0_MGMT_CLIENT_ID && process.env.AUTH0_MGMT_CLIENT_SECRET),
+  getAppMetadata: async (userId: string) => structuredClone(auth0.users.get(userId) ?? {}),
+  patchAppMetadata: async (userId: string, patch: Record<string, unknown>) => {
+    auth0.patches.push({ userId, patch: structuredClone(patch) });
+    const current = { ...(auth0.users.get(userId) ?? {}) };
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) delete current[key];
+      else current[key] = structuredClone(value);
+    }
+    auth0.users.set(userId, current);
+    return structuredClone(current);
+  },
+  listUsersAppMetadata: async () => ({
+    users: [...auth0.users.entries()].map(([userId, appMetadata]) => ({
+      userId,
+      appMetadata: structuredClone(appMetadata),
+    })),
+    complete: auth0.complete,
+  }),
+}));
 
 const SECRET = "test-bi-api-secret-0123456789";
 const HASH = "test-bi-hash-secret-0123456789";
 const APPROVAL = "test-approval-secret";
 
 type Command = (string | number)[];
-type Member = { id: string; display_name: string; points: number; auth0_sub: string | null; is_test: boolean };
-type Txn = { member_id: string; sku: string; product_name: string; qty: number; amount_sgd: string; points_earned: number; channel: string };
 type Signal = {
   id: string;
   sku: string;
@@ -42,8 +67,6 @@ type Signal = {
   window_day: string;
 };
 
-let members: Map<string, Member>;
-let txns: Txn[];
 let signals: Map<string, Signal>;
 let events: unknown[];
 let queries: string[];
@@ -61,60 +84,9 @@ function signalKey(sku: string, window: number, day: string): string {
 function handle(text: string, params: unknown[] = []): unknown[] {
   const sql = flat(text);
   queries.push(sql);
-  if (sql.startsWith("insert into yuu_members") && sql.includes("jsonb_to_recordset")) {
-    const rows = JSON.parse(String(params[0])) as { id: string; display_name: string }[];
-    for (const row of rows) {
-      if (!members.has(row.id)) {
-        members.set(row.id, { id: row.id, display_name: row.display_name, points: 0, auth0_sub: null, is_test: false });
-      }
-    }
-    return [];
-  }
-  if (sql.startsWith("insert into yuu_members")) {
-    const [id, name, sub] = params as [string, string, string];
-    const existing = [...members.values()].find((member) => member.auth0_sub === sub);
-    if (existing) return [existing];
-    const member: Member = { id, display_name: name, points: 0, auth0_sub: sub, is_test: false };
-    members.set(id, member);
-    return [member];
-  }
-  if (sql.includes("from yuu_members where id =")) {
-    const member = members.get(String(params[0]));
-    return member ? [member] : [];
-  }
-  if (sql.includes("from yuu_members where auth0_sub")) {
-    const member = [...members.values()].find((row) => row.auth0_sub === params[0]);
-    return member ? [member] : [];
-  }
-  if (sql.startsWith("select points, is_test")) {
-    return [...members.values()].map((member) => ({ points: member.points, is_test: member.is_test }));
-  }
-  if (sql.startsWith("select id, display_name, points, is_test")) {
-    return [...members.values()].map((member) => ({
-      id: member.id,
-      display_name: member.display_name,
-      points: member.points,
-      is_test: member.is_test,
-    }));
-  }
   if (sql.startsWith("select to_char")) return [{ day: "2026-11-26" }];
-  if (sql.startsWith("select") && sql.includes("from yuu_transactions")) {
-    return txns.map((txn) => ({ ...txn, is_test: members.get(txn.member_id)?.is_test ?? false }));
-  }
-  if (sql.startsWith("insert into yuu_transactions")) {
-    txns.push(...(JSON.parse(String(params[0])) as Txn[]));
-    return [];
-  }
-  if (sql.startsWith("update yuu_members") && sql.includes("jsonb_to_recordset")) {
-    const rows = JSON.parse(String(params[0])) as { id: string; points: number }[];
-    for (const row of rows) {
-      const member = members.get(row.id);
-      if (member) member.points += row.points;
-    }
-    return [];
-  }
   if (sql.startsWith("insert into bi_events")) {
-    events.push(JSON.parse(String(params[0])));
+    events.push(params);
     return [];
   }
   if (sql.startsWith("insert into yuu_signals")) {
@@ -131,8 +103,8 @@ function handle(text: string, params: unknown[] = []): unknown[] {
         window_minutes: row.window_minutes,
         distinct_members: row.distinct_members,
         total_qty: row.total_qty,
-        status: prev?.source === "bi_bot" && prev.proposal_ref ? prev.status : row.status,
-        reason: prev?.source === "bi_bot" && prev.proposal_ref ? prev.reason : row.reason,
+        status: row.status,
+        reason: row.reason,
         source: prev?.source === "bi_bot" ? "bi_bot" : "detector",
         proposal_ref: prev?.proposal_ref ?? null,
         window_day: row.window_day,
@@ -165,29 +137,15 @@ function handle(text: string, params: unknown[] = []): unknown[] {
     signal.proposal_ref = proposalRef;
     return [signal];
   }
-  if (sql === "delete from yuu_transactions") {
-    txns = [];
-    return [];
-  }
-  if (sql === "delete from yuu_signals") {
-    signals.clear();
-    return [];
-  }
-  if (sql.startsWith("update yuu_members set points = 0")) {
-    const ids = new Set(params[0] as string[]);
-    for (const member of members.values()) if (ids.has(member.id)) member.points = 0;
-    return [];
-  }
-  if (sql.startsWith("delete from yuu_members")) {
-    const ids = new Set(params[0] as string[]);
-    for (const id of [...members.keys()]) if (!ids.has(id)) members.delete(id);
+  if (sql === "delete from yuu_transactions" || sql === "delete from yuu_signals" || sql === "delete from yuu_members") {
+    if (sql.endsWith("yuu_signals")) signals.clear();
     return [];
   }
   if (sql.startsWith("delete from bi_events")) {
     events = [];
     return [];
   }
-  throw new Error(`unhandled sql: ${sql.slice(0, 160)}`);
+  throw new Error(`unhandled sql: ${sql.slice(0, 180)}`);
 }
 
 function installSql(): void {
@@ -255,6 +213,12 @@ function openDemo(): void {
   process.env.APPROVAL_SECRET = APPROVAL;
 }
 
+function openAuth0(): void {
+  process.env.AUTH0_DOMAIN = "tenant.example";
+  process.env.AUTH0_MGMT_CLIENT_ID = "mgmt-client";
+  process.env.AUTH0_MGMT_CLIENT_SECRET = "mgmt-secret";
+}
+
 function demoPost(url: string, body?: unknown): Request {
   return new Request(url, {
     method: "POST",
@@ -287,18 +251,29 @@ function repeat(sku: string, memberIds: string[], times: number, extra: Partial<
   return rows;
 }
 
+function purchaseOf(at: string, sku = "PL-20055"): YuuStoredPurchase {
+  return { sku, name: "Magnesium Glycinate 400 mg", qty: 1, cents: 3290, points: 32, at };
+}
+
+async function buyAs(userId: string, sku: string, qty = 1): Promise<Response> {
+  getShopper.mockResolvedValue({ id: userId, name: "Ada Lovelace" });
+  return purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku, qty }));
+}
+
 beforeEach(() => {
-  members = new Map();
-  txns = [];
   signals = new Map();
   events = [];
   queries = [];
   store = new Map();
+  auth0.users = new Map();
+  auth0.patches = [];
+  auth0.complete = true;
   getShopper.mockReset();
   getShopper.mockResolvedValue(null);
   process.env.BI_HASH_SECRET = HASH;
   process.env.BI_API_SECRET = SECRET;
   openDemo();
+  openAuth0();
   installSql();
 });
 
@@ -311,6 +286,12 @@ afterEach(() => {
   delete process.env.APPROVAL_SECRET;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  delete process.env.AUTH0_DOMAIN;
+  delete process.env.AUTH0_MGMT_CLIENT_ID;
+  delete process.env.AUTH0_MGMT_CLIENT_SECRET;
+  delete process.env.YUU_MIN_REPEAT_MEMBERS;
+  delete process.env.YUU_MIN_SCORE;
+  delete process.env.YUU_WINDOW_MINUTES;
 });
 
 describe("yuu tier and detector", () => {
@@ -322,15 +303,26 @@ describe("yuu tier and detector", () => {
     expect(tierForPoints(2000)).toBe("Gold");
   });
 
-  it("escalates the strong repeat trend and drops the two weak patterns for their own reasons", () => {
-    const rows = burstPurchases().map((row) => buy({ sku: row.sku, memberId: row.memberId, qty: row.qty, amountCents: row.amountCents, productName: row.productName }));
-    const decisions = classifyPurchases(rows, (sku) => yuuSkuBlocked(sku, false));
+  it("escalates two repeat shoppers and drops a single bulk buy", () => {
+    const sku = loadScenario().proposal.productId;
+    const decisions = classifyPurchases(
+      [...repeat(sku, ["a", "b"], 2), buy({ sku: "PL-80014", memberId: "c", qty: 12 })],
+      (id) => yuuSkuBlocked(id, false),
+    );
     const bySku = new Map(decisions.map((decision) => [decision.sku, decision]));
-    const strong = loadScenario().proposal.productId;
-    expect(bySku.get(strong)).toMatchObject({ status: "escalated", score: 36, distinctMembers: 6, repeatMembers: 6 });
+    expect(bySku.get(sku)).toMatchObject({ status: "escalated", score: 4, distinctMembers: 2, repeatMembers: 2 });
     expect(bySku.get("PL-80014")).toMatchObject({ status: "dropped", reason: YUU_REASON.singleMemberBulk, distinctMembers: 1 });
-    expect(bySku.get("PL-80027")).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold, distinctMembers: 2, score: 4 });
     expect(decisions.filter((decision) => decision.status === "escalated")).toHaveLength(1);
+    expect(yuuThresholds()).toEqual({ minRepeatMembers: 2, minScore: 2 });
+  });
+
+  it("raises the bar when the threshold env is set, and ignores an invalid value", () => {
+    process.env.YUU_MIN_REPEAT_MEMBERS = "3";
+    process.env.YUU_MIN_SCORE = "6";
+    const held = classifyPurchases(repeat("PL-20055", ["a", "b"], 2));
+    expect(held[0]).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold, score: 4 });
+    process.env.YUU_MIN_REPEAT_MEMBERS = "nope";
+    expect(yuuThresholds().minRepeatMembers).toBe(2);
   });
 
   it("drops test-member trends and a strong trend on a sku that is already listed", () => {
@@ -346,39 +338,57 @@ describe("yuu tier and detector", () => {
     expect(yuuSkuBlocked(sku, true)).toBe(true);
     expect(yuuSkuBlocked("PL-20013", false)).toBe(true);
   });
+
+  it("caps stored purchases and keeps the running points", () => {
+    let account = readYuuAccount(null);
+    const total = YUU_PURCHASE_CAP + 5;
+    for (let n = 0; n < total; n += 1) {
+      account = withPurchase(account, purchaseOf(new Date(Date.UTC(2026, 0, 1, 0, n)).toISOString()));
+    }
+    expect(account?.purchases.length).toBeLessThanOrEqual(YUU_PURCHASE_CAP);
+    expect(account?.purchases.length).toBeGreaterThan(0);
+    expect(new TextEncoder().encode(JSON.stringify(account)).length).toBeLessThanOrEqual(YUU_META_MAX_BYTES);
+    expect(account?.points).toBe(32 * total);
+    expect(capYuu(account!).purchases[0]?.at).not.toBe(purchaseOf(new Date(Date.UTC(2026, 0, 1)).toISOString()).at);
+  });
 });
 
-describe("migration 0004", () => {
-  const sql = readFileSync("db/migrations/0004_yuu_loyalty.sql", "utf8");
-
-  it("is idempotent and seeds the simulated personas", () => {
-    expect(sql).toContain("CREATE TABLE IF NOT EXISTS yuu_members");
-    expect(sql).toContain("CREATE TABLE IF NOT EXISTS yuu_transactions");
-    expect(sql).toContain("CREATE TABLE IF NOT EXISTS yuu_signals");
-    expect(sql).toContain("ON CONFLICT (id) DO NOTHING");
-    expect(sql).toContain("UNIQUE (sku, window_minutes, window_day)");
-    expect(sql).toContain("CHECK (channel IN ('web', 'sim'))");
-    expect(sql).toContain("CHECK (status IN ('dropped', 'shortlisted', 'escalated'))");
-    expect(YUU_PERSONAS).toHaveLength(8);
-    for (const persona of YUU_PERSONAS) {
-      expect(sql).toContain(persona.id);
-      expect(sql).toContain(persona.displayName);
-      expect(persona.displayName).toContain("(simulated)");
-    }
-    const lines = burstLines();
-    expect(lines.filter((line) => line.role === "strong").map((line) => line.memberId)).toHaveLength(6);
-    expect(new Set(lines.filter((line) => line.role === "strong").map((line) => line.sku)).size).toBe(1);
+describe("migration", () => {
+  it("keeps the signal table and removes the simulated member ledger", () => {
+    const original = readFileSync("db/migrations/0004_yuu_loyalty.sql", "utf8");
+    const follow = readFileSync("db/migrations/0005_yuu_auth0.sql", "utf8");
+    expect(original).toContain("CREATE TABLE IF NOT EXISTS yuu_members");
+    expect(original).toContain("CREATE TABLE IF NOT EXISTS yuu_transactions");
+    expect(original).toContain("CREATE TABLE IF NOT EXISTS yuu_signals");
+    expect(original).toContain("UNIQUE (sku, window_minutes, window_day)");
+    expect(original).toContain("CHECK (channel IN ('web', 'sim'))");
+    expect(original).toContain("CHECK (status IN ('dropped', 'shortlisted', 'escalated'))");
+    expect(original).not.toContain("Aisha Rahman");
+    expect(follow).toContain("DELETE FROM yuu_transactions");
+    expect(follow).toContain("DELETE FROM yuu_members");
+    expect(follow).not.toContain("DELETE FROM yuu_signals");
   });
 });
 
 describe("purchase API", () => {
-  it("records a persona purchase, points, a hashed bi event, and a detector row", async () => {
-    const res = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", qty: 1, memberId: "sim-aisha-rahman" }));
+  it("requires a signed-in shopper and records the purchase only on app_metadata.yuu", async () => {
+    const signedOut = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", qty: 1 }));
+    expect(signedOut.status).toBe(401);
+    expect(await signedOut.json()).toEqual({ error: "sign_in_required" });
+
+    const persona = await purchaseRoute(
+      demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", qty: 1, memberId: "sim-aisha-rahman" }),
+    );
+    expect(persona.status).toBe(400);
+
+    auth0.users.set("auth0|ada", { orders: [{ id: "order-1" }], cart: { items: [{ productId: "mug" }] } });
+    const res = await buyAs("auth0|ada", "PL-80014", 1);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({
       label: "yuu (simulated)",
-      memberId: "sim-aisha-rahman",
+      memberId: "self",
+      displayName: "You",
       sku: "PL-80014",
       qty: 1,
       amountSgd: "11.90",
@@ -387,47 +397,55 @@ describe("purchase API", () => {
       tier: "Member",
       channel: "web",
     });
-    expect(events).toHaveLength(1);
-    const recorded = JSON.stringify(events);
-    expect(recorded).toContain(hashShopperId("yuu:sim-aisha-rahman"));
-    expect(recorded).toContain('"channel":"web"');
-    expect(recorded).not.toContain("Aisha");
+    expect(JSON.stringify(body)).not.toContain("auth0|ada");
+    expect(JSON.stringify(body)).not.toContain("Ada");
+    const stored = auth0.users.get("auth0|ada");
+    expect(stored?.orders).toEqual([{ id: "order-1" }]);
+    expect(stored?.cart).toEqual({ items: [{ productId: "mug" }] });
+    expect(auth0.patches).toHaveLength(1);
+    expect(Object.keys(auth0.patches[0]?.patch ?? {})).toEqual(["yuu"]);
+    const yuu = stored?.yuu as { points: number; purchases: { sku: string }[] };
+    expect(yuu.points).toBe(11);
+    expect(yuu.purchases).toHaveLength(1);
+    expect(JSON.stringify(yuu)).not.toContain("auth0|ada");
+    const recorded = events[0] as unknown[];
+    expect(recorded[0]).toBe(hashShopperId("auth0|ada"));
+    expect(JSON.stringify(recorded)).not.toContain("auth0|ada");
+    expect(JSON.parse(String(recorded[1]))).toEqual({ sku: "PL-80014", qty: 1, amountCents: 1190, channel: "web" });
     const signal = [...signals.values()].find((row) => row.sku === "PL-80014");
     expect(signal).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold });
-    expect(queries.some((query) => query.startsWith("insert into yuu_transactions"))).toBe(true);
-    expect(queries.some((query) => query.startsWith("update yuu_members"))).toBe(true);
+    expect(queries.some((query) => query.startsWith("insert into yuu_transactions"))).toBe(false);
+    expect(queries.some((query) => query.startsWith("insert into yuu_members"))).toBe(false);
   });
 
-  it("maps a signed-in shopper by subject and does not put that subject on the bi event", async () => {
-    getShopper.mockResolvedValue({ id: "auth0|ada", name: "Ada Lovelace" });
-    const res = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", qty: 1, memberId: "sim-aisha-rahman" }));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.memberId).toMatch(/^auth-[0-9a-f]{16}$/);
-    expect(body.memberId).not.toBe("sim-aisha-rahman");
-    expect(body.displayName).toBe("Ada Lovelace (simulated)");
-    const linked = [...members.values()].find((member) => member.auth0_sub === "auth0|ada");
-    expect(linked?.id).toBe(body.memberId);
-    const recorded = JSON.stringify(events);
-    expect(recorded).toContain(hashShopperId("auth0|ada"));
-    expect(recorded).not.toContain("auth0|ada");
-  });
-
-  it("refuses a cross-site post, a closed gate, and a missing member", async () => {
+  it("refuses a cross-site post and a closed gate", async () => {
     const cross = await purchaseRoute(new Request("https://x.test/api/demo/pelita/yuu/purchase", { method: "POST", body: "{}" }));
     expect(cross.status).toBe(403);
     delete process.env.KB_DEMO_TRACK;
-    const closed = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", memberId: "sim-aisha-rahman" }));
+    const closed = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014" }));
     expect(closed.status).toBe(404);
-    openDemo();
-    const missing = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", { sku: "PL-80014", qty: 1 }));
-    expect(missing.status).toBe(400);
-    expect(await missing.json()).toEqual({ error: "unknown_member" });
+  });
+
+  it("refuses the write when the shopper's metadata has no room for yuu", async () => {
+    auth0.users.set("auth0|ada", { orders: "x".repeat(20_000) });
+    const res = await buyAs("auth0|ada", "PL-80014", 1);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "metadata_full" });
+    expect(auth0.patches).toHaveLength(0);
+    expect(auth0.users.get("auth0|ada")?.orders).toBe("x".repeat(20_000));
+  });
+
+  it("retires the simulate burst", async () => {
+    const res = await simulateRoute(demoPost("https://x.test/api/demo/pelita/yuu/simulate"));
+    expect(res.status).toBe(410);
+    expect(await res.json()).toMatchObject({ error: "retired" });
+    const cross = await simulateRoute(new Request("https://x.test/api/demo/pelita/yuu/simulate", { method: "POST" }));
+    expect(cross.status).toBe(403);
   });
 });
 
 describe("BI loyalty API", () => {
-  it("is 401 without the bearer secret and 200 with it", async () => {
+  it("is 401 without the bearer secret and reads members from Auth0", async () => {
     const open = await loyaltyRoute(new Request("https://x.test/api/bi/loyalty"));
     expect(open.status).toBe(401);
     const wrong = await loyaltyRoute(new Request("https://x.test/api/bi/loyalty", { headers: { authorization: "Bearer wrong" } }));
@@ -436,16 +454,41 @@ describe("BI loyalty API", () => {
     const unconfigured = await loyaltyRoute(new Request("https://x.test/api/bi/loyalty"));
     expect(unconfigured.status).toBe(503);
     process.env.BI_API_SECRET = SECRET;
+    delete process.env.AUTH0_MGMT_CLIENT_ID;
+    const noAuth0 = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty"));
+    expect(noAuth0.status).toBe(503);
+    openAuth0();
     const ok = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty"));
     expect(ok.status).toBe(200);
     expect(await ok.json()).toMatchObject({
       label: "yuu (simulated)",
       windowMinutes: 60,
-      members: { count: 0, tierMix: { Member: 0, Silver: 0, Gold: 0 } },
+      minRepeatMembers: 2,
+      minScore: 2,
+      scanComplete: true,
+      members: { count: 0, tierMix: { Member: 0, Silver: 0, Gold: 0 }, excludedTest: 0 },
       transactions: { count: 0 },
       skus: [],
       signals: [],
     });
+  });
+
+  it("counts in-window purchases and leaves test shoppers out of the score", async () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    auth0.users.set("auth0|old", {
+      yuu: { points: 32, purchases: [purchaseOf(old)] },
+    });
+    auth0.users.set("auth0|test", {
+      is_test: true,
+      yuu: { points: 64, purchases: [purchaseOf(new Date().toISOString()), purchaseOf(new Date().toISOString())] },
+    });
+    const report = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty"));
+    expect(report.status).toBe(200);
+    const body = await report.json();
+    expect(body.members).toMatchObject({ count: 1, excludedTest: 1 });
+    expect(body.transactions.count).toBe(0);
+    expect(body.skus).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain("auth0|");
   });
 
   it("refuses a signal without the bearer secret", async () => {
@@ -454,33 +497,39 @@ describe("BI loyalty API", () => {
   });
 });
 
-describe("burst, signal and reset", () => {
+describe("detection, signal and reset", () => {
   beforeEach(() => {
     installRedis();
   });
 
-  it("plants a strong escalated signal and files it as the approval-1 proposal once", async () => {
-    const simulated = await simulateRoute(demoPost("https://x.test/api/demo/pelita/yuu/simulate"));
-    expect(simulated.status).toBe(200);
-    const panel = await simulated.json();
+  it("escalates two real shoppers and files the approval-1 proposal once", async () => {
     const strongSku = loadScenario().proposal.productId;
+    expect((await buyAs("auth0|ada", strongSku)).status).toBe(200);
+    expect((await buyAs("auth0|ada", strongSku)).status).toBe(200);
+    expect((await buyAs("auth0|ben", strongSku)).status).toBe(200);
+    expect((await buyAs("auth0|ben", strongSku)).status).toBe(200);
+    expect((await buyAs("auth0|cara", "PL-80014", 12)).status).toBe(200);
+
+    const detected = await detectRoute(demoPost("https://x.test/api/demo/pelita/yuu/detect"));
+    expect(detected.status).toBe(200);
+    const panel = await detected.json();
     const strong = panel.signals.find((signal: { sku: string }) => signal.sku === strongSku);
     const bulk = panel.signals.find((signal: { sku: string }) => signal.sku === "PL-80014");
-    const blip = panel.signals.find((signal: { sku: string }) => signal.sku === "PL-80027");
-    expect(strong).toMatchObject({ status: "escalated", source: "detector", score: 36 });
+    expect(strong).toMatchObject({ status: "escalated", source: "detector", score: 4, distinctMembers: 2 });
     expect(bulk).toMatchObject({ status: "dropped", reason: YUU_REASON.singleMemberBulk });
-    expect(blip).toMatchObject({ status: "dropped", reason: YUU_REASON.belowThreshold });
-    expect(panel.members).toHaveLength(8);
-    expect(panel.members.every((member: { displayName: string }) => member.displayName.includes("(simulated)"))).toBe(true);
+    expect(panel.members).toHaveLength(3);
+    expect(panel.members.every((member: { displayName: string; id: string }) => member.displayName.startsWith("Member ") && !member.id.includes("auth0"))).toBe(true);
+    expect(JSON.stringify(panel)).not.toContain("Ada");
 
     const report = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty?window_minutes=60"));
     expect(report.status).toBe(200);
     const loyalty = await report.json();
-    expect(loyalty.transactions.count).toBe(17);
-    expect(loyalty.members.count).toBe(8);
-    expect(loyalty.skus.find((row: { sku: string }) => row.sku === strongSku).score).toBe(36);
+    expect(loyalty.transactions.count).toBe(5);
+    expect(loyalty.members.count).toBe(3);
+    expect(loyalty.skus.find((row: { sku: string }) => row.sku === strongSku).score).toBe(4);
+    expect(JSON.stringify(loyalty)).not.toContain("auth0|");
 
-    const rationale = "Six simulated members are repeat-buying magnesium glycinate inside the hour.";
+    const rationale = "Two signed-in shoppers are repeat-buying magnesium glycinate inside the hour.";
     const filed = await signalRoute(bearer("https://x.test/api/bi/loyalty/signal", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -520,22 +569,25 @@ describe("burst, signal and reset", () => {
     expect(await weak.json()).toEqual({ error: "signal_not_actionable", reason: YUU_REASON.singleMemberBulk });
   });
 
-  it("clears yuu purchases and signals, zeros persona points, and leaves the demo at stage 0", async () => {
-    members.set("sim-aisha-rahman", { id: "sim-aisha-rahman", display_name: "Aisha Rahman (simulated)", points: 64, auth0_sub: null, is_test: false });
-    members.set("auth-aabbccddeeff0011", { id: "auth-aabbccddeeff0011", display_name: "Ada (simulated)", points: 10, auth0_sub: "auth0|ada", is_test: false });
-    txns.push({ member_id: "sim-aisha-rahman", sku: "PL-20055", product_name: "Magnesium", qty: 1, amount_sgd: "32.90", points_earned: 32, channel: "sim" });
+  it("clears only the yuu key and the neon signal rows", async () => {
+    auth0.users.set("auth0|ada", {
+      orders: [{ id: "order-1" }],
+      cart: { items: [] },
+      yuu: { points: 11, purchases: [purchaseOf(new Date().toISOString(), "PL-80014")] },
+    });
+    auth0.users.set("auth0|ben", { orders: [{ id: "order-2" }] });
     signals.set("PL-20055|60|2026-11-26", {
       id: "1",
       sku: "PL-20055",
       product_name: "Magnesium",
-      score: 36,
+      score: 4,
       window_minutes: 60,
-      distinct_members: 6,
-      total_qty: 12,
+      distinct_members: 2,
+      total_qty: 4,
       status: "escalated",
       reason: "strongest repeat trend",
-      source: "detector",
-      proposal_ref: null,
+      source: "bi_bot",
+      proposal_ref: "gap",
       window_day: "2026-11-26",
     });
     events.push({ shopper_hash: "abc" });
@@ -545,12 +597,17 @@ describe("burst, signal and reset", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ stage: 0, approvals: {}, audit: [], listed: false });
     expect(await getDemoState()).toEqual({ stage: 0, approvals: {}, audit: [], listed: false });
-    expect(txns).toEqual([]);
     expect(signals.size).toBe(0);
     expect(events).toEqual([]);
-    expect(members.get("sim-aisha-rahman")?.points).toBe(0);
-    expect(members.has("auth-aabbccddeeff0011")).toBe(false);
-    expect(members.has("sim-aisha-rahman")).toBe(true);
+    const ada = auth0.users.get("auth0|ada");
+    expect(ada?.yuu).toBeUndefined();
+    expect(ada?.orders).toEqual([{ id: "order-1" }]);
+    expect(ada?.cart).toEqual({ items: [] });
+    expect(auth0.users.get("auth0|ben")?.orders).toEqual([{ id: "order-2" }]);
+    expect(auth0.patches).toEqual([{ userId: "auth0|ada", patch: { yuu: null } }]);
+    expect(queries).toContain("delete from yuu_transactions");
+    expect(queries).toContain("delete from yuu_signals");
+    expect(queries).toContain("delete from yuu_members");
   });
 });
 

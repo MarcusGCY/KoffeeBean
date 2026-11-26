@@ -63,9 +63,9 @@ export const biPayloadSchemas = {
     totalCents: cents,
   }),
   /**
-   * One simulated yuu purchase. `shopper_hash` is the member hash (the Auth0 `sub`
-   * when the member is linked, otherwise a stable yuu member key). Amount is cents
-   * so it stays an integer, like every other BI money field. No name and no raw sub.
+   * One yuu purchase by a signed-in shopper. `shopper_hash` is the Auth0 `sub` hash.
+   * Amount is cents so it stays an integer, like every other BI money field.
+   * No name and no raw sub.
    */
   purchase: z.strictObject({
     sku: id,

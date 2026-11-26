@@ -1,16 +1,14 @@
 import { guardDemoWrite } from "@/lib/demo/guard";
-import { yuuFailure, yuuJson } from "@/lib/yuu/http";
-import { simulateYuuBurst } from "@/lib/yuu/simulate";
+import { yuuJson } from "@/lib/yuu/http";
 
-export const maxDuration = 60;
+export const maxDuration = 30;
 
+/** Retired. Purchases come from a signed-in shopper, not the simulated personas. */
 export async function POST(req: Request) {
   const denied = guardDemoWrite(req);
   if (denied) return denied;
-  try {
-    const panel = await simulateYuuBurst();
-    return yuuJson({ isDemo: true, ...panel });
-  } catch (error) {
-    return yuuFailure(error, "[yuu] simulate failed");
-  }
+  return yuuJson(
+    { error: "retired", message: "Simulated yuu shoppers are retired. Sign in and use Buy with yuu." },
+    410,
+  );
 }

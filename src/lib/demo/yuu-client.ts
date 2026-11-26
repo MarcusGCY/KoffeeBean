@@ -1,6 +1,6 @@
 import type { YuuPanel, YuuPurchaseResult } from "@/lib/yuu/types";
 
-/** Same-origin calls for yuu (simulated). A cross-site request is refused. */
+/** Same-origin calls for yuu. A cross-site request is refused. */
 
 async function post(path: string, body?: unknown): Promise<Response> {
   return fetch(path, {
@@ -10,20 +10,21 @@ async function post(path: string, body?: unknown): Promise<Response> {
   });
 }
 
-export async function buyWithYuuRequest(body: { sku: string; qty?: number; memberId?: string }): Promise<YuuPurchaseResult> {
+export async function buyWithYuuRequest(body: { sku: string; qty?: number }): Promise<YuuPurchaseResult> {
   const res = await post("/api/demo/pelita/yuu/purchase", body);
   const data = (await res.json().catch(() => null)) as YuuPurchaseResult | { error?: string } | null;
   if (!res.ok || !data || !("pointsEarned" in data)) {
-    throw new Error(res.status === 503 ? "yuu (simulated) is not connected." : "Could not record the yuu purchase.");
+    if (res.status === 401) throw new Error("Sign in to buy with yuu.");
+    throw new Error(res.status === 503 ? "yuu is not connected." : "Could not record the yuu purchase.");
   }
   return data;
 }
 
-export async function simulateYuuBurstRequest(): Promise<YuuPanel> {
-  const res = await post("/api/demo/pelita/yuu/simulate");
+export async function refreshYuuSignalsRequest(): Promise<YuuPanel> {
+  const res = await post("/api/demo/pelita/yuu/detect");
   const data = (await res.json().catch(() => null)) as (YuuPanel & { isDemo?: boolean }) | null;
   if (!res.ok || !data || !Array.isArray(data.signals) || !Array.isArray(data.members)) {
-    throw new Error(res.status === 503 ? "yuu (simulated) is not connected." : "Could not simulate the yuu burst.");
+    throw new Error(res.status === 503 ? "yuu is not connected." : "Could not refresh yuu signals.");
   }
   return data;
 }
