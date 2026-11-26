@@ -6,8 +6,8 @@ import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
-import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, safeAvatarUrl } from "@/lib/return-to";
-import type { StorefrontYuu, YuuPurchaseResult, YuuTierName } from "@/lib/yuu/types";
+import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, PELITA_YUU_PATH, safeAvatarUrl } from "@/lib/return-to";
+import { YUU_PARTNER_HEADING, type StorefrontYuu, type YuuPurchaseResult, type YuuTierName } from "@/lib/yuu/types";
 import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
 import { PelitaProductCard } from "./PelitaProductCard";
 
@@ -190,6 +190,9 @@ export function PelitaStorefront({
             className="h-full flex-1 bg-transparent font-semibold text-ink outline-none placeholder:font-medium placeholder:text-ink-3"
           />
         </form>
+        <a href={PELITA_YUU_PATH} className="whitespace-nowrap text-base font-bold text-white underline underline-offset-4">
+          {YUU_PARTNER_HEADING}
+        </a>
         {activeBalance && (
           <span data-yuu-tier className="whitespace-nowrap rounded-full bg-surface px-3 py-1 text-base font-bold text-primary-dark">
             {activeBalance.tier} · {activeBalance.points} pts

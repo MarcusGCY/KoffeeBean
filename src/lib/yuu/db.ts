@@ -19,6 +19,7 @@ import { pointsForCents, sgdFromCents, tierForPoints } from "./tier";
 import {
   YUU_LABEL,
   type YuuChannel,
+  type YuuPurchaseChannel,
   type YuuLoyaltyReport,
   type YuuMemberView,
   type YuuPanel,
@@ -337,12 +338,13 @@ export async function readLoyaltyReport(windowMinutes = yuuWindowMinutes(), now 
 }
 
 const INSERT_EVENT = `INSERT INTO bi_events (event_type, source, shopper_hash, session_id, payload, is_test)
-VALUES ('purchase', 'demo', $1, 'yuu-web', $2::jsonb, $3)`;
+VALUES ('purchase', 'demo', $1, $2, $3::jsonb, $4)`;
 
 export async function purchaseYuu(input: {
   sku: string;
   qty: number;
   shopperId: string;
+  channel?: YuuPurchaseChannel;
   detect?: boolean;
   now?: Date;
 }): Promise<YuuPurchaseResult> {
@@ -352,6 +354,7 @@ export async function purchaseYuu(input: {
   if (!offer) throw new YuuQueryError("unknown_sku");
   if (!Number.isInteger(input.qty) || input.qty < 1 || input.qty > 20) throw new YuuQueryError("invalid_qty");
   const now = input.now ?? new Date();
+  const channel: YuuPurchaseChannel = input.channel === "partner" ? "partner" : "web";
   const amountCents = offer.priceCents * input.qty;
   const pointsEarned = pointsForCents(amountCents);
   const purchase = storedPurchase({
@@ -361,6 +364,7 @@ export async function purchaseYuu(input: {
     cents: amountCents,
     points: pointsEarned,
     at: now.toISOString(),
+    channel,
   });
   let recorded: { account: { points: number }; test: boolean };
   try {
@@ -374,7 +378,8 @@ export async function purchaseYuu(input: {
     try {
       await sql.query(INSERT_EVENT, [
         hashShopperId(input.shopperId),
-        JSON.stringify({ sku: purchase.sku, qty: purchase.qty, amountCents: purchase.cents, channel: "web" }),
+        channel === "partner" ? "yuu-partner" : "yuu-web",
+        JSON.stringify({ sku: purchase.sku, qty: purchase.qty, amountCents: purchase.cents, channel }),
         recorded.test,
       ]);
     } catch (error) {
@@ -401,7 +406,7 @@ export async function purchaseYuu(input: {
     pointsEarned,
     points,
     tier: tierForPoints(points),
-    channel: "web" satisfies YuuChannel,
+    channel: channel satisfies YuuChannel,
   };
 }
 
@@ -436,7 +441,7 @@ export async function resetYuuLoyalty(): Promise<"cleared" | "skipped" | "absent
       txn.query(RESET_TXNS),
       txn.query(RESET_SIGNALS),
       txn.query(RESET_MEMBERS),
-      txn.query(RESET_EVENTS, [["yuu-web", "yuu-sim"]]),
+      txn.query(RESET_EVENTS, [["yuu-web", "yuu-sim", "yuu-partner"]]),
     ]);
     return "cleared";
   } catch (error) {

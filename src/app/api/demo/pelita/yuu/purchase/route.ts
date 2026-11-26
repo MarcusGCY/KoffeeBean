@@ -9,6 +9,7 @@ export const maxDuration = 30;
 const bodySchema = z.strictObject({
   sku: z.string().regex(/^PL-\d{5}$/),
   qty: z.number().int().min(1).max(20).optional(),
+  channel: z.enum(["web", "partner"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -32,6 +33,7 @@ export async function POST(req: Request) {
     const result = await purchaseYuu({
       sku: parsed.sku,
       qty: parsed.qty ?? 1,
+      channel: parsed.channel,
       shopperId,
     });
     return yuuJson({ isDemo: true, ...result });
