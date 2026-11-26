@@ -1,16 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import type { PartnerOffer } from "@/lib/demo/yuu-partners";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { formatSgd } from "@/lib/demo/storefront";
-import { PELITA_YUU_SIGN_OUT_HREF } from "@/lib/return-to";
-import { YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL, type YuuPurchaseResult, type YuuTierName } from "@/lib/yuu/types";
+import { PELITA_SIGN_OUT_HREF } from "@/lib/return-to";
+import { YUU_BUY_LABEL, YUU_PARTNER_HEADING, YUU_SIGN_IN_LABEL, type YuuTierName } from "@/lib/yuu/types";
 import type { PelitaAccount } from "./PelitaStorefront";
+import { YuuBuyFeedback, type YuuBuyNote } from "./YuuBuyFeedback";
 
 type Balance = { points: number; tier: YuuTierName };
-type Notice = { kind: "ok"; result: YuuPurchaseResult } | { kind: "error"; text: string };
+type Note = { sku: string } & YuuBuyNote;
 
 /**
  * Coalition yuu shelf. These buys are recorded on the signed-in shopper, including
@@ -30,24 +31,28 @@ export function PelitaPartnerPurchases({
   initialBalance?: Balance | null;
 }) {
   const [balance, setBalance] = useState<Balance | null>(account ? initialBalance : null);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const [busySku, setBusySku] = useState<string | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const lock = useRef(false);
 
   async function buy(sku: string) {
-    if (busy) return;
-    if (!account) {
-      setNotice({ kind: "error", text: YUU_SIGN_IN_LABEL });
-      return;
-    }
-    setBusy(true);
+    if (lock.current) return;
+    if (!account) return;
+    lock.current = true;
+    setBusySku(sku);
     try {
       const result = await buyWithYuuRequest({ sku, qty: 1, channel: "partner" });
       setBalance({ points: result.points, tier: result.tier });
-      setNotice({ kind: "ok", result });
+      setNote({ sku, kind: "ok", points: result.pointsEarned });
     } catch (error) {
-      setNotice({ kind: "error", text: error instanceof Error ? error.message : "Could not record the yuu purchase." });
+      setNote({
+        sku,
+        kind: "error",
+        text: error instanceof Error ? error.message : "Could not record the yuu purchase.",
+      });
     } finally {
-      setBusy(false);
+      lock.current = false;
+      setBusySku(null);
     }
   }
 
@@ -65,7 +70,7 @@ export function PelitaPartnerPurchases({
         )}
         <div className="ml-auto">
           {account ? (
-            <a href={PELITA_YUU_SIGN_OUT_HREF} className="font-bold underline underline-offset-4">
+            <a href={PELITA_SIGN_OUT_HREF} className="font-bold underline underline-offset-4">
               Sign out
             </a>
           ) : (
@@ -102,7 +107,8 @@ export function PelitaPartnerPurchases({
                 <button
                   type="button"
                   data-yuu-buy={offer.id}
-                  disabled={busy}
+                  disabled={busySku !== null}
+                  aria-busy={busySku === offer.id || undefined}
                   onClick={() => void buy(offer.id)}
                   className="mt-2 flex h-auto min-h-10 w-full items-center justify-center rounded-md bg-primary px-2 py-2 text-base font-bold text-white disabled:opacity-60"
                 >
@@ -117,16 +123,10 @@ export function PelitaPartnerPurchases({
                   {YUU_SIGN_IN_LABEL}
                 </a>
               )}
+              <YuuBuyFeedback note={note?.sku === offer.id ? note : null} />
             </article>
           ))}
         </div>
-        {notice && (
-          <p role="status" data-yuu-toast className="mt-6 text-lg font-bold text-primary-dark">
-            {notice.kind === "ok"
-              ? `${notice.result.displayName} earned ${notice.result.pointsEarned} points`
-              : notice.text}
-          </p>
-        )}
       </main>
     </div>
   );

@@ -12,6 +12,11 @@ export const YUU_BUY_LABEL = "Buy with yuu";
 /** Visible label when nobody is signed in. The control is a link to sign in. */
 export const YUU_SIGN_IN_LABEL = "Sign in to buy with yuu";
 
+/** Inline confirmation after a yuu purchase. `points` is the points just earned. */
+export function yuuBoughtLine(points: number): string {
+  return `Bought with yuu, +${points} points`;
+}
+
 export type YuuTierName = "Member" | "Silver" | "Gold";
 /** `partner` is a coalition purchase at another store. `sim` is only on old rows. */
 export type YuuChannel = "web" | "partner" | "sim";

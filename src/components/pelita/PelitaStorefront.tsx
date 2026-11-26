@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AUDIT_LINK_LABEL, AUDIT_PATH } from "@/lib/demo/audit-links";
 import { PELITA_ART } from "@/lib/demo/pelita-art";
 import { formatSgd, searchCatalogue, type StorefrontView } from "@/lib/demo/storefront";
 import { buyWithYuuRequest } from "@/lib/demo/yuu-client";
 import { PELITA_SIGN_IN_HREF, PELITA_SIGN_OUT_HREF, PELITA_YUU_PATH, safeAvatarUrl } from "@/lib/return-to";
-import { YUU_PARTNER_HEADING, type StorefrontYuu, type YuuPurchaseResult, type YuuTierName } from "@/lib/yuu/types";
+import { yuuBoughtLine, YUU_PARTNER_HEADING, type StorefrontYuu, type YuuPurchaseResult, type YuuTierName } from "@/lib/yuu/types";
+import type { YuuBuyNote } from "./YuuBuyFeedback";
 import { CartIcon, PelitaMarkOnRose, SearchIcon, SuccessIcon, UserIcon } from "./PelitaIcons";
 import { PelitaProductCard } from "./PelitaProductCard";
 
@@ -82,7 +83,7 @@ function AccountCluster({ account }: { account: PelitaAccount | null }) {
  * component's state only.
  */
 type YuuBalance = { displayName: string; points: number; tier: YuuTierName };
-type YuuNotice = { kind: "ok"; result: YuuPurchaseResult } | { kind: "error"; text: string };
+type YuuNotice = { sku: string; kind: "ok"; result: YuuPurchaseResult } | { sku: string; kind: "error"; text: string };
 
 export function PelitaStorefront({
   view,
@@ -106,6 +107,7 @@ export function PelitaStorefront({
   );
   const [yuuBusy, setYuuBusy] = useState(false);
   const [yuuNotice, setYuuNotice] = useState<YuuNotice | null>(null);
+  const yuuLock = useRef(false);
 
   const byId = useMemo(() => new Map(view.catalogue.map((p) => [p.id, p])), [view.catalogue]);
   const cartCount = Object.values(cart).reduce((sum, n) => sum + n, 0);
@@ -114,21 +116,29 @@ export function PelitaStorefront({
   const activeBalance = account ? balance : null;
 
   async function buyYuu(sku: string) {
-    if (yuuBusy) return;
+    if (yuuLock.current) return;
     if (!account) {
-      setYuuNotice({ kind: "error", text: "Sign in to buy with yuu." });
+      setYuuNotice({ sku, kind: "error", text: "Sign in to buy with yuu." });
       return;
     }
+    yuuLock.current = true;
     setYuuBusy(true);
     try {
       const result = await buyWithYuuRequest({ sku, qty: 1 });
       setBalance({ displayName: result.displayName, points: result.points, tier: result.tier });
-      setYuuNotice({ kind: "ok", result });
+      setYuuNotice({ sku, kind: "ok", result });
     } catch (error) {
-      setYuuNotice({ kind: "error", text: error instanceof Error ? error.message : "Could not record the yuu purchase." });
+      setYuuNotice({ sku, kind: "error", text: error instanceof Error ? error.message : "Could not record the yuu purchase." });
     } finally {
+      yuuLock.current = false;
       setYuuBusy(false);
     }
+  }
+
+  function yuuNoteFor(sku: string): YuuBuyNote | null {
+    if (!yuuNotice || yuuNotice.sku !== sku) return null;
+    if (yuuNotice.kind === "ok") return { kind: "ok", points: yuuNotice.result.pointsEarned };
+    return { kind: "error", text: yuuNotice.text };
   }
 
   const showDeals = () => {
@@ -367,6 +377,7 @@ export function PelitaStorefront({
                   onBuyYuu={account ? (id) => void buyYuu(id) : undefined}
                   yuuSignInHref={account ? undefined : PELITA_SIGN_IN_HREF}
                   yuuBusy={yuuBusy}
+                  yuuNote={yuuNoteFor(product.id)}
                 />
               ))}
             </div>
@@ -409,14 +420,7 @@ export function PelitaStorefront({
             <div>
               <p className="text-base font-extrabold text-primary-dark">yuu (simulated)</p>
               {yuuNotice.kind === "ok" ? (
-                <>
-                  <p className="mt-1 text-lg font-bold">
-                    {yuuNotice.result.displayName} earned {yuuNotice.result.pointsEarned} points
-                  </p>
-                  <p className="text-ink-2">
-                    <span data-yuu-tier>{yuuNotice.result.tier}</span> · {yuuNotice.result.points} points · {yuuNotice.result.productName}
-                  </p>
-                </>
+                <p className="mt-1 text-lg font-bold">{yuuBoughtLine(yuuNotice.result.pointsEarned)}</p>
               ) : (
                 <p className="mt-1 text-lg font-bold">{yuuNotice.text}</p>
               )}
