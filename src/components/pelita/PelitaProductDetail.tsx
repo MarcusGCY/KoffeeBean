@@ -137,7 +137,7 @@ export function PelitaProductDetail({
                 </p>
               )}
               {product.promo && (
-                <p data-promo={product.promo.type} className="mt-3 inline-flex rounded-sm bg-promo px-3 py-1 text-base font-extrabold text-ink">
+                <p data-promo={product.promo.type} className="mt-3 max-w-xl rounded-sm bg-promo px-3 py-1 text-base font-extrabold leading-snug text-ink">
                   {product.promo.label}
                 </p>
               )}

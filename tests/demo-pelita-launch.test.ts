@@ -411,12 +411,12 @@ describe("shelf visibility and reset", () => {
     expect(shown).toContain("Add to bag");
     await expect(productPage("PL-20055")).rejects.toMatchObject({ digest: expect.stringContaining("404") });
     const seeded = html(await productPage("PL-20055", true));
-    expect(seeded).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
-    expect(seeded).toContain("Scheduled to go live 03 Dec 2026, 09:00 SGT");
+    expect(seeded).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
+    expect(seeded).toContain("Scheduled to go live 09 Dec 2026, 09:00 SGT");
 
     store.set("kb:demo:pelita:listed", "1");
     const listed = html(await productPage("PL-20055"));
-    expect(listed).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
+    expect(listed).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
     expect(listed).toContain('src="/images/pelita/PL-20055.png"');
     expect(listed).not.toContain("data-preview-banner");
 
@@ -457,7 +457,7 @@ describe("shelf visibility and reset", () => {
     const list = await getLaunch(bearer("https://x.test/api/demo/pelita/launch"));
     const body = (await list.json()) as { launches: { sku: string; status: string; isLive: boolean; goLiveAt: string | null }[] };
     expect(body.launches.map((row) => row.sku)).toEqual(["PL-20055"]);
-    expect(body.launches[0]).toMatchObject({ status: "scheduled", isLive: false, goLiveAt: "2026-12-03T09:00:00+08:00" });
+    expect(body.launches[0]).toMatchObject({ status: "scheduled", isLive: false, goLiveAt: "2026-12-09T09:00:00+08:00" });
   });
 
   it("still deletes indexed launch keys when SCAN is unavailable", async () => {
@@ -526,39 +526,66 @@ describe("ops go live now", () => {
 describe("approved PL-20055 package", () => {
   it("previews the approved copy and image, keeps the push as a draft, and can go live from ops", async () => {
     const { existsSync, readFileSync: read } = await import("node:fs");
+    const { createHash } = await import("node:crypto");
     const png = path.join(ROOT, "public/images/pelita/PL-20055.png");
     expect(existsSync(png)).toBe(true);
-    expect(read(png).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    const bytes = read(png);
+    expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("8aa2e13dacbd65b872d021baaada41641c37dc30e34f15041bddb450d886a582");
 
     const preview = html(await productPage("PL-20055", true));
-    expect(preview).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
-    expect(preview).toContain("Gentle, daily magnesium glycinate capsules to support everyday muscle relaxation and evening wind-down. 60 capsules (30-day supply).");
-    expect(preview).toContain("Formulated with chelated magnesium glycinate");
+    expect(preview).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
+    expect(preview).toContain("90 Capsules");
+    expect(preview).toContain("Vitamins &amp; Supplements");
+    expect(preview).toContain("Evergreen Nutrition");
+    expect(preview).toContain("Gentle, daily magnesium glycinate capsules to support everyday muscle relaxation and evening wind-down. 90 capsules (45-day supply).");
+    expect(preview).toContain("each bottle provides 90 capsules sourced from Evergreen Nutrition");
     expect(preview).toContain("Delivers 400 mg magnesium glycinate per serving in easy-to-swallow capsules");
     expect(preview).toContain("Chelated glycinate form selected for gentle daily digestion");
     expect(preview).toContain("Supports normal muscle function and relaxed evening routines");
-    expect(preview).toContain("60 capsules per bottle; take as directed on the product label with water");
+    expect(preview).toContain("90 capsules per bottle; take as directed on the product label with water");
     expect(preview).toContain("S$32.90");
+    expect(preview).toContain("S$29.90");
+    expect(preview).toContain("incl. 9% GST");
     expect(preview).toContain("S$30.18 ex GST");
-    expect(preview).toContain("S$17.50 ex GST");
-    expect(preview).toContain('data-promo="multibuy"');
-    expect(preview).toContain("2 for S$55.90");
-    expect(preview).toContain("save S$9.90");
-    expect(preview).toContain('data-store="Harbour Mart · 4 units"');
-    expect(preview).toContain('data-store="Ridge Pharmacy · 3 units"');
+    expect(preview).toContain("S$27.43 ex GST");
+    expect(preview).toContain("S$3.00 off");
+    expect(preview).toContain("U.P. S$32.90");
+    expect(preview).toContain("limit 1 per member");
+    expect(preview).toContain("while trial stock lasts");
+    expect(preview).not.toContain("2 for S$55.90");
+    expect(preview).not.toContain("60 capsules");
+    expect(preview).not.toContain("60 Capsules");
+    expect(preview).toContain('data-promo="member_price"');
+    expect(preview).toContain("yuu Member Intro Price");
+    expect(preview).toContain("Member S$29.90");
+    expect(preview).toContain('data-store="Ridge Pharmacy · 4 units"');
+    expect(preview).toContain('data-store="Harbour Mart · 3 units"');
     expect(preview).toContain('data-store="Eastlink Grocery · 3 units"');
     expect(preview).toContain('data-store="DC reserve · 2 units"');
-    expect(preview).toContain("Targeted: Repeat wellness/supplement buyers across yuu partner stores");
+    expect(preview).toContain('data-store="Pelita Singapore · 0 units"');
+    expect(preview).toContain('data-store="Northshore Wellness · 0 units"');
+    expect(preview).toContain('data-store="Online · 0 units"');
+    expect(preview).toContain("Targeted: Repeat wellness and supplement buyers at Ridge Pharmacy, Harbour Mart, and Eastlink Grocery");
+    expect(preview).toContain("yuu aggregates only, zero PII");
     expect(preview).toContain('src="/images/pelita/PL-20055.png"');
     expect(preview).toContain("data-product-image");
-    expect(preview).toContain("Scheduled to go live 03 Dec 2026, 09:00 SGT");
+    expect(preview).toContain("Scheduled to go live 09 Dec 2026, 09:00 SGT");
+
+    const Yuu = (await import("@/app/demo/pelita/yuu/page")).default;
+    const yuu = html(await Yuu());
+    expect(partnerCard(yuu, "PL-20055")).toContain('src="/images/pelita/PL-20055.png"');
+    expect(partnerCard(yuu, "PL-80014")).toContain("data-product-art");
+    expect(partnerCard(yuu, "PL-80014")).not.toContain("data-product-image");
 
     const Ops = (await import("@/app/demo/pelita/ops/page")).default;
     const ops = html(await Ops());
     expect(ops).toContain("data-draft-push");
     expect(ops).toContain("Draft only — do not send");
-    expect(ops).toContain("New at Pelita: Magnesium Glycinate 400 mg");
-    expect(ops).toContain("Grab 2 bottles for S$55.90");
+    expect(ops).toContain("New at Pelita: Magnesium Glycinate 400 mg (90 Capsules)");
+    expect(ops).toContain("Enjoy our yuu member intro price of S$29.90");
+    expect(ops).toContain("(U.P. S$32.90, limit 1 per member) while trial stock lasts.");
+    expect(ops).toContain("yuu Member Intro Price S$29.90 incl. 9% GST");
     expect(ops).toContain("Go live now");
     expect(ops).not.toMatch(/<button[^>]*>[^<]*Send/);
 
@@ -569,15 +596,27 @@ describe("approved PL-20055 package", () => {
       sku: "PL-20055",
       status: "live",
       isLive: true,
-      goLiveAt: "2026-12-03T09:00:00+08:00",
+      goLiveAt: "2026-12-09T09:00:00+08:00",
     });
     const live = html(await productPage("PL-20055"));
     expect(live).toContain('data-pdp-state="live"');
-    expect(live).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
-    expect(live).toContain('data-promo="multibuy"');
+    expect(live).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
+    expect(live).toContain('data-promo="member_price"');
+    expect(live).toContain("Member S$29.90");
+    expect(live).toContain("incl. 9% GST");
     expect(live).not.toContain("data-preview-banner");
+    expect(live).not.toContain("2 for S$55.90");
     const Page = (await import("@/app/demo/pelita/page")).default;
-    expect(html(await Page())).toContain('src="/images/pelita/PL-20055.png"');
+    const shelf = html(await Page());
+    expect(shelf).toContain('src="/images/pelita/PL-20055.png"');
+    expect(shelf).toContain("yuu Member Intro Price S$29.90");
+    expect(shelf).toContain("U.P. S$32.90");
+    expect(shelf).toContain("limit 1 per member");
+    expect(shelf).toContain("Member S$29.90");
+    expect(shelf).toContain("incl. 9% GST");
+    expect(shelf).toContain("while trial stock lasts");
+    expect(shelf).toContain("data-product-art");
+    expect(shelf).not.toContain("2 for S$55.90");
   });
 });
 

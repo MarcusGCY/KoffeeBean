@@ -204,6 +204,7 @@ function cardFromLaunch(scenario: Scenario, config: LaunchConfig, now: number): 
     ribbon: shown?.label ?? null,
     tag: item?.tags.includes("New") ? "New" : null,
     memberPrice: memberCents == null ? null : memberCents / 100,
+    priceNote: packagePriceNote(config),
     stock: { status: "in", label: "In stock" },
     imageUrl: config.imageUrl ?? null,
   };
@@ -250,8 +251,10 @@ export function applyLaunchConfigs(view: StorefrontView, scenario: Scenario, con
         art: next.art,
         price: next.price,
         wasPrice: next.wasPrice,
-        ribbon: next.ribbon ?? current.ribbon,
+        // A launch that names a promo replaces the catalogue ribbon, including when that promo is outside its window.
+        ribbon: config.promo ? next.ribbon : (next.ribbon ?? current.ribbon),
         memberPrice: next.memberPrice,
+        priceNote: next.priceNote ?? null,
         imageUrl: next.imageUrl ?? current.imageUrl,
       };
       catalogue = catalogue.map((card) => (card.id === next.id ? merged : card));
