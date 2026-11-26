@@ -46,7 +46,7 @@ export function PelitaProductCard({
           href={`/pelita/product/${product.id}`}
           data-product-link=""
           aria-label={product.name}
-          className="mb-[22px] block h-[98px] w-[98px]"
+          className="block h-[98px] w-[98px]"
         >
           <PelitaProductImage imageUrl={product.imageUrl} art={product.art} alt="" className="h-full w-full" />
         </Link>
@@ -68,12 +68,10 @@ export function PelitaProductCard({
         >
           <HeartIcon filled={wished} />
         </button>
-        {product.ribbon && (
-          <div className="absolute inset-x-0 bottom-0 flex h-8 items-center bg-promo px-3 text-base font-extrabold text-ink">
-            {product.ribbon}
-          </div>
-        )}
       </div>
+      {product.ribbon && (
+        <p className="mt-2 rounded-sm bg-promo px-3 py-1 text-base font-extrabold leading-snug text-ink">{product.ribbon}</p>
+      )}
 
       <h3 className="mt-2.5 text-lg font-bold leading-[1.25]">
         <Link href={`/pelita/product/${product.id}`} data-product-link="">
@@ -105,8 +103,13 @@ export function PelitaProductCard({
       </div>
 
       {product.memberPrice !== null && (
-        <p className="mt-1.5 inline-flex self-start rounded-sm bg-primary-50 px-2.5 text-base font-bold text-primary-dark">
+        <p data-member-price className="mt-1.5 inline-flex self-start rounded-sm bg-primary-50 px-2.5 text-base font-bold text-primary-dark">
           Member {formatSgd(product.memberPrice)}
+        </p>
+      )}
+      {product.priceNote && (
+        <p data-price-note className="mt-1.5 text-base leading-snug text-ink-2">
+          {product.priceNote}
         </p>
       )}
       <p className={`mt-1.5 flex items-center gap-2 text-base font-bold ${STOCK_TONE[product.stock.status]}`}>

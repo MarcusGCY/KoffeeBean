@@ -19,6 +19,8 @@ export type ProductCardData = {
   ribbon: string | null;
   tag: "New" | "Bestseller" | null;
   memberPrice: number | null;
+  /** GST and promo detail for an approved launch. Absent on catalogue cards. */
+  priceNote?: string | null;
   stock: { status: StockStatus; label: string };
   /** Set when a launch config names a real image. Absent means the kit SVG. */
   imageUrl?: string | null;
