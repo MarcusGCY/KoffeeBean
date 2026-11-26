@@ -28,6 +28,7 @@ import {
   type LaunchConfig,
 } from "@/lib/demo/launch";
 import { applyLaunchConfigs, applyLaunchesToPartners, resolveProductPage } from "@/lib/demo/launch-view";
+import { PL20055_SIGNAL, builtinLaunch } from "@/lib/demo/pl-20055-package";
 import { loadScenario } from "@/lib/demo/scenario";
 import { storefrontView } from "@/lib/demo/storefront";
 import { partnerOffers } from "@/lib/demo/yuu-partners";
@@ -412,7 +413,7 @@ describe("shelf visibility and reset", () => {
     await expect(productPage("PL-20055")).rejects.toMatchObject({ digest: expect.stringContaining("404") });
     const seeded = html(await productPage("PL-20055", true));
     expect(seeded).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
-    expect(seeded).toContain("Scheduled to go live 09 Dec 2026, 09:00 SGT");
+    expect(seeded).toContain("Scheduled to go live 04 Dec 2026, 09:00 SGT");
 
     store.set("kb:demo:pelita:listed", "1");
     const listed = html(await productPage("PL-20055"));
@@ -457,7 +458,12 @@ describe("shelf visibility and reset", () => {
     const list = await getLaunch(bearer("https://x.test/api/demo/pelita/launch"));
     const body = (await list.json()) as { launches: { sku: string; status: string; isLive: boolean; goLiveAt: string | null }[] };
     expect(body.launches.map((row) => row.sku)).toEqual(["PL-20055"]);
-    expect(body.launches[0]).toMatchObject({ status: "scheduled", isLive: false, goLiveAt: "2026-12-09T09:00:00+08:00" });
+    expect(body.launches[0]).toMatchObject({
+      status: "scheduled",
+      isLive: false,
+      goLiveAt: "2026-12-04T09:00:00+08:00",
+      config: { promo: { startsAt: "2026-12-04T09:00:00+08:00", endsAt: "2026-12-18T23:59:59+08:00" } },
+    });
   });
 
   it("still deletes indexed launch keys when SCAN is unavailable", async () => {
@@ -525,6 +531,22 @@ describe("ops go live now", () => {
 
 describe("approved PL-20055 package", () => {
   it("previews the approved copy and image, keeps the push as a draft, and can go live from ops", async () => {
+    expect(PL20055_SIGNAL).toEqual({
+      id: 73,
+      label: "Signal 73",
+      handoff: "automated DFI Operation Team handoff",
+      supplier: "Evergreen Nutrition",
+      erp: "Pelita ERP",
+      erpRow: 4,
+    });
+    expect(builtinLaunch("PL-20055")).toMatchObject({
+      goLiveAt: "2026-12-04T09:00:00+08:00",
+      status: "scheduled",
+      promo: { startsAt: "2026-12-04T09:00:00+08:00", endsAt: "2026-12-18T23:59:59+08:00", memberPriceCents: 2990 },
+    });
+    expect(readFileSync(path.join(ROOT, "src/lib/demo/pl-20055-package.ts"), "utf8")).toContain("Signal 73");
+    expect(readFileSync(path.join(ROOT, "src/lib/demo/pl-20055-package.ts"), "utf8")).not.toContain("Signal 54");
+
     const { existsSync, readFileSync: read } = await import("node:fs");
     const { createHash } = await import("node:crypto");
     const png = path.join(ROOT, "public/images/pelita/PL-20055.png");
@@ -570,7 +592,9 @@ describe("approved PL-20055 package", () => {
     expect(preview).toContain("yuu aggregates only, zero PII");
     expect(preview).toContain('src="/images/pelita/PL-20055.png"');
     expect(preview).toContain("data-product-image");
-    expect(preview).toContain("Scheduled to go live 09 Dec 2026, 09:00 SGT");
+    expect(preview).toContain("Scheduled to go live 04 Dec 2026, 09:00 SGT");
+    expect(preview).toContain("Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT, or while trial stock lasts");
+    expect(preview).not.toContain("Signal 73");
 
     const Yuu = (await import("@/app/demo/pelita/yuu/page")).default;
     const yuu = html(await Yuu());
@@ -586,6 +610,10 @@ describe("approved PL-20055 package", () => {
     expect(ops).toContain("Enjoy our yuu member intro price of S$29.90");
     expect(ops).toContain("(U.P. S$32.90, limit 1 per member) while trial stock lasts.");
     expect(ops).toContain("yuu Member Intro Price S$29.90 incl. 9% GST");
+    expect(ops).toContain("Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT, or while trial stock lasts");
+    expect(ops).toContain("Go-live 04 Dec 2026, 09:00 SGT");
+    expect(ops).toContain('data-signal="73"');
+    expect(ops).toContain("Signal 73 · automated DFI Operation Team handoff · Evergreen Nutrition / Pelita ERP row 4");
     expect(ops).toContain("Go live now");
     expect(ops).not.toMatch(/<button[^>]*>[^<]*Send/);
 
@@ -596,7 +624,7 @@ describe("approved PL-20055 package", () => {
       sku: "PL-20055",
       status: "live",
       isLive: true,
-      goLiveAt: "2026-12-09T09:00:00+08:00",
+      goLiveAt: "2026-12-04T09:00:00+08:00",
     });
     const live = html(await productPage("PL-20055"));
     expect(live).toContain('data-pdp-state="live"');
