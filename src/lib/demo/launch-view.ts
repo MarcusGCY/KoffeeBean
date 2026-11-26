@@ -12,6 +12,7 @@ import {
   type LaunchConfig,
   type MemberOffer,
 } from "./launch";
+import { isApprovedPl20055, packagePriceNote } from "./pl-20055-package";
 
 const DEFAULT_ART: PelitaArtKey = "vitc";
 const DEFAULT_STORE_IDS = ["harbour-mart", "ridge-pharmacy", "eastlink-grocery"] as const;
@@ -43,6 +44,8 @@ export type ProductDetailModel = {
   stores: string[];
   stock: { status: "in" | "low" | "out"; label: string };
   previewBanner: string | null;
+  /** GST and promo-window detail for an approved package. Null for other products. */
+  priceNote: string | null;
 };
 
 export type ResolvedProduct =
@@ -111,12 +114,26 @@ function detailFromCatalogue(scenario: Scenario, item: CatalogueItem, stock: Pro
     stores: defaultShelfStores(),
     stock,
     previewBanner: null,
+    priceNote: null,
   };
+}
+
+/** A forced live launch, or a preview, can show a promo whose start is still ahead and whose end has not passed. */
+function commercialNow(config: LaunchConfig, now: number, preview: boolean): number {
+  const promo = config.promo;
+  if (!promo?.startsAt) return now;
+  const start = Date.parse(promo.startsAt);
+  if (Number.isNaN(start) || now >= start) return now;
+  if (promo.endsAt) {
+    const end = Date.parse(promo.endsAt);
+    if (!Number.isNaN(end) && now > end) return now;
+  }
+  return config.status === "live" || preview ? start : now;
 }
 
 function detailFromLaunch(scenario: Scenario, config: LaunchConfig, now: number, previewBanner: string | null): ProductDetailModel {
   const item = scenario.catalogue.find((row) => row.id === config.sku);
-  const shown = presentPromo(config.promo, config.shelfPriceCents, now);
+  const shown = presentPromo(config.promo, config.shelfPriceCents, commercialNow(config, now, previewBanner !== null));
   const payCents = shown?.payCents ?? config.shelfPriceCents;
   const listing = item?.id === scenario.listing.productId;
   return {
@@ -139,6 +156,7 @@ function detailFromLaunch(scenario: Scenario, config: LaunchConfig, now: number,
     stores: config.stores ?? defaultShelfStores(),
     stock: { status: "in", label: "In stock" },
     previewBanner,
+    priceNote: packagePriceNote(config),
   };
 }
 
@@ -152,11 +170,15 @@ export function resolveProductPage(args: {
   now?: number;
 }): ResolvedProduct {
   const now = args.now ?? Date.now();
-  if (args.config) {
-    const live = isLaunchLive(args.config, now);
-    if (!live && !args.preview) return { hidden: true };
-    const banner = live ? null : launchPreviewBanner(args.config, now);
-    return { hidden: false, product: detailFromLaunch(args.scenario, args.config, now, banner) };
+  const config = args.config;
+  if (config) {
+    const live = isLaunchLive(config, now);
+    const item = args.scenario.catalogue.find((row) => row.id === config.sku);
+    const onShelf = item ? shelfStock(item, args.listed) !== null : false;
+    const publishedPackage = onShelf && isApprovedPl20055(config);
+    if (!live && !publishedPackage && !args.preview) return { hidden: true };
+    const banner = live || publishedPackage ? null : launchPreviewBanner(config, now);
+    return { hidden: false, product: detailFromLaunch(args.scenario, config, now, banner) };
   }
   const item = args.scenario.catalogue.find((row) => row.id === args.sku);
   const stock = item ? shelfStock(item, args.listed) : null;
@@ -166,7 +188,7 @@ export function resolveProductPage(args: {
 
 function cardFromLaunch(scenario: Scenario, config: LaunchConfig, now: number): ProductCardData {
   const item = scenario.catalogue.find((row) => row.id === config.sku);
-  const shown = presentPromo(config.promo, config.shelfPriceCents, now);
+  const shown = presentPromo(config.promo, config.shelfPriceCents, commercialNow(config, now, false));
   const payCents = shown?.payCents ?? config.shelfPriceCents;
   const memberCents = config.memberOffer?.memberPriceCents ?? shown?.memberPriceCents ?? null;
   return {
@@ -208,8 +230,11 @@ function refreshPublished(published: PublishedStorefront, catalogue: ProductCard
  */
 export function applyLaunchConfigs(view: StorefrontView, scenario: Scenario, configs: LaunchConfig[], now = Date.now()): StorefrontView {
   if (configs.length === 0) return view;
-  const hidden = new Set(configs.filter((config) => !isLaunchLive(config, now)).map((config) => config.sku));
-  const live = configs.filter((config) => isLaunchLive(config, now));
+  const onShelf = new Set(view.catalogue.map((card) => card.id));
+  // A schedule that has not started leaves the shelf. The approved PL-20055 package stays once the demo listing has published it.
+  const publishedPackage = (config: LaunchConfig) => onShelf.has(config.sku) && isApprovedPl20055(config);
+  const hidden = new Set(configs.filter((config) => !isLaunchLive(config, now) && !publishedPackage(config)).map((config) => config.sku));
+  const live = configs.filter((config) => isLaunchLive(config, now) || publishedPackage(config));
   let catalogue = view.catalogue.filter((card) => !hidden.has(card.id));
   let deals = view.deals.products.filter((card) => !hidden.has(card.id));
   const extras: ProductCardData[] = [];
@@ -225,9 +250,9 @@ export function applyLaunchConfigs(view: StorefrontView, scenario: Scenario, con
         art: next.art,
         price: next.price,
         wasPrice: next.wasPrice,
-        ribbon: next.ribbon,
+        ribbon: next.ribbon ?? current.ribbon,
         memberPrice: next.memberPrice,
-        imageUrl: next.imageUrl,
+        imageUrl: next.imageUrl ?? current.imageUrl,
       };
       catalogue = catalogue.map((card) => (card.id === next.id ? merged : card));
       deals = deals.map((card) => (card.id === next.id ? { ...merged, highlight: card.highlight } : card));
@@ -258,8 +283,8 @@ export function applyLaunchesToPartners(offers: PartnerOffer[], scenario: Scenar
     const config = bySku.get(offer.id);
     if (!config) return offer;
     const live = isLaunchLive(config, now);
-    if (!live) return { ...offer, atPelita: false, imageUrl: config.imageUrl ?? offer.imageUrl ?? null };
-    const shown = presentPromo(config.promo, config.shelfPriceCents, now);
+    if (!live) return { ...offer, imageUrl: config.imageUrl ?? offer.imageUrl ?? null };
+    const shown = presentPromo(config.promo, config.shelfPriceCents, commercialNow(config, now, false));
     return {
       ...offer,
       name: config.title,
@@ -272,7 +297,7 @@ export function applyLaunchesToPartners(offers: PartnerOffer[], scenario: Scenar
   const known = new Set(next.map((offer) => offer.id));
   for (const config of configs) {
     if (!isLaunchLive(config, now) || known.has(config.sku)) continue;
-    const shown = presentPromo(config.promo, config.shelfPriceCents, now);
+    const shown = presentPromo(config.promo, config.shelfPriceCents, commercialNow(config, now, false));
     next.push({
       id: config.sku,
       name: config.title,

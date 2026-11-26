@@ -3,6 +3,7 @@ import { PelitaPartnerPurchases } from "@/components/pelita/PelitaPartnerPurchas
 import type { PelitaAccount } from "@/components/pelita/PelitaStorefront";
 import { requirePresenterPage } from "@/lib/demo/guard";
 import { listLaunches } from "@/lib/demo/launch-store";
+import { builtinLaunches } from "@/lib/demo/pl-20055-package";
 import { applyLaunchesToPartners } from "@/lib/demo/launch-view";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoSnapshot } from "@/lib/demo/state";
@@ -24,7 +25,7 @@ export default async function PelitaYuuPartnersPage() {
   const scenario = loadScenario();
   const snapshot = await getDemoSnapshot().catch(() => null);
   const listed = snapshot?.state.listed === true;
-  const launches = await listLaunches().catch(() => []);
+  const launches = await listLaunches().catch(() => builtinLaunches());
   const session = await signedInAccount();
   const yuu = await loadStorefrontYuu(session.memberKey);
   const balance = yuu.signedInMember

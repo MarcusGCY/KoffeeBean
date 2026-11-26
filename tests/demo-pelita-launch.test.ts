@@ -410,11 +410,14 @@ describe("shelf visibility and reset", () => {
     expect(shown).toContain(`data-sku="${vit.id}"`);
     expect(shown).toContain("Add to bag");
     await expect(productPage("PL-20055")).rejects.toMatchObject({ digest: expect.stringContaining("404") });
-    await expect(productPage("PL-20055", true)).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+    const seeded = html(await productPage("PL-20055", true));
+    expect(seeded).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
+    expect(seeded).toContain("Scheduled to go live 03 Dec 2026, 09:00 SGT");
 
     store.set("kb:demo:pelita:listed", "1");
     const listed = html(await productPage("PL-20055"));
-    expect(listed).toContain(scenario.catalogue.find((item) => item.id === "PL-20055")!.name);
+    expect(listed).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
+    expect(listed).toContain('src="/images/pelita/PL-20055.png"');
     expect(listed).not.toContain("data-preview-banner");
 
     const hidden = resolveProductPage({ sku: "PL-20055", scenario, listed: false, config: null, preview: true, now: NOW });
@@ -452,7 +455,9 @@ describe("shelf visibility and reset", () => {
     expect(store.get("kb:demo:pelita:listed")).toBe("0");
 
     const list = await getLaunch(bearer("https://x.test/api/demo/pelita/launch"));
-    expect(await list.json()).toEqual({ ok: true, launches: [] });
+    const body = (await list.json()) as { launches: { sku: string; status: string; isLive: boolean; goLiveAt: string | null }[] };
+    expect(body.launches.map((row) => row.sku)).toEqual(["PL-20055"]);
+    expect(body.launches[0]).toMatchObject({ status: "scheduled", isLive: false, goLiveAt: "2026-12-03T09:00:00+08:00" });
   });
 
   it("still deletes indexed launch keys when SCAN is unavailable", async () => {
@@ -518,6 +523,64 @@ describe("ops go live now", () => {
   });
 });
 
+describe("approved PL-20055 package", () => {
+  it("previews the approved copy and image, keeps the push as a draft, and can go live from ops", async () => {
+    const { existsSync, readFileSync: read } = await import("node:fs");
+    const png = path.join(ROOT, "public/images/pelita/PL-20055.png");
+    expect(existsSync(png)).toBe(true);
+    expect(read(png).subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+
+    const preview = html(await productPage("PL-20055", true));
+    expect(preview).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
+    expect(preview).toContain("Gentle, daily magnesium glycinate capsules to support everyday muscle relaxation and evening wind-down. 60 capsules (30-day supply).");
+    expect(preview).toContain("Formulated with chelated magnesium glycinate");
+    expect(preview).toContain("Delivers 400 mg magnesium glycinate per serving in easy-to-swallow capsules");
+    expect(preview).toContain("Chelated glycinate form selected for gentle daily digestion");
+    expect(preview).toContain("Supports normal muscle function and relaxed evening routines");
+    expect(preview).toContain("60 capsules per bottle; take as directed on the product label with water");
+    expect(preview).toContain("S$32.90");
+    expect(preview).toContain("S$30.18 ex GST");
+    expect(preview).toContain("S$17.50 ex GST");
+    expect(preview).toContain('data-promo="multibuy"');
+    expect(preview).toContain("2 for S$55.90");
+    expect(preview).toContain("save S$9.90");
+    expect(preview).toContain('data-store="Harbour Mart · 4 units"');
+    expect(preview).toContain('data-store="Ridge Pharmacy · 3 units"');
+    expect(preview).toContain('data-store="Eastlink Grocery · 3 units"');
+    expect(preview).toContain('data-store="DC reserve · 2 units"');
+    expect(preview).toContain("Targeted: Repeat wellness/supplement buyers across yuu partner stores");
+    expect(preview).toContain('src="/images/pelita/PL-20055.png"');
+    expect(preview).toContain("data-product-image");
+    expect(preview).toContain("Scheduled to go live 03 Dec 2026, 09:00 SGT");
+
+    const Ops = (await import("@/app/demo/pelita/ops/page")).default;
+    const ops = html(await Ops());
+    expect(ops).toContain("data-draft-push");
+    expect(ops).toContain("Draft only — do not send");
+    expect(ops).toContain("New at Pelita: Magnesium Glycinate 400 mg");
+    expect(ops).toContain("Grab 2 bottles for S$55.90");
+    expect(ops).toContain("Go live now");
+    expect(ops).not.toMatch(/<button[^>]*>[^<]*Send/);
+
+    const published = await goLiveRoute(demoPost("https://x.test/api/demo/pelita/ops/go-live", { sku: "PL-20055" }));
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({
+      ok: true,
+      sku: "PL-20055",
+      status: "live",
+      isLive: true,
+      goLiveAt: "2026-12-03T09:00:00+08:00",
+    });
+    const live = html(await productPage("PL-20055"));
+    expect(live).toContain('data-pdp-state="live"');
+    expect(live).toContain("Pelita Wellness Magnesium Glycinate 400 mg (60 Capsules)");
+    expect(live).toContain('data-promo="multibuy"');
+    expect(live).not.toContain("data-preview-banner");
+    const Page = (await import("@/app/demo/pelita/page")).default;
+    expect(html(await Page())).toContain('src="/images/pelita/PL-20055.png"');
+  });
+});
+
 describe("product card, image fallback, and targeted offer", () => {
   it("links shelf cards to the PDP and falls back from a real image to the kit SVG", () => {
     const card = storefrontView(scenario).deals.products[0]!;
@@ -579,7 +642,9 @@ describe("product card, image fallback, and targeted offer", () => {
     expect(withImage).toContain('href="/pelita/product/NEW-77"');
 
     const partners = applyLaunchesToPartners(partnerOffers(scenario, true), scenario, [{ sku: "PL-20055", title: "Night magnesium", shelfPriceCents: 3290, status: "scheduled", goLiveAt: FUTURE, imageUrl: "/images/pelita/PL-20055.png" }], NOW);
-    expect(partners.find((item) => item.id === "PL-20055")).toMatchObject({ atPelita: false, imageUrl: "/images/pelita/PL-20055.png" });
+    expect(partners.find((item) => item.id === "PL-20055")).toMatchObject({ atPelita: true, imageUrl: "/images/pelita/PL-20055.png" });
+    const unlistedPartners = applyLaunchesToPartners(partnerOffers(scenario, false), scenario, [{ sku: "PL-20055", title: "Night magnesium", shelfPriceCents: 3290, status: "scheduled", goLiveAt: FUTURE, imageUrl: "/images/pelita/PL-20055.png" }], NOW);
+    expect(unlistedPartners.find((item) => item.id === "PL-20055")).toMatchObject({ atPelita: false, imageUrl: "/images/pelita/PL-20055.png" });
     const partnerHtml = html(
       createElement(PelitaPartnerPurchases, {
         offers: partners,
@@ -589,6 +654,6 @@ describe("product card, image fallback, and targeted offer", () => {
       }),
     );
     expect(partnerHtml).toContain('src="/images/pelita/PL-20055.png"');
-    expect(partnerHtml).toContain("Not at Pelita");
+    expect(partnerCard(partnerHtml, "PL-20055")).toContain("Also at Pelita");
   });
 });

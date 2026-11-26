@@ -82,7 +82,7 @@ export const promoSchema = z
 export const memberOfferSchema = z.object({
   memberPriceCents: z.number().int().positive().max(10_000_000).optional(),
   bonusPoints: z.number().int().positive().max(1_000_000).optional(),
-  segmentLabel: z.string().trim().min(1).max(120).optional(),
+  segmentLabel: z.string().trim().min(1).max(200).optional(),
   headline: z.string().trim().min(1).max(160).optional(),
 });
 
@@ -271,6 +271,8 @@ export function launchWriteResult(config: LaunchConfig, now = Date.now()): Launc
   };
 }
 
+export type DraftPush = { title: string; body: string };
+
 export type LaunchScheduleRow = {
   sku: string;
   title: string;
@@ -280,6 +282,9 @@ export type LaunchScheduleRow = {
   goLiveLabel: string | null;
   previewUrl: string;
   liveUrl: string;
+  /** Ops-only copy. Nothing in the app sends it. */
+  draftPush?: DraftPush | null;
+  priceNote?: string | null;
 };
 
 export function toScheduleRow(config: LaunchConfig, now = Date.now()): LaunchScheduleRow {

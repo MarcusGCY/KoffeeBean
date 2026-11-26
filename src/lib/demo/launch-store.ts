@@ -6,6 +6,7 @@ import {
   launchKey,
   type LaunchConfig,
 } from "./launch";
+import { builtinLaunch, builtinLaunches } from "./pl-20055-package";
 
 /**
  * Redis IO for Pelita launch configs. Keys sit beside the fixed demo state list:
@@ -110,31 +111,38 @@ export async function saveLaunch(config: LaunchConfig): Promise<void> {
   ]);
 }
 
+function withBuiltins(configs: LaunchConfig[]): LaunchConfig[] {
+  const bySku = new Map(configs.map((config) => [config.sku, config]));
+  for (const builtin of builtinLaunches()) {
+    if (!bySku.has(builtin.sku)) bySku.set(builtin.sku, builtin);
+  }
+  return [...bySku.values()].sort((a, b) => a.sku.localeCompare(b.sku));
+}
+
 export async function readLaunch(sku: string): Promise<LaunchConfig | null> {
   if (!/^[A-Za-z0-9_-]+$/.test(sku) || sku === "index") return null;
   const [value] = await redisPipeline([["GET", launchKey(sku)]]);
-  return parseStored(value);
+  return parseStored(value) ?? builtinLaunch(sku);
 }
 
 export async function listLaunches(): Promise<LaunchConfig[]> {
   const skus = [...(await collectSkus())].sort();
-  if (skus.length === 0) return [];
+  if (skus.length === 0) return withBuiltins([]);
   const values = await redisPipeline(skus.map((sku) => ["GET", launchKey(sku)]));
   const configs: LaunchConfig[] = [];
   for (const value of values) {
     const config = parseStored(value);
     if (config) configs.push(config);
   }
-  configs.sort((a, b) => a.sku.localeCompare(b.sku));
-  return configs;
+  return withBuiltins(configs);
 }
 
-/** Sets status to live immediately. The stored go-live time is kept. */
+/** Sets status to live immediately and keeps the stored go-live time. A built-in package is written into Redis. */
 export async function goLiveNow(sku: string): Promise<LaunchConfig | null> {
   const current = await readLaunch(sku);
   if (!current) return null;
   const next: LaunchConfig = { ...current, status: "live" };
-  await redisPipeline([["SET", launchKey(sku), JSON.stringify(next)]]);
+  await saveLaunch(next);
   return next;
 }
 

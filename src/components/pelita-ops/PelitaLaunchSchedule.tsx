@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { OPS_PATH } from "@/lib/demo/audit-links";
 import { goLiveNowRequest } from "@/lib/demo/launch-client";
 import type { LaunchScheduleRow } from "@/lib/demo/launch";
 
@@ -13,7 +13,6 @@ const STATUS_CLASS = {
 
 /** Ops list of Redis launch configs. Go live now is a same-origin demo action. */
 export function PelitaLaunchSchedule({ rows }: { rows: LaunchScheduleRow[] }) {
-  const router = useRouter();
   const [pending, setPending] = useState<string | null>(null);
   const [forcedLive, setForcedLive] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +23,7 @@ export function PelitaLaunchSchedule({ rows }: { rows: LaunchScheduleRow[] }) {
     try {
       await goLiveNowRequest(sku);
       setForcedLive((current) => new Set(current).add(sku));
-      router.refresh();
+      window.location.assign(OPS_PATH);
     } catch {
       setError("Could not go live. Try again.");
     } finally {
@@ -53,6 +52,14 @@ export function PelitaLaunchSchedule({ rows }: { rows: LaunchScheduleRow[] }) {
               <p data-go-live-at className="mt-1 text-base font-semibold text-ink-2">
                 {row.goLiveLabel ? `Go-live ${row.goLiveLabel}` : "No go-live time"}
               </p>
+              {row.priceNote && <p data-price-note className="mt-2 max-w-3xl text-base text-ink-2">{row.priceNote}</p>}
+              {row.draftPush && (
+                <aside data-draft-push className="mt-3 rounded-md border border-dashed border-ink bg-[#f8fafc] px-4 py-3">
+                  <p className="text-base font-extrabold">Draft only — do not send</p>
+                  <p data-draft-title className="mt-1 text-base font-bold">{row.draftPush.title}</p>
+                  <p data-draft-body className="mt-1 text-base text-ink-2">{row.draftPush.body}</p>
+                </aside>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-4">
                 <a href={row.previewUrl} className="text-base font-bold text-primary underline underline-offset-4">
                   Preview

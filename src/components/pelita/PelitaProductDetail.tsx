@@ -141,6 +141,11 @@ export function PelitaProductDetail({
                   {product.promo.label}
                 </p>
               )}
+              {product.priceNote && (
+                <p data-price-note className="mt-3 max-w-xl text-base text-ink-2">
+                  {product.priceNote}
+                </p>
+              )}
             </div>
 
             {product.memberOffer && (
