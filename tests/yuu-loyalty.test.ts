@@ -13,6 +13,7 @@ import { loadScenario } from "@/lib/demo/scenario";
 import { capYuu, readYuuAccount, withPurchase, YUU_META_MAX_BYTES, YUU_PURCHASE_CAP, type YuuStoredPurchase } from "@/lib/yuu/account";
 import { yuuWebhookSignature } from "@/lib/yuu/webhook";
 import { YUU_DEFAULT_STORE_ID } from "@/lib/yuu/stores";
+import { readYuuPanel, runYuuDetector } from "@/lib/yuu/db";
 import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_REASON, type LoyaltyPurchase } from "@/lib/yuu/detector";
 import { tierForPoints } from "@/lib/yuu/tier";
 import { evalFenced } from "./helpers/fake-redis-eval";
@@ -68,11 +69,13 @@ type Signal = {
   source: string;
   proposal_ref: string | null;
   window_day: string;
+  detected_at?: string;
   webhook_status?: string | null;
   webhook_code?: number | null;
 };
 
 let signals: Map<string, Signal>;
+let nextSignalId: number;
 let events: unknown[];
 let queries: string[];
 let store: Map<string, string | string[]>;
@@ -80,10 +83,6 @@ let dbCount = 0;
 
 function flat(text: string): string {
   return text.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function signalKey(sku: string, window: number, day: string): string {
-  return `${sku}|${window}|${day}`;
 }
 
 function handle(text: string, params: unknown[] = []): unknown[] {
@@ -95,28 +94,27 @@ function handle(text: string, params: unknown[] = []): unknown[] {
     return [];
   }
   if (sql.startsWith("insert into yuu_signals")) {
-    const rows = JSON.parse(String(params[0])) as Array<Omit<Signal, "id" | "source" | "proposal_ref"> & { window_day: string }>;
-    for (const row of rows) {
-      const key = signalKey(row.sku, row.window_minutes, row.window_day);
-      const prev = signals.get(key);
-      if (prev?.source === "bi_bot" && prev.proposal_ref) continue;
-      signals.set(key, {
-        id: prev?.id ?? String(signals.size + 1),
-        sku: row.sku,
-        product_name: row.product_name,
-        score: row.score,
-        window_minutes: row.window_minutes,
-        distinct_members: row.distinct_members,
-        total_qty: row.total_qty,
-        status: row.status,
-        reason: row.reason,
-        source: prev?.source === "bi_bot" ? "bi_bot" : "detector",
-        proposal_ref: prev?.proposal_ref ?? null,
-        window_day: row.window_day,
-        webhook_status: prev?.webhook_status ?? null,
-        webhook_code: prev?.webhook_code ?? null,
-      });
-    }
+    const [sku, productName, score, windowMinutes, distinctMembers, totalQty, status, reason, windowDay, detectedAt] = params as [
+      string, string, number, number, number, number, string, string | null, string, string,
+    ];
+    const id = String(nextSignalId++);
+    signals.set(id, {
+      id,
+      sku,
+      product_name: productName,
+      score: Number(score),
+      window_minutes: Number(windowMinutes),
+      distinct_members: Number(distinctMembers),
+      total_qty: Number(totalQty),
+      status,
+      reason,
+      source: "detector",
+      proposal_ref: null,
+      window_day: windowDay,
+      detected_at: detectedAt,
+      webhook_status: null,
+      webhook_code: null,
+    });
     return [];
   }
   if (sql.startsWith("delete from yuu_signals where window_day")) {
@@ -127,13 +125,36 @@ function handle(text: string, params: unknown[] = []): unknown[] {
     }
     return [];
   }
+  if (sql.startsWith("select id::text as id, status")) {
+    const [sku, window] = params as [string, number];
+    return [...signals.values()].filter((signal) => signal.sku === sku && signal.window_minutes === Number(window));
+  }
   if (sql.startsWith("select") && sql.includes("from yuu_signals") && sql.includes("where sku =")) {
     const [sku, window, day] = params as [string, number, string];
-    const signal = signals.get(signalKey(sku, Number(window), day));
-    return signal ? [signal] : [];
+    return [...signals.values()].filter(
+      (signal) => signal.sku === sku && signal.window_minutes === Number(window) && signal.window_day === day,
+    );
   }
   if (sql.startsWith("select") && sql.includes("from yuu_signals")) {
     return [...signals.values()].filter((signal) => signal.window_day === params[0]);
+  }
+  if (sql.startsWith("update yuu_signals") && sql.includes("set product_name")) {
+    const [productName, score, distinctMembers, totalQty, status, reason, windowDay, id] = params as [
+      string, number, number, number, string, string | null, string, string,
+    ];
+    const signal = [...signals.values()].find((row) => row.id === String(id));
+    if (!signal) return [];
+    signal.product_name = productName;
+    signal.score = Number(score);
+    signal.distinct_members = Number(distinctMembers);
+    signal.total_qty = Number(totalQty);
+    signal.window_day = windowDay;
+    if (!(signal.source === "bi_bot" && signal.proposal_ref)) {
+      signal.status = status;
+      signal.reason = reason;
+      signal.source = "detector";
+    }
+    return [];
   }
   if (sql.startsWith("update yuu_signals") && sql.includes("set webhook_status")) {
     const id = String(params[0]);
@@ -150,8 +171,8 @@ function handle(text: string, params: unknown[] = []): unknown[] {
     return [{ id }];
   }
   if (sql.startsWith("update yuu_signals")) {
-    const [reason, proposalRef, sku, window, day] = params as [string, string, string, number, string];
-    const signal = signals.get(signalKey(sku, Number(window), day));
+    const [reason, proposalRef, id] = params as [string, string, string];
+    const signal = [...signals.values()].find((row) => row.id === String(id));
     if (!signal || signal.proposal_ref || (signal.status !== "shortlisted" && signal.status !== "escalated")) return [];
     signal.source = "bi_bot";
     signal.reason = reason;
@@ -283,6 +304,7 @@ async function buyAs(userId: string, sku: string, qty = 1, channel?: "web" | "pa
 
 beforeEach(() => {
   signals = new Map();
+  nextSignalId = 1;
   events = [];
   queries = [];
   store = new Map();
@@ -392,6 +414,11 @@ describe("migration", () => {
     expect(follow).toContain("DELETE FROM yuu_transactions");
     expect(follow).toContain("DELETE FROM yuu_members");
     expect(follow).not.toContain("DELETE FROM yuu_signals");
+    const windows = readFileSync("db/migrations/0007_yuu_signal_windows.sql", "utf8");
+    expect(windows).toContain("ADD COLUMN IF NOT EXISTS detected_at");
+    expect(windows).toContain("DROP CONSTRAINT IF EXISTS yuu_signals_sku_window_minutes_window_day_key");
+    expect(windows).toContain("CREATE INDEX IF NOT EXISTS yuu_signals_sku_window_detected_idx");
+    expect(windows).not.toContain("DELETE FROM yuu_signals");
   });
 });
 
@@ -783,6 +810,78 @@ describe("stores, webhook and transaction rows", () => {
       }),
     ]);
     expect(JSON.stringify(body)).not.toContain("auth0|");
+  });
+});
+
+describe("escalation window dedupe", () => {
+  it("reuses one signal inside the window and mints a new signal_id after it elapses", async () => {
+    const posts: { body: string; authorization: string | null; hub: string | null; yuu: string | null }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      posts.push({
+        body: String(init?.body),
+        authorization: headers.get("authorization"),
+        hub: headers.get("x-hub-signature-256"),
+        yuu: headers.get("x-yuu-signature"),
+      });
+      return new Response("ok", { status: 200 });
+    }));
+    process.env.YUU_SIGNAL_WEBHOOK_URL = "https://hooks.example/yuu";
+    process.env.YUU_SIGNAL_WEBHOOK_SECRET = "webhook-secret-value";
+    process.env.APP_BASE_URL = "https://koffee-bean.vercel.app";
+
+    const sku = loadScenario().proposal.productId;
+    const windowMinutes = 15;
+    const first = new Date("2026-11-27T04:52:00+08:00");
+    const inside = new Date(first.getTime() + (windowMinutes - 1) * 60_000);
+    const elapsed = new Date(first.getTime() + windowMinutes * 60_000);
+    for (const userId of ["auth0|ada", "auth0|ben"]) {
+      auth0.users.set(userId, {
+        yuu: { points: 64, purchases: [purchaseOf(first.toISOString(), sku), purchaseOf(first.toISOString(), sku)] },
+      });
+    }
+
+    const opened = await runYuuDetector(windowMinutes, first, { awaitWebhook: true });
+    expect(posts).toHaveLength(1);
+    const firstPayload = JSON.parse(posts[0]?.body ?? "{}") as { signal_id: string; sku: string; window_minutes: number };
+    expect(firstPayload).toMatchObject({ type: "yuu.signal.escalated", sku, window_minutes: windowMinutes, score: 4 });
+    expect(firstPayload.signal_id).toBe(opened.find((signal) => signal.sku === sku)?.id);
+    const signature = yuuWebhookSignature(posts[0]?.body ?? "", "webhook-secret-value");
+    expect(posts[0]?.authorization).toBe("Bearer webhook-secret-value");
+    expect(posts[0]?.hub).toBe(signature);
+    expect(posts[0]?.yuu).toBe(signature);
+    expect(posts[0]?.body).not.toContain("auth0|");
+
+    const again = await runYuuDetector(windowMinutes, inside, { awaitWebhook: true });
+    expect(posts).toHaveLength(1);
+    expect(again.find((signal) => signal.sku === sku)?.id).toBe(firstPayload.signal_id);
+    expect([...signals.values()].filter((signal) => signal.sku === sku && signal.status === "escalated")).toHaveLength(1);
+
+    const renewed = await runYuuDetector(windowMinutes, elapsed, { awaitWebhook: true });
+    expect(posts).toHaveLength(2);
+    const secondPayload = JSON.parse(posts[1]?.body ?? "{}") as { signal_id: string };
+    expect(secondPayload.signal_id).not.toBe(firstPayload.signal_id);
+    expect(secondPayload.signal_id).toBe(renewed.find((signal) => signal.sku === sku)?.id);
+    const secondSignature = yuuWebhookSignature(posts[1]?.body ?? "", "webhook-secret-value");
+    expect(posts[1]?.authorization).toBe("Bearer webhook-secret-value");
+    expect(posts[1]?.hub).toBe(secondSignature);
+    expect(posts[1]?.yuu).toBe(secondSignature);
+    expect(posts[1]?.body).not.toContain("auth0|");
+    expect([...signals.values()].filter((signal) => signal.sku === sku && signal.status === "escalated")).toHaveLength(2);
+
+    const report = await loyaltyRoute(bearer(`https://x.test/api/bi/loyalty?window_minutes=${windowMinutes}`));
+    expect(report.status).toBe(200);
+    const loyalty = await report.json();
+    expect(loyalty.signals.find((signal: { sku: string }) => signal.sku === sku)).toMatchObject({
+      id: secondPayload.signal_id,
+      webhook: { status: "sent", code: 200 },
+    });
+    const panel = await readYuuPanel(windowMinutes);
+    expect(panel.signals.find((signal) => signal.sku === sku)).toMatchObject({
+      id: secondPayload.signal_id,
+      webhook: { status: "sent", code: 200 },
+    });
+    expect(panel.signals.filter((signal) => signal.sku === sku)).toHaveLength(1);
   });
 });
 

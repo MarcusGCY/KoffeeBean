@@ -16,7 +16,7 @@ import {
 } from "./account";
 import { randomBytes } from "node:crypto";
 import { after } from "next/server";
-import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_DEFAULT_WINDOW_MINUTES, type LoyaltyPurchase } from "./detector";
+import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_DEFAULT_WINDOW_MINUTES, type LoyaltyDecision, type LoyaltyPurchase } from "./detector";
 import { YUU_DEFAULT_STORE_ID, isYuuStoreId } from "./stores";
 import {
   escalationBody,
@@ -98,6 +98,35 @@ function asText(value: unknown): string {
   return typeof value === "string" ? value : value == null ? "" : String(value);
 }
 
+function asDay(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(asText(value));
+  return match?.[1] ?? asText(value);
+}
+
+/** Milliseconds for `detected_at`, or -Infinity when the row has none. */
+function rowTime(row: Record<string, unknown>): number {
+  const value = row.detected_at;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const parsed = Date.parse(asText(value));
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function newerSignal(candidate: Record<string, unknown>, current: Record<string, unknown>): boolean {
+  const byTime = rowTime(candidate) - rowTime(current);
+  if (byTime !== 0) return byTime > 0;
+  return asInt(candidate.id) > asInt(current.id);
+}
+
+function latestRow(rows: readonly Record<string, unknown>[]): Record<string, unknown> | undefined {
+  let best: Record<string, unknown> | undefined;
+  for (const row of rows) {
+    if (!best || newerSignal(row, best)) best = row;
+  }
+  return best;
+}
+
 export function catalogueOffer(sku: string): { name: string; priceCents: number } | null {
   const item = loadScenario().catalogue.find((row) => row.id === sku);
   if (!item) return null;
@@ -124,29 +153,97 @@ async function launchListed(): Promise<boolean> {
   }
 }
 
-const UPSERT_SIGNALS = `INSERT INTO yuu_signals (
-  sku, product_name, score, window_minutes, distinct_members, total_qty, status, reason, source, proposal_ref, window_day
-)
-SELECT r.sku, r.product_name, r.score, r.window_minutes, r.distinct_members, r.total_qty,
-       r.status, r.reason, 'detector', NULL, r.window_day::date
-FROM jsonb_to_recordset($1::jsonb) AS r(
-  sku text, product_name text, score int, window_minutes int, distinct_members int, total_qty int,
-  status text, reason text, window_day text
-)
-ON CONFLICT (sku, window_minutes, window_day) DO UPDATE SET
-  product_name = EXCLUDED.product_name,
-  score = EXCLUDED.score,
-  distinct_members = EXCLUDED.distinct_members,
-  total_qty = EXCLUDED.total_qty,
+const FIND_LATEST_SIGNAL = `SELECT id::text AS id, status,
+       to_char(window_day, 'YYYY-MM-DD') AS window_day, detected_at
+FROM yuu_signals
+WHERE sku = $1 AND window_minutes = $2
+ORDER BY detected_at DESC, id DESC`;
+
+const INSERT_SIGNAL = `INSERT INTO yuu_signals (
+  sku, product_name, score, window_minutes, distinct_members, total_qty,
+  status, reason, source, proposal_ref, window_day, detected_at
+) VALUES (
+  $1, $2, $3, $4, $5, $6, $7, $8, 'detector', NULL, $9::date, $10::timestamptz
+)`;
+
+const UPDATE_OPEN_SIGNAL = `UPDATE yuu_signals SET
+  product_name = $1,
+  score = $2,
+  distinct_members = $3,
+  total_qty = $4,
   status = CASE
-    WHEN yuu_signals.source = 'bi_bot' AND yuu_signals.proposal_ref IS NOT NULL THEN yuu_signals.status
-    ELSE EXCLUDED.status
+    WHEN source = 'bi_bot' AND proposal_ref IS NOT NULL THEN status
+    ELSE $5
   END,
   reason = CASE
-    WHEN yuu_signals.source = 'bi_bot' AND yuu_signals.proposal_ref IS NOT NULL THEN yuu_signals.reason
-    ELSE EXCLUDED.reason
+    WHEN source = 'bi_bot' AND proposal_ref IS NOT NULL THEN reason
+    ELSE $6
   END,
-  source = CASE WHEN yuu_signals.source = 'bi_bot' THEN yuu_signals.source ELSE 'detector' END`;
+  source = CASE WHEN source = 'bi_bot' THEN source ELSE 'detector' END,
+  window_day = $7::date
+WHERE id::text = $8`;
+
+/**
+ * Reuse the open row when this burst is still inside its detection window.
+ * An escalated row is open only while `window_minutes` have not elapsed since
+ * its own `detected_at` (that timestamp is not moved on update, or the window
+ * would never end). A later escalation inserts a new id. A non-escalated
+ * decision keeps today's open row, and leaves a closed escalation in place.
+ */
+function reuseSignalId(
+  latest: Record<string, unknown>,
+  status: string,
+  day: string,
+  now: Date,
+  windowMinutes: number,
+): string | null {
+  const id = asText(latest.id);
+  if (!id) return null;
+  const detected = rowTime(latest);
+  const fresh = detected !== Number.NEGATIVE_INFINITY && now.getTime() - detected < windowMinutes * 60_000;
+  const latestStatus = asText(latest.status);
+  if (status === "escalated") return latestStatus === "escalated" && fresh ? id : null;
+  if (latestStatus === "escalated" && !fresh) return null;
+  if (asDay(latest.window_day) !== day && !fresh) return null;
+  return id;
+}
+
+async function writeDecision(
+  sql: BiSql,
+  decision: LoyaltyDecision,
+  windowMinutes: number,
+  day: string,
+  now: Date,
+): Promise<void> {
+  const existing = await sql.query(FIND_LATEST_SIGNAL, [decision.sku, windowMinutes]);
+  const latest = latestRow(existing as Record<string, unknown>[]);
+  const reuse = latest ? reuseSignalId(latest, decision.status, day, now, windowMinutes) : null;
+  if (reuse) {
+    await sql.query(UPDATE_OPEN_SIGNAL, [
+      decision.productName,
+      decision.score,
+      decision.distinctMembers,
+      decision.totalQty,
+      decision.status,
+      decision.reason,
+      day,
+      reuse,
+    ]);
+    return;
+  }
+  await sql.query(INSERT_SIGNAL, [
+    decision.sku,
+    decision.productName,
+    decision.score,
+    windowMinutes,
+    decision.distinctMembers,
+    decision.totalQty,
+    decision.status,
+    decision.reason,
+    day,
+    now.toISOString(),
+  ]);
+}
 
 type Ledger = { accounts: YuuListedAccount[]; complete: boolean };
 
@@ -190,8 +287,11 @@ function storesFor(sku: string, purchases: readonly LoyaltyPurchase[]): { store_
 
 /**
  * Recomputes today's signals from Auth0 purchases inside the rolling window.
- * A new escalation is posted to the webhook after the response unless `awaitWebhook` is set,
- * which the ops refresh uses so the returned panel can show the delivery status.
+ * An escalation reuses the signal created within the last `window_minutes` and
+ * does not post again. Once that long has passed since `detected_at`, the next
+ * escalation inserts a new id and posts. The webhook runs after the response
+ * unless `awaitWebhook` is set, which the ops refresh uses so the panel can
+ * show the delivery status of this burst.
  */
 export async function runYuuDetector(
   windowMinutes = yuuWindowMinutes(),
@@ -205,19 +305,8 @@ export async function runYuuDetector(
   const purchases = windowPurchases(ledger, windowMinutes, now);
   const thresholds = yuuThresholds();
   const decisions = classifyPurchases(purchases, (sku) => yuuSkuBlocked(sku, listed), thresholds);
-  if (decisions.length > 0) {
-    const payload = decisions.map((decision) => ({
-      sku: decision.sku,
-      product_name: decision.productName,
-      score: decision.score,
-      window_minutes: windowMinutes,
-      distinct_members: decision.distinctMembers,
-      total_qty: decision.totalQty,
-      status: decision.status,
-      reason: decision.reason,
-      window_day: day,
-    }));
-    await sql.query(UPSERT_SIGNALS, [JSON.stringify(payload)]);
+  for (const decision of decisions) {
+    await writeDecision(sql, decision, windowMinutes, day, now);
   }
   await sql.query(
     `DELETE FROM yuu_signals
@@ -318,38 +407,48 @@ function webhookOf(row: Record<string, unknown>): YuuWebhookView | null {
 
 async function readSignals(sql: BiSql, day: string): Promise<YuuSignalView[]> {
   const rows = await sql.query(
-    `SELECT ${SIGNAL_COLUMNS}
+    `SELECT ${SIGNAL_COLUMNS}, detected_at
      FROM yuu_signals
-     WHERE window_day = $1::date`,
+     WHERE window_day = $1::date
+     ORDER BY detected_at DESC, id DESC`,
     [day],
   );
-  return (rows as Record<string, unknown>[]).map(signalFrom).sort((a, b) => b.score - a.score || a.sku.localeCompare(b.sku));
+  const bySku = new Map<string, Record<string, unknown>>();
+  for (const row of rows as Record<string, unknown>[]) {
+    const sku = asText(row.sku);
+    const prev = bySku.get(sku);
+    if (!prev || newerSignal(row, prev)) bySku.set(sku, row);
+  }
+  return [...bySku.values()].map(signalFrom).sort((a, b) => b.score - a.score || a.sku.localeCompare(b.sku));
 }
 
 export async function findSignal(sku: string, windowMinutes: number): Promise<YuuSignalView | null> {
   const sql = requireSql();
   const day = await singaporeDay(sql);
   const rows = await sql.query(
-    `SELECT ${SIGNAL_COLUMNS}
+    `SELECT ${SIGNAL_COLUMNS}, detected_at
      FROM yuu_signals
-     WHERE sku = $1 AND window_minutes = $2 AND window_day = $3::date`,
+     WHERE sku = $1 AND window_minutes = $2 AND window_day = $3::date
+     ORDER BY detected_at DESC, id DESC`,
     [sku, windowMinutes, day],
   );
-  const row = rows[0] as Record<string, unknown> | undefined;
+  const row = latestRow(rows as Record<string, unknown>[]);
   return row ? signalFrom(row) : null;
 }
 
 export async function markSignalFromBot(sku: string, windowMinutes: number, rationale: string, proposalRef: string): Promise<YuuSignalView | null> {
   const sql = requireSql();
-  const day = await singaporeDay(sql);
+  const current = await findSignal(sku, windowMinutes);
+  if (!current || current.proposalRef) return null;
+  if (current.status !== "shortlisted" && current.status !== "escalated") return null;
   const rows = await sql.query(
     `UPDATE yuu_signals
      SET source = 'bi_bot', reason = $1, proposal_ref = $2
-     WHERE sku = $3 AND window_minutes = $4 AND window_day = $5::date
-       AND status IN ('shortlisted', 'escalated')
+     WHERE id::text = $3
        AND proposal_ref IS NULL
+       AND status IN ('shortlisted', 'escalated')
      RETURNING ${SIGNAL_COLUMNS}`,
-    [rationale, proposalRef, sku, windowMinutes, day],
+    [rationale, proposalRef, current.id],
   );
   const row = rows[0] as Record<string, unknown> | undefined;
   return row ? signalFrom(row) : null;
