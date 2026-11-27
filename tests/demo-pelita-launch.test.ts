@@ -532,20 +532,24 @@ describe("ops go live now", () => {
 describe("approved PL-20055 package", () => {
   it("previews the approved copy and image, keeps the push as a draft, and can go live from ops", async () => {
     expect(PL20055_SIGNAL).toEqual({
-      id: 73,
-      label: "Signal 73",
+      id: 101,
+      label: "Signal 101",
       handoff: "automated DFI Operation Team handoff",
       supplier: "Evergreen Nutrition",
       erp: "Pelita ERP",
-      erpRow: 4,
+      erpRow: 5,
     });
     expect(builtinLaunch("PL-20055")).toMatchObject({
       goLiveAt: "2026-12-04T09:00:00+08:00",
       status: "scheduled",
       promo: { startsAt: "2026-12-04T09:00:00+08:00", endsAt: "2026-12-18T23:59:59+08:00", memberPriceCents: 2990 },
     });
-    expect(readFileSync(path.join(ROOT, "src/lib/demo/pl-20055-package.ts"), "utf8")).toContain("Signal 73");
-    expect(readFileSync(path.join(ROOT, "src/lib/demo/pl-20055-package.ts"), "utf8")).not.toContain("Signal 54");
+    const packageSource = readFileSync(path.join(ROOT, "src/lib/demo/pl-20055-package.ts"), "utf8");
+    expect(packageSource).toContain("Signal 101");
+    expect(packageSource).toContain("erpRow: 5");
+    expect(packageSource).not.toContain("Signal 73");
+    expect(packageSource).not.toContain("erpRow: 4");
+    expect(packageSource).not.toContain("Signal 54");
 
     const { existsSync, readFileSync: read } = await import("node:fs");
     const { createHash } = await import("node:crypto");
@@ -594,6 +598,7 @@ describe("approved PL-20055 package", () => {
     expect(preview).toContain("data-product-image");
     expect(preview).toContain("Scheduled to go live 04 Dec 2026, 09:00 SGT");
     expect(preview).toContain("Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT, or while trial stock lasts");
+    expect(preview).not.toContain("Signal 101");
     expect(preview).not.toContain("Signal 73");
 
     const Yuu = (await import("@/app/demo/pelita/yuu/page")).default;
@@ -612,8 +617,8 @@ describe("approved PL-20055 package", () => {
     expect(ops).toContain("yuu Member Intro Price S$29.90 incl. 9% GST");
     expect(ops).toContain("Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT, or while trial stock lasts");
     expect(ops).toContain("Go-live 04 Dec 2026, 09:00 SGT");
-    expect(ops).toContain('data-signal="73"');
-    expect(ops).toContain("Signal 73 · automated DFI Operation Team handoff · Evergreen Nutrition / Pelita ERP row 4");
+    expect(ops).toContain('data-signal="101"');
+    expect(ops).toContain("Signal 101 · automated DFI Operation Team handoff · Evergreen Nutrition / Pelita ERP row 5");
     expect(ops).toContain("Go live now");
     expect(ops).not.toMatch(/<button[^>]*>[^<]*Send/);
 
@@ -628,6 +633,8 @@ describe("approved PL-20055 package", () => {
     });
     const live = html(await productPage("PL-20055"));
     expect(live).toContain('data-pdp-state="live"');
+    expect(live).not.toContain("Signal 101");
+    expect(live).not.toContain("Signal 73");
     expect(live).toContain("Pelita Wellness Magnesium Glycinate 400 mg (90 Capsules)");
     expect(live).toContain('data-promo="member_price"');
     expect(live).toContain("Member S$29.90");
