@@ -1,19 +1,19 @@
 import { launchConfigSchema, type DraftPush, type LaunchConfig } from "./launch";
 
 /**
- * Marcus-approved Signal 73 package for PL-20055 (90 Capsules), kept in the repo.
- * Automated DFI Operation Team handoff. Evergreen Nutrition / Pelita ERP row 4.
+ * Marcus-approved Signal 101 package for PL-20055 (90 Capsules), kept in the repo.
+ * Automated DFI Operation Team handoff. Evergreen Nutrition / Pelita ERP row 5.
  * Redis can override it. The draft push is ops preview metadata only and is never sent.
  */
 
 /** Ops-only handoff identity. Shoppers never see it. */
 export const PL20055_SIGNAL = {
-  id: 73,
-  label: "Signal 73",
+  id: 101,
+  label: "Signal 101",
   handoff: "automated DFI Operation Team handoff",
   supplier: "Evergreen Nutrition",
   erp: "Pelita ERP",
-  erpRow: 4,
+  erpRow: 5,
 } as const;
 
 const GO_LIVE_AT = "2026-12-04T09:00:00+08:00";
