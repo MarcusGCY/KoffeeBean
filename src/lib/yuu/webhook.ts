@@ -7,7 +7,7 @@ export const YUU_WEBHOOK_TIMEOUT_MS = 3_000;
 
 export type YuuStoreQty = { store_id: string; qty: number };
 
-/** One new escalation. `signalId` is the stable dedupe id for this sku, window, and day. */
+/** One escalation burst. `signalId` is the webhook dedupe key for this detection window. */
 export type YuuEscalationNotice = {
   signalId: string;
   sku: string;
