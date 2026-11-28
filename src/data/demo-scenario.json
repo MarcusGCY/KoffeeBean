@@ -70,7 +70,7 @@
       "chips": ["All", "Multivitamins", "Fish oil", "Magnesium & minerals", "Gut health"]
     },
     "yuuPartners": {
-      "productIds": ["PL-20055", "PL-80014", "PL-80027"]
+      "productIds": ["PL-20055", "PL-80014", "PL-80027", "PL-20068", "PL-20071", "PL-20084", "PL-80041", "PL-80053"]
     }
   },
   "catalogue": [
@@ -175,6 +175,48 @@
       "tags": ["New"],
       "art": "magnesium",
       "launchedInDemo": true
+    },
+    {
+      "id": "PL-20068",
+      "name": "Zinc 25 mg",
+      "category": "Vitamins & supplements",
+      "size": "60 tablets",
+      "price": 14.9,
+      "unitPrice": "S$0.25/tablet",
+      "promo": null,
+      "memberPrice": null,
+      "stock": { "status": "unlisted", "qty": 0 },
+      "supplier": "Coral Bay Nutrition",
+      "tags": [],
+      "art": "zinc"
+    },
+    {
+      "id": "PL-20071",
+      "name": "Turmeric curcumin",
+      "category": "Vitamins & supplements",
+      "size": "60 capsules",
+      "price": 24.5,
+      "unitPrice": "S$0.41/capsule",
+      "promo": null,
+      "memberPrice": null,
+      "stock": { "status": "unlisted", "qty": 0 },
+      "supplier": "Evergreen Nutrition",
+      "tags": [],
+      "art": "turmeric"
+    },
+    {
+      "id": "PL-20084",
+      "name": "Vitamin B complex",
+      "category": "Vitamins & supplements",
+      "size": "90 tablets",
+      "price": 16.5,
+      "unitPrice": "S$0.18/tablet",
+      "promo": null,
+      "memberPrice": null,
+      "stock": { "status": "unlisted", "qty": 0 },
+      "supplier": "Coral Bay Nutrition",
+      "tags": [],
+      "art": "bcomplex"
     },
     {
       "id": "PL-30017",
@@ -357,6 +399,34 @@
       "supplier": "Calmleaf Wellness",
       "tags": [],
       "art": "tea"
+    },
+    {
+      "id": "PL-80041",
+      "name": "Collagen peptides powder",
+      "category": "Wellness",
+      "size": "300 g",
+      "price": 42.9,
+      "unitPrice": "S$1.43/10 g",
+      "promo": null,
+      "memberPrice": null,
+      "stock": { "status": "unlisted", "qty": 0 },
+      "supplier": "Calmleaf Wellness",
+      "tags": [],
+      "art": "collagen"
+    },
+    {
+      "id": "PL-80053",
+      "name": "Melatonin-free sleep gummies",
+      "category": "Wellness",
+      "size": "30 gummies",
+      "price": 18.9,
+      "unitPrice": "S$0.63/gummy",
+      "promo": null,
+      "memberPrice": null,
+      "stock": { "status": "unlisted", "qty": 0 },
+      "supplier": "Calmleaf Wellness",
+      "tags": [],
+      "art": "sleepgummies"
     }
   ],
   "gap": {

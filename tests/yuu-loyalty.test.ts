@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PelitaYuuPanel } from "@/components/pelita-ops/PelitaYuuPanel";
 import { hashShopperId } from "@/lib/bi-hash";
 import { POST as purchaseRoute } from "@/app/api/demo/pelita/yuu/purchase/route";
 import { POST as resetRoute } from "@/app/api/demo/pelita/reset/route";
@@ -12,7 +15,8 @@ import { getDemoState } from "@/lib/demo/state";
 import { loadScenario } from "@/lib/demo/scenario";
 import { capYuu, readYuuAccount, withPurchase, YUU_META_MAX_BYTES, YUU_PURCHASE_CAP, type YuuStoredPurchase } from "@/lib/yuu/account";
 import { yuuWebhookSignature } from "@/lib/yuu/webhook";
-import { YUU_DEFAULT_STORE_ID } from "@/lib/yuu/stores";
+import { YUU_DEFAULT_STORE_ID, YUU_STORES } from "@/lib/yuu/stores";
+import { yuuBoughtLine } from "@/lib/yuu/types";
 import { readYuuPanel, runYuuDetector } from "@/lib/yuu/db";
 import { classifyPurchases, yuuSkuBlocked, yuuThresholds, YUU_REASON, type LoyaltyPurchase } from "@/lib/yuu/detector";
 import { tierForPoints } from "@/lib/yuu/tier";
@@ -50,6 +54,8 @@ vi.mock("@/lib/auth0-mgmt", () => ({
     complete: auth0.complete,
   }),
 }));
+
+const NEW_PARTNER_SKUS = ["PL-20068", "PL-20071", "PL-20084", "PL-80041", "PL-80053"] as const;
 
 const SECRET = "test-bi-api-secret-0123456789";
 const HASH = "test-bi-hash-secret-0123456789";
@@ -379,6 +385,32 @@ describe("yuu tier and detector", () => {
     expect(listed[0]).toMatchObject({ status: "dropped", reason: YUU_REASON.alreadyListed, score: 16 });
   });
 
+  it("escalates a three-member double buy on each new partner-only sku", () => {
+    const scenario = loadScenario();
+    for (const sku of NEW_PARTNER_SKUS) {
+      const item = scenario.catalogue.find((row) => row.id === sku);
+      expect(item).toMatchObject({ promo: null, stock: { status: "unlisted" } });
+      expect(item?.launchedInDemo).not.toBe(true);
+      expect(scenario.storefront.yuuPartners.productIds).toContain(sku);
+      expect(yuuSkuBlocked(sku, false)).toBe(false);
+      expect(yuuSkuBlocked(sku, true)).toBe(false);
+      const burst = classifyPurchases(
+        [...repeat(sku, ["a", "b", "c"], 2), ...repeat("PL-80014", ["a", "b", "c"], 2)],
+        (id) => yuuSkuBlocked(id, true),
+      );
+      const bySku = new Map(burst.map((decision) => [decision.sku, decision]));
+      expect(bySku.get(sku)).toMatchObject({
+        status: "escalated",
+        reason: YUU_REASON.escalated,
+        score: 9,
+        distinctMembers: 3,
+        repeatMembers: 3,
+        totalQty: 6,
+      });
+      expect(bySku.get("PL-80014")).toMatchObject({ status: "dropped", reason: YUU_REASON.alreadyListed });
+    }
+  });
+
   it("keeps the demand-gap sku eligible until the launch lists it", () => {
     const sku = loadScenario().proposal.productId;
     expect(yuuSkuBlocked(sku, false)).toBe(false);
@@ -643,6 +675,89 @@ describe("detection, signal and reset", () => {
     expect(await weak.json()).toEqual({ error: "signal_not_actionable", reason: YUU_REASON.singleMemberBulk });
   });
 
+  it("escalates a 3-member double buy of a new partner sku inside the window", async () => {
+    const sku = "PL-20068";
+    store.set("kb:demo:pelita:listed", "1");
+    const stale = "2020-01-01T00:00:00.000Z";
+    auth0.users.set("auth0|old", {
+      yuu: {
+        points: 14,
+        purchases: [{ sku, name: "Zinc 25 mg", qty: 1, cents: 1490, points: 14, at: stale, store: "pelita-sg", channel: "partner", basket: "stalebasket00001" }],
+      },
+    });
+    const first = await buyAs("auth0|ada", sku, 1, "partner");
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({
+      label: "yuu (simulated)",
+      sku,
+      productName: "Zinc 25 mg",
+      pointsEarned: 14,
+      points: 14,
+      channel: "partner",
+    });
+    expect((await buyAs("auth0|ada", sku, 1, "partner")).status).toBe(200);
+    for (const user of ["auth0|ben", "auth0|cara"]) {
+      expect((await buyAs(user, sku, 1, "partner")).status).toBe(200);
+      expect((await buyAs(user, sku, 1, "partner")).status).toBe(200);
+    }
+
+    const detected = await detectRoute(demoPost("https://x.test/api/demo/pelita/yuu/detect"));
+    expect(detected.status).toBe(200);
+    const panel = await detected.json();
+    expect(panel.label).toBe("yuu (simulated)");
+    const signal = panel.signals.find((row: { sku: string }) => row.sku === sku);
+    expect(signal).toMatchObject({
+      status: "escalated",
+      reason: YUU_REASON.escalated,
+      score: 9,
+      distinctMembers: 3,
+      totalQty: 6,
+      productName: "Zinc 25 mg",
+    });
+    expect(panel.signals.some((row: { reason: string }) => row.reason === YUU_REASON.alreadyListed)).toBe(false);
+
+    const ops = renderToStaticMarkup(createElement(PelitaYuuPanel, { initial: panel }));
+    expect(ops).toContain("yuu (simulated)");
+    expect(ops).toContain("Zinc 25 mg");
+    expect(ops).toContain("score 9");
+    expect(ops).toContain("3 members");
+    expect(ops).toContain("qty 6");
+    expect(ops).toContain(YUU_REASON.escalated);
+    expect(ops).not.toContain(YUU_REASON.alreadyListed);
+    expect(ops).not.toContain("auth0|");
+    expect(ops).not.toContain("Ada");
+
+    const report = await loyaltyRoute(bearer("https://x.test/api/bi/loyalty?window_minutes=60"));
+    expect(report.status).toBe(200);
+    const loyalty = await report.json();
+    expect(loyalty.label).toBe("yuu (simulated)");
+    expect(loyalty.transactions).toMatchObject({ count: 6, totalQty: 6 });
+    expect(loyalty.skus.find((row: { sku: string }) => row.sku === sku)).toMatchObject({
+      productName: "Zinc 25 mg",
+      score: 9,
+      distinctMembers: 3,
+      repeatMembers: 3,
+      totalQty: 6,
+    });
+    expect(JSON.stringify(loyalty)).not.toContain("auth0|");
+    expect(JSON.stringify(loyalty)).not.toContain(stale);
+
+    const txns = await transactionsRoute(bearer("https://x.test/api/bi/loyalty/transactions?window_minutes=60"));
+    expect(txns.status).toBe(200);
+    const txnBody = await txns.json();
+    expect(txnBody.label).toBe("yuu (simulated)");
+    expect(txnBody.rows.filter((row: { sku: string }) => row.sku === sku)).toHaveLength(6);
+    expect(JSON.stringify(txnBody)).not.toContain("auth0|");
+    expect(JSON.stringify(txnBody)).not.toContain(stale);
+
+    const reset = await resetRoute(demoPost("https://x.test/api/demo/pelita/reset"));
+    expect(reset.status).toBe(200);
+    expect(signals.size).toBe(0);
+    for (const user of ["auth0|ada", "auth0|ben", "auth0|cara", "auth0|old"]) {
+      expect(auth0.users.get(user)?.yuu).toBeUndefined();
+    }
+  });
+
   it("clears only the yuu key and the neon signal rows", async () => {
     auth0.users.set("auth0|ada", {
       orders: [{ id: "order-1" }],
@@ -686,6 +801,50 @@ describe("detection, signal and reset", () => {
 });
 
 describe("stores, webhook and transaction rows", () => {
+  it("buys each new partner sku at every yuu store", async () => {
+    const scenario = loadScenario();
+    for (const sku of NEW_PARTNER_SKUS) {
+      const item = scenario.catalogue.find((row) => row.id === sku);
+      expect(item).toBeTruthy();
+      const cents = Math.round((item?.price ?? 0) * 100);
+      const points = Math.floor(cents / 100);
+      for (const store of YUU_STORES) {
+        const userId = `auth0|${store.id}-${sku}`;
+        getShopper.mockResolvedValue({ id: userId, name: "Ada Lovelace" });
+        const res = await purchaseRoute(
+          demoPost("https://x.test/api/demo/pelita/yuu/purchase", {
+            sku,
+            qty: 1,
+            channel: "partner",
+            storeId: store.id,
+          }),
+        );
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body).toMatchObject({
+          label: "yuu (simulated)",
+          memberId: "self",
+          displayName: "You",
+          sku,
+          productName: item?.name,
+          qty: 1,
+          amountSgd: (cents / 100).toFixed(2),
+          pointsEarned: points,
+          points,
+          channel: "partner",
+        });
+        expect(yuuBoughtLine(body.pointsEarned)).toBe(`Bought with yuu, +${points} points`);
+        expect(JSON.stringify(body)).not.toContain(userId);
+        expect(JSON.stringify(body)).not.toContain("Ada");
+        const yuu = auth0.users.get(userId)?.yuu as { purchases: { sku: string; store: string; points: number; channel: string }[] };
+        expect(yuu.purchases).toEqual([
+          expect.objectContaining({ sku, store: store.id, channel: "partner", points, cents }),
+        ]);
+        expect(Object.keys(auth0.patches.at(-1)?.patch ?? {})).toEqual(["yuu"]);
+      }
+    }
+  });
+
   it("records a store and a basket, and defaults an older purchase to the Pelita store", async () => {
     getShopper.mockResolvedValue({ id: "auth0|ada", name: "Ada Lovelace" });
     const stored = await purchaseRoute(demoPost("https://x.test/api/demo/pelita/yuu/purchase", {

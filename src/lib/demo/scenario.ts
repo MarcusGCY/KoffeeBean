@@ -72,12 +72,12 @@ export const scenarioSchema = z
         productIds: z.array(z.string()).length(5),
         chips: z.array(z.string()),
       }),
-      /** Coalition yuu products, including the demand-gap sku Pelita does not stock yet. */
+      /** Coalition yuu products, including partner-only skus Pelita does not stock. */
       yuuPartners: z.object({
-        productIds: z.array(z.string().regex(/^PL-\d{5}$/)).min(1).max(6),
+        productIds: z.array(z.string().regex(/^PL-\d{5}$/)).min(1).max(8),
       }),
     }),
-    catalogue: z.array(catalogueItem).length(20),
+    catalogue: z.array(catalogueItem).length(25),
     gap: z.object({
       id: z.string(),
       query: z.string(),
