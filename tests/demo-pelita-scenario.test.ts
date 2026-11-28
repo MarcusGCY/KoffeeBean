@@ -11,9 +11,9 @@ describe("demo scenario fixture", () => {
     expect(scenario.brand.name).toBe("Pelita Health & Beauty");
   });
 
-  it("has the 20-item catalogue with unique ids and the launch product unlisted", () => {
-    expect(scenario.catalogue).toHaveLength(20);
-    expect(new Set(scenario.catalogue.map((item) => item.id)).size).toBe(20);
+  it("has the 25-item catalogue with unique ids and the launch product unlisted", () => {
+    expect(scenario.catalogue).toHaveLength(25);
+    expect(new Set(scenario.catalogue.map((item) => item.id)).size).toBe(25);
     const magnesium = scenario.catalogue.find((item) => item.id === "PL-20055");
     expect(magnesium).toMatchObject({
       name: "Magnesium Glycinate 400 mg",
@@ -27,6 +27,31 @@ describe("demo scenario fixture", () => {
       "PL-20042",
       "PL-30017",
     ]);
+    const partnerOnly = [
+      ["PL-20068", "Zinc 25 mg", "60 tablets", 14.9, "Coral Bay Nutrition", "zinc"],
+      ["PL-20071", "Turmeric curcumin", "60 capsules", 24.5, "Evergreen Nutrition", "turmeric"],
+      ["PL-20084", "Vitamin B complex", "90 tablets", 16.5, "Coral Bay Nutrition", "bcomplex"],
+      ["PL-80041", "Collagen peptides powder", "300 g", 42.9, "Calmleaf Wellness", "collagen"],
+      ["PL-80053", "Melatonin-free sleep gummies", "30 gummies", 18.9, "Calmleaf Wellness", "sleepgummies"],
+    ] as const;
+    expect(scenario.storefront.yuuPartners.productIds).toEqual([
+      "PL-20055",
+      "PL-80014",
+      "PL-80027",
+      ...partnerOnly.map((row) => row[0]),
+    ]);
+    for (const [id, name, size, price, supplier, art] of partnerOnly) {
+      expect(scenario.catalogue.find((item) => item.id === id)).toMatchObject({
+        name,
+        size,
+        price,
+        promo: null,
+        supplier,
+        art,
+        stock: { status: "unlisted", qty: 0 },
+      });
+      expect(scenario.catalogue.find((item) => item.id === id)?.launchedInDemo).not.toBe(true);
+    }
   });
 
   it("carries the story numbers from SPEC.md", () => {
