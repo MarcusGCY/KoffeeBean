@@ -5,7 +5,7 @@ import type { PelitaAccount } from "@/components/pelita/PelitaStorefront";
 import { requirePresenterPage } from "@/lib/demo/guard";
 import { isLaunchSku } from "@/lib/demo/launch";
 import { readLaunch } from "@/lib/demo/launch-store";
-import { builtinLaunch } from "@/lib/demo/pl-20055-package";
+import { builtinLaunch } from "@/lib/demo/launch-packages";
 import { resolveProductPage } from "@/lib/demo/launch-view";
 import { loadScenario } from "@/lib/demo/scenario";
 import { getDemoSnapshot } from "@/lib/demo/state";

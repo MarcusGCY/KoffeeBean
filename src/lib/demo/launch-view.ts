@@ -12,7 +12,7 @@ import {
   type LaunchConfig,
   type MemberOffer,
 } from "./launch";
-import { isApprovedPl20055, packagePriceNote } from "./pl-20055-package";
+import { isApprovedPackage, packagePriceNote } from "./launch-packages";
 
 const DEFAULT_ART: PelitaArtKey = "vitc";
 const DEFAULT_STORE_IDS = ["harbour-mart", "ridge-pharmacy", "eastlink-grocery"] as const;
@@ -175,7 +175,7 @@ export function resolveProductPage(args: {
     const live = isLaunchLive(config, now);
     const item = args.scenario.catalogue.find((row) => row.id === config.sku);
     const onShelf = item ? shelfStock(item, args.listed) !== null : false;
-    const publishedPackage = onShelf && isApprovedPl20055(config);
+    const publishedPackage = onShelf && isApprovedPackage(config);
     if (!live && !publishedPackage && !args.preview) return { hidden: true };
     const banner = live || publishedPackage ? null : launchPreviewBanner(config, now);
     return { hidden: false, product: detailFromLaunch(args.scenario, config, now, banner) };
@@ -232,8 +232,8 @@ function refreshPublished(published: PublishedStorefront, catalogue: ProductCard
 export function applyLaunchConfigs(view: StorefrontView, scenario: Scenario, configs: LaunchConfig[], now = Date.now()): StorefrontView {
   if (configs.length === 0) return view;
   const onShelf = new Set(view.catalogue.map((card) => card.id));
-  // A schedule that has not started leaves the shelf. The approved PL-20055 package stays once the demo listing has published it.
-  const publishedPackage = (config: LaunchConfig) => onShelf.has(config.sku) && isApprovedPl20055(config);
+  // A schedule that has not started leaves the shelf. The approved packages stay once the demo listing has published it.
+  const publishedPackage = (config: LaunchConfig) => onShelf.has(config.sku) && isApprovedPackage(config);
   const hidden = new Set(configs.filter((config) => !isLaunchLive(config, now) && !publishedPackage(config)).map((config) => config.sku));
   const live = configs.filter((config) => isLaunchLive(config, now) || publishedPackage(config));
   let catalogue = view.catalogue.filter((card) => !hidden.has(card.id));
