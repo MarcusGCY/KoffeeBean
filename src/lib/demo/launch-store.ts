@@ -6,7 +6,7 @@ import {
   launchKey,
   type LaunchConfig,
 } from "./launch";
-import { builtinLaunch, builtinLaunches } from "./pl-20055-package";
+import { builtinLaunch, builtinLaunches } from "./launch-packages";
 
 /**
  * Redis IO for Pelita launch configs. Keys sit beside the fixed demo state list:

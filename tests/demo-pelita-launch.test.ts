@@ -28,7 +28,9 @@ import {
   type LaunchConfig,
 } from "@/lib/demo/launch";
 import { applyLaunchConfigs, applyLaunchesToPartners, resolveProductPage } from "@/lib/demo/launch-view";
+import { builtinLaunch as builtinPackage } from "@/lib/demo/launch-packages";
 import { PL20055_SIGNAL, builtinLaunch } from "@/lib/demo/pl-20055-package";
+import { PL20068_ECONOMICS, PL20068_RANGING, PL20068_SIGNAL } from "@/lib/demo/pl-20068-package";
 import { loadScenario } from "@/lib/demo/scenario";
 import { storefrontView } from "@/lib/demo/storefront";
 import { partnerOffers } from "@/lib/demo/yuu-partners";
@@ -339,7 +341,7 @@ describe("POST and GET /api/demo/pelita/launch", () => {
 
     const list = await getLaunch(bearer("https://x.test/api/demo/pelita/launch"));
     const listed = (await list.json()) as { launches: { sku: string }[] };
-    expect(listed.launches.map((row) => row.sku)).toEqual(["PL-20055", "WEB-1"]);
+    expect(listed.launches.map((row) => row.sku)).toEqual(["PL-20055", "PL-20068", "WEB-1"]);
 
     expect((await getLaunch(bearer("https://x.test/api/demo/pelita/launch?sku=MISSING"))).status).toBe(404);
     expect((await getLaunch(bearer("https://x.test/api/demo/pelita/launch?sku=bad sku"))).status).toBe(400);
@@ -457,7 +459,7 @@ describe("shelf visibility and reset", () => {
 
     const list = await getLaunch(bearer("https://x.test/api/demo/pelita/launch"));
     const body = (await list.json()) as { launches: { sku: string; status: string; isLive: boolean; goLiveAt: string | null }[] };
-    expect(body.launches.map((row) => row.sku)).toEqual(["PL-20055"]);
+    expect(body.launches.map((row) => row.sku)).toEqual(["PL-20055", "PL-20068"]);
     expect(body.launches[0]).toMatchObject({
       status: "scheduled",
       isLive: false,
@@ -729,5 +731,158 @@ describe("product card, image fallback, and targeted offer", () => {
     );
     expect(partnerHtml).toContain('src="/images/pelita/PL-20055.png"');
     expect(partnerCard(partnerHtml, "PL-20055")).toContain("Also at Pelita");
+  });
+});
+
+describe("PL-20068 Zinc 25 mg launch package (Signal 107)", () => {
+  const GO_LIVE = "2026-12-04T09:00:00+08:00";
+  const PROMO_END = "2026-12-18T23:59:59+08:00";
+
+  it("keeps Signal 107 and the draft push in the ops-only package", async () => {
+    expect(PL20068_SIGNAL).toEqual({
+      id: 107,
+      label: "Signal 107",
+      handoff: "automated DFI Operation Team handoff",
+      supplier: "Evergreen Nutrition",
+      erp: "Pelita ERP",
+      erpRow: 6,
+    });
+    expect(PL20055_SIGNAL.erpRow).toBe(5);
+    expect(builtinLaunch("PL-20068")).toBeNull();
+    expect(builtinPackage("PL-20055")).toEqual(builtinLaunch("PL-20055"));
+
+    const config = builtinPackage("PL-20068")!;
+    expect(config).toMatchObject({
+      sku: "PL-20068",
+      title: "Zinc 25 mg, 60 Tablets",
+      subtitle: "A daily zinc tablet from Evergreen Nutrition. 25 mg per tablet, 60 tablets per bottle.",
+      longCopy:
+        "Zinc 25 mg in an easy one-a-day tablet. Now at Eastlink Grocery. yuu members get an intro price of S$12.90 (usual S$14.90), 4 to 18 Dec, limit 2 per member.",
+      bullets: ["25 mg zinc per tablet", "60 tablets per bottle", "Take as directed on the label"],
+      size: "60 Tablets",
+      supplier: "Evergreen Nutrition",
+      imageUrl: "/images/pelita/PL-20068.png",
+      shelfPriceCents: 1490,
+      status: "scheduled",
+      goLiveAt: GO_LIVE,
+      promo: { type: "member_price", memberPriceCents: 1290, startsAt: GO_LIVE, endsAt: PROMO_END },
+      memberOffer: { memberPriceCents: 1290 },
+      stores: ["Eastlink Grocery · 10 units"],
+    });
+    expect(JSON.stringify(config)).not.toMatch(/Signal 107|erpRow|Pelita ERP|DFI Operation/);
+    expect(JSON.stringify(config)).not.toMatch(/\b(clinical|cure|treat|prevent|immune|immunity|certified|doctor)\b/i);
+    expect(config.promo!.label).toContain("limit 2 per member");
+    expect(config.memberOffer!.segmentLabel).toContain("Eastlink repeat minerals buyers");
+    expect(config.memberOffer!.segmentLabel).toContain("PL-20055 magnesium buyers at Eastlink");
+    expect(config.memberOffer!.segmentLabel).toContain("zero PII");
+
+    expect(PL20068_ECONOMICS).toMatchObject({
+      unitCostExGstCents: 860,
+      unitCostInclGstCents: 937,
+      regular: { inclGstCents: 1490, exGstCents: 1367, gpCents: 507, gpPct: 37.1 },
+      promo: { inclGstCents: 1290, exGstCents: 1183, gpCents: 323, gpPct: 27.3, limitPerMember: 2, supplierFunded: false },
+    });
+    const exGst = (cents: number) => Math.round(cents / 1.09);
+    expect(exGst(1490)).toBe(1367);
+    expect(exGst(1290)).toBe(1183);
+    expect(1367 - 860).toBe(507);
+    expect(1183 - 860).toBe(323);
+    expect(Math.round((507 / 1367) * 1000) / 10).toBe(37.1);
+    expect(Math.round((323 / 1183) * 1000) / 10).toBe(27.3);
+
+    expect(PL20068_RANGING).toMatchObject({ "eastlink-grocery": 10, "dc-reserve": 2, "harbour-mart": 0, "ridge-pharmacy": 0, "pelita-sg": 0, "northshore-wellness": 0, online: 0 });
+  });
+
+  it("ships the packshot image byte for byte", async () => {
+    const { createHash } = await import("node:crypto");
+    const bytes = readFileSync(path.join(ROOT, "public/images/pelita/PL-20068.png"));
+    expect(bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(bytes.readUInt32BE(16)).toBe(1024);
+    expect(bytes.readUInt32BE(20)).toBe(1024);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe("9688179be03768123e541111917278f64e0a4e2b78ec28c225a4ce9f1fb69c53");
+  });
+
+  it("previews on the PDP for shoppers without any signal metadata and stays hidden until go-live", async () => {
+    await expect(productPage("PL-20068")).rejects.toMatchObject({ digest: expect.stringContaining("404") });
+
+    const preview = html(await productPage("PL-20068", true));
+    expect(preview).toContain("Zinc 25 mg, 60 Tablets");
+    expect(preview).toContain("A daily zinc tablet from Evergreen Nutrition. 25 mg per tablet, 60 tablets per bottle.");
+    expect(preview).toContain("Zinc 25 mg in an easy one-a-day tablet. Now at Eastlink Grocery.");
+    expect(preview).toContain("25 mg zinc per tablet");
+    expect(preview).toContain("60 tablets per bottle");
+    expect(preview).toContain("Take as directed on the label");
+    expect(preview).toContain("Evergreen Nutrition");
+    expect(preview).toContain("S$14.90");
+    expect(preview).toContain("S$12.90");
+    expect(preview).toContain("S$13.67 ex GST");
+    expect(preview).toContain("S$11.83 ex GST");
+    expect(preview).toContain("limit 2 per member");
+    expect(preview).toContain("Limit 2 per yuu member");
+    expect(preview).toContain("Promo window: 4 Dec 2026, 9:00 AM SGT – 18 Dec 2026, 11:59 PM SGT");
+    expect(preview).toContain('data-promo="member_price"');
+    expect(preview).toContain("Member S$12.90");
+    expect(preview).toContain("Targeted: Eastlink repeat minerals buyers");
+    expect(preview).toContain("Scheduled to go live 04 Dec 2026, 09:00 SGT");
+    expect(preview).toContain('src="/images/pelita/PL-20068.png"');
+    expect(preview).toContain("data-product-image");
+    expect(preview).toContain('data-store="Eastlink Grocery · 10 units"');
+    expect((preview.match(/data-store=/g) ?? []).length).toBe(1);
+    for (const hidden of ["Harbour Mart", "Ridge Pharmacy", "Pelita Singapore", "Northshore Wellness", "Online ·", "DC reserve"]) {
+      expect(preview).not.toContain(hidden);
+    }
+    expect(preview).not.toContain("Signal 107");
+    expect(preview).not.toContain("Pelita ERP");
+    expect(preview).not.toContain("DFI Operation");
+    expect(preview).not.toContain("row 6");
+    expect(preview).not.toContain("New at Eastlink Grocery");
+  });
+
+  it("shows both packages on ops with ops-only Signal 107, a draft-only push, and Go live now", async () => {
+    const Ops = (await import("@/app/demo/pelita/ops/page")).default;
+    const ops = html(await Ops());
+    expect(ops).toContain('data-launch-sku="PL-20055"');
+    expect(ops).toContain('data-launch-sku="PL-20068"');
+    expect(ops).toContain('data-signal="101"');
+    expect(ops).toContain("Signal 101 · automated DFI Operation Team handoff · Evergreen Nutrition / Pelita ERP row 5");
+    expect(ops).toContain('data-signal="107"');
+    expect(ops).toContain("Signal 107 · automated DFI Operation Team handoff · Evergreen Nutrition / Pelita ERP row 6");
+    expect(ops).toContain("Zinc 25 mg, 60 Tablets");
+    expect(ops).toContain("Go-live 04 Dec 2026, 09:00 SGT");
+    expect(ops).toContain('data-go-live="PL-20068"');
+    expect(ops).toContain('href="/pelita/product/PL-20068?preview=1"');
+    expect(ops).toContain("S$14.90 incl. 9% GST (S$13.67 ex GST)");
+    expect(ops).toContain("yuu Member Intro Price S$12.90 incl. 9% GST (S$11.83 ex GST)");
+
+    const rowStart = ops.indexOf('data-launch-sku="PL-20068"');
+    const row = ops.slice(rowStart, ops.indexOf("</li>", rowStart));
+    expect(row).toContain("data-draft-push");
+    expect(row).toContain("Draft only — do not send");
+    expect(ops).toContain("New at Eastlink Grocery: Zinc 25 mg, 60 tablets");
+    expect(ops).toContain("yuu intro price S$12.90 (usual S$14.90), 4–18 Dec. Limit 2 per member.");
+    expect(ops).not.toMatch(/<button[^>]*>[^<]*Send/);
+    expect(readFileSync(path.join(ROOT, "src/lib/demo/pl-20068-package.ts"), "utf8")).not.toMatch(/fetch\(|sendPush|webpush/i);
+  });
+
+  it("goes live now from ops and then shows to shoppers with no signal metadata", async () => {
+    const published = await goLiveRoute(demoPost("https://x.test/api/demo/pelita/ops/go-live", { sku: "PL-20068" }));
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({ ok: true, sku: "PL-20068", status: "live", isLive: true, goLiveAt: GO_LIVE });
+    expect((JSON.parse(store.get("kb:demo:pelita:launch:PL-20068")!) as LaunchConfig).status).toBe("live");
+    expect(store.has("kb:demo:pelita:launch:PL-20055")).toBe(false);
+
+    const live = html(await productPage("PL-20068"));
+    expect(live).toContain('data-pdp-state="live"');
+    expect(live).toContain("Zinc 25 mg, 60 Tablets");
+    expect(live).toContain("Member S$12.90");
+    expect(live).toContain('src="/images/pelita/PL-20068.png"');
+    expect(live).not.toContain("data-preview-banner");
+    expect(live).not.toContain("Signal 107");
+    expect(live).not.toContain("Pelita ERP");
+
+    const Ops = (await import("@/app/demo/pelita/ops/page")).default;
+    const ops = html(await Ops());
+    expect(ops).toContain("Signal 107 · automated DFI Operation Team handoff");
+    expect(ops).toContain("Draft only — do not send");
   });
 });

@@ -4,7 +4,7 @@ import { approvalView } from "@/lib/demo/approval-view";
 import { requirePresenterPage } from "@/lib/demo/guard";
 import { toScheduleRow } from "@/lib/demo/launch";
 import { listLaunches } from "@/lib/demo/launch-store";
-import { builtinLaunches, scheduleExtras } from "@/lib/demo/pl-20055-package";
+import { builtinLaunches, scheduleExtras } from "@/lib/demo/launch-packages";
 import { listingDraftView } from "@/lib/demo/listing-view";
 import { opsConsoleView } from "@/lib/demo/ops-console";
 import { ensureOpeningRows } from "@/lib/demo/opening";

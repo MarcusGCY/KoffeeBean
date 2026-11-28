@@ -2,7 +2,7 @@ import { connection } from "next/server";
 import { PelitaStorefront, type PelitaAccount } from "@/components/pelita/PelitaStorefront";
 import { requirePresenterPage } from "@/lib/demo/guard";
 import { listLaunches } from "@/lib/demo/launch-store";
-import { builtinLaunches } from "@/lib/demo/pl-20055-package";
+import { builtinLaunches } from "@/lib/demo/launch-packages";
 import { applyLaunchConfigs } from "@/lib/demo/launch-view";
 import { publishedView } from "@/lib/demo/published-view";
 import { loadScenario } from "@/lib/demo/scenario";
